@@ -1,3 +1,4 @@
+import { Slider } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 
 export component Action inherits Rectangle {
@@ -15,8 +16,8 @@ export component Action inherits Rectangle {
     max-width: text == "" ? 36px : 280px;
     height: chip ? 32px : 36px;
     border-width: 0px;
-    border-color: primary ? Tokens.brand-300 : selected ? #fb923c66 : touch.has-hover ? #ffffff3d : (chip ? #ffffff18 : Tokens.neutral-300);
-    background: primary ? (touch.has-hover ? Tokens.ink-150 : Tokens.ink-100) : chip ? (selected ? Tokens.ink-100 : touch.has-hover ? #ffffff24 : #ffffff12) : selected ? #ffffff20 : touch.has-hover ? #ffffff16 : transparent;
+    border-color: Tokens.neutral-300;
+    background: primary ? (touch.has-hover ? Tokens.brand-300 : Tokens.brand-500) : selected ? Tokens.primary-container : touch.has-hover ? Tokens.neutral-200 : chip || outlined ? Tokens.neutral-150 : transparent;
     border-radius: Tokens.radius-pill;
     animate background { duration: 110ms; }
     animate border-color { duration: 110ms; }
@@ -33,12 +34,12 @@ export component Action inherits Rectangle {
                 source: root.icon;
                 width: 18px;
                 height: 18px;
-                colorize: root.primary || (root.chip && root.selected) ? Tokens.neutral-0 : root.selected ? Tokens.ink-100 : touch.has-hover ? Tokens.ink-100 : Tokens.ink-200;
+                colorize: root.primary ? Tokens.brand-ink : root.selected ? Tokens.brand-300 : touch.has-hover ? Tokens.ink-100 : Tokens.ink-200;
             }
         }
         if root.text != "": Text {
             text: root.text;
-            color: root.primary || (root.chip && root.selected) ? Tokens.neutral-0 : root.selected ? Tokens.ink-100 : Tokens.ink-100;
+            color: root.primary ? Tokens.brand-ink : root.selected ? Tokens.brand-300 : Tokens.ink-100;
             font-size: Tokens.font-sm;
             font-weight: root.primary || root.selected ? 700 : 600;
             vertical-alignment: center;
@@ -64,8 +65,8 @@ export component NavItem inherits Rectangle {
     in property <bool> collapsed;
     callback clicked();
     height: 44px;
-    border-radius: 14px;
-    background: selected ? #ffffff1f : touch.has-hover ? #ffffff10 : transparent;
+    border-radius: 24px;
+    background: selected ? Tokens.primary-container : touch.has-hover ? Tokens.neutral-150 : transparent;
     border-width: 0px;
     border-color: #ffffff14;
     animate background { duration: 110ms; }
@@ -75,7 +76,7 @@ export component NavItem inherits Rectangle {
         y: 12px;
         width: 20px;
         height: 20px;
-        colorize: root.selected ? Tokens.ink-100 : touch.has-hover ? Tokens.ink-100 : Tokens.ink-200;
+        colorize: root.selected ? Tokens.brand-300 : touch.has-hover ? Tokens.ink-100 : Tokens.ink-200;
     }
     if !root.collapsed: Text {
         x: 52px;
@@ -83,7 +84,7 @@ export component NavItem inherits Rectangle {
         width: max(0px, root.width - 60px);
         height: 44px;
         text: root.text;
-        color: root.selected ? Tokens.ink-100 : touch.has-hover ? Tokens.ink-100 : Tokens.ink-150;
+        color: root.selected ? Tokens.brand-300 : touch.has-hover ? Tokens.ink-100 : Tokens.ink-150;
         font-size: 14px;
         font-weight: root.selected ? 700 : 500;
         vertical-alignment: center;
@@ -98,16 +99,11 @@ export component NavItem inherits Rectangle {
 export component Artwork inherits Rectangle {
     in property <image> art;
     in property <int> tone;
-    border-radius: 16px;
+    border-radius: 24px;
     clip: true;
     border-width: 0px;
     border-color: #ffffff14;
-    background: Math.mod(tone, 6) == 0 ? @linear-gradient(135deg, #2a2415 0%, #151412 100%) :
-                Math.mod(tone, 6) == 1 ? @linear-gradient(135deg, #2b182c 0%, #141118 100%) :
-                Math.mod(tone, 6) == 2 ? @linear-gradient(135deg, #2c1e16 0%, #161210 100%) :
-                Math.mod(tone, 6) == 3 ? @linear-gradient(135deg, #21182b 0%, #121018 100%) :
-                Math.mod(tone, 6) == 4 ? @linear-gradient(135deg, #142a28 0%, #101717 100%) :
-                                         @linear-gradient(135deg, #19291e 0%, #101612 100%);
+    background: Math.mod(tone, 3) == 0 ? Tokens.primary-container : Math.mod(tone, 3) == 1 ? Tokens.secondary-container : Tokens.tertiary-container;
     Image {
         source: @image-url("../assets/icons/Music2.svg");
         width: root.width * 0.32;
@@ -132,8 +128,8 @@ export component Transport inherits Rectangle {
     callback clicked();
     width: brand ? 42px : 58px;
     height: brand ? 42px : 58px;
-    border-radius: self.width / 2;
-    background: touch.has-hover ? Tokens.ink-150 : Tokens.ink-100;
+    border-radius: root.playing ? (root.brand ? 15px : 20px) : self.width / 2;
+    background: touch.has-hover ? Tokens.brand-300 : Tokens.brand-500;
     animate background { duration: 110ms; }
     Image {
         source: root.playing ? @image-url("../assets/icons/Pause.svg") : @image-url("../assets/icons/Play.svg");
@@ -141,7 +137,7 @@ export component Transport inherits Rectangle {
         height: root.brand ? 20px : 26px;
         x: (root.width - self.width) / 2 + (root.playing ? 0px : 1px);
         y: (root.height - self.height) / 2;
-        colorize: Tokens.neutral-0;
+        colorize: Tokens.brand-ink;
     }
     touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
     accessible-role: button;
@@ -158,10 +154,10 @@ export component SeekBar inherits Rectangle {
     private property <float> ratio: root.duration > 0 ? clamp(root.position / root.duration, 0, 1) : 0;
     Rectangle {
         y: (root.height - self.height) / 2;
-        height: touch.has-hover ? 6px : 4px;
+        height: touch.has-hover ? 8px : 6px;
         width: 100%;
         border-radius: 3px;
-        background: #ffffff26;
+        background: Tokens.neutral-200;
         animate height { duration: 100ms; }
         Rectangle {
             x: 0px;
@@ -202,4 +198,41 @@ export component SeekBar inherits Rectangle {
     accessible-value-step: 5;
     accessible-action-increment => { root.seek(min(root.duration, root.position + 5)); }
     accessible-action-decrement => { root.seek(max(0, root.position - 5)); }
+}
+
+// Retain the platform slider's input, keyboard and accessibility behavior.
+export component TonalSlider inherits Rectangle {
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in-out property <float> value;
+    in property <string> label;
+    callback changed(float);
+    horizontal-stretch: 1;
+    min-height: 20px;
+    preferred-height: 20px;
+    vertical-stretch: 1;
+    border-radius: 10px;
+    border-width: native-input.has-focus ? 1px : 0px;
+    border-color: Tokens.brand-300;
+    min-width: 40px;
+    private property <float> ratio: maximum > minimum ? clamp((value - minimum) / (maximum - minimum), 0, 1) : 0;
+    Rectangle {
+        x: 0px; y: (root.height - 6px) / 2; width: 100%; height: 6px;
+        border-radius: 3px; background: Tokens.neutral-300;
+        Rectangle { width: parent.width * root.ratio; height: 100%; border-radius: 3px; background: Tokens.brand-500; }
+    }
+    Rectangle {
+        x: (root.width - 4px) * root.ratio; y: (root.height - 20px) / 2;
+        width: 4px; height: 20px; border-radius: 2px;
+        background: Tokens.brand-300;
+    }
+    Rectangle {
+        width: 100%; height: 100%; opacity: 0.001;
+        native-input := Slider {
+            width: 100%; height: 100%; minimum: root.minimum; maximum: root.maximum;
+            value <=> root.value;
+            accessible-label: root.label;
+            changed(value) => { root.changed(value); }
+        }
+    }
 }

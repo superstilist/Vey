@@ -1,6 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod app;
 mod artwork;
+mod material;
 pub mod audio;
 pub mod braccato;
 #[cfg(not(target_arch = "wasm32"))]

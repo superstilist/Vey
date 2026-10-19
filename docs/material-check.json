@@ -1,0 +1,26 @@
+{
+  "passed": true,
+  "checks": [
+    "warm/cool cover-derived surfaces",
+    "no loading palette flash",
+    "palette retained across navigation",
+    "volume slider input and keyboard",
+    "desktop/mobile screenshots",
+    "no browser errors"
+  ],
+  "red": [
+    18,
+    15,
+    15
+  ],
+  "loading": [
+    18,
+    15,
+    15
+  ],
+  "blue": [
+    15,
+    15,
+    18
+  ]
+}

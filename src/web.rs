@@ -357,6 +357,7 @@ fn search(w: &MainWindow, a: &Rc<RefCell<WebApp>>, query: Option<String>, radio:
 pub fn run() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
     let w = MainWindow::new().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    crate::material::install(&w);
     crate::renderer::install(&w);
     let _lyrics_widget = crate::lyrics_widget::install(&w);
     if let Some(browser) = web_sys::window() {

@@ -476,6 +476,7 @@ fn report(w: &MainWindow, result: Result<(), String>) {
 
 pub fn run() -> Result<(), slint::PlatformError> {
     let w = MainWindow::new()?;
+    crate::material::install(&w);
     crate::renderer::install(&w);
     let (tx, rx) = mpsc::channel();
     let rt = Arc::new(Runtime::new().expect("Rust async runtime"));

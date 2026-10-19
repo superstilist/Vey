@@ -11,7 +11,8 @@
     "test:transitions": "node track-transition-test.mjs",
     "test:recovery": "node recovery-test.mjs",
     "test:clock": "node clock-test.mjs",
-    "test:stability": "node stability-test.mjs"
+    "test:stability": "node stability-test.mjs",
+    "test:material": "node material-test.mjs"
   },
   "dependencies": {
     "@kawarp/core": "1.3.1",

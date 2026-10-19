@@ -5,6 +5,10 @@
 Vey is a native music player with synchronized lyrics. Formerly PlayerVF;
 existing library data and settings remain compatible.
 
+The interface pairs a compact bento home with soft, organic shapes and
+Material You inspired tonal colors that adapt to the current cover.
+See [the tonal interface notes](docs/MATERIAL-STYLE.md).
+
 Built in Rust.
 The application shell is Slint. Lyrics use the original Braccato web component
 in an embedded Windows WebView2 widget and in a browser iframe. There is no

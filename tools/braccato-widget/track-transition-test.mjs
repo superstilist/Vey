@@ -144,13 +144,26 @@ try {
       window.playerEntries.push({x:e.data.state.presentationX,y:e.data.state.presentationY,
         grouped:e.data.state.grouped,innerTransform:getComputedStyle(document.querySelector('#scroller')).transform});
   });});
+  // Sample while the camera runs; querying only after a cross-frame wait can
+  // miss the entire animation on a busy compilation host.
+  await page.locator('iframe[title="Braccato lyrics"]').evaluate(element=>{
+    window.playerMotionSamples=[];window.capturePlayerMotion=true;
+    const sample=()=>{
+      const animations=element.getAnimations();
+      window.playerMotionSamples.push({animations:animations.length,easing:animations[0]?.effect.getTiming().easing});
+      if(window.capturePlayerMotion)requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
   await page.mouse.click(450,865);
   await frame.waitForFunction(()=>window.playerEntries.some(p=>p.x>0&&p.y<0));
-  const movingHost = await page.locator('iframe[title="Braccato lyrics"]').evaluate(element=>({
-    animations:element.getAnimations().length,
-    easing:element.getAnimations()[0]?.effect.getTiming().easing,
-    clipped:getComputedStyle(element.parentElement).overflow,
-  }));
+  const movingHost = await page.locator('iframe[title="Braccato lyrics"]').evaluate(element=>{
+    window.capturePlayerMotion=false;
+    const samples=window.playerMotionSamples;
+    return {animations:Math.max(0,...samples.map(s=>s.animations)),
+      easing:samples.find(s=>s.animations)?.easing,
+      clipped:getComputedStyle(element.parentElement).overflow};
+  });
   assert.equal(movingHost.animations,1,'one camera animation moves the complete lyric host');
   assert.equal(movingHost.easing,'cubic-bezier(0.42, 0, 0.58, 1)','the browser host uses the shared ease-in-out curve');
   assert.equal(movingHost.clipped,'hidden','the shared stage clips the moving host');

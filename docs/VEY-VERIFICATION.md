@@ -38,10 +38,28 @@ The native and source design tokens use its lime accent.
   isolated under the ignored smoke-data directory. See `vey-native-smoke.json`.
 
 The development WASM navigation sample recorded a median animation-frame gap
-of 11.1 ms, p95 55.7 ms and maximum 150 ms during concurrent compilation.
+of 16.7 ms, p95 77.8 ms and maximum 150 ms during concurrent compilation.
 This is a headless Edge sample, not an optimized native benchmark or a promise
 of zero dropped frames. No before/after speedup percentage was measured.
 See `navigation-performance.json` and the widget JSON reports for raw results.
 
 Tests use fixture audio and mocked services. Live online-service parity and
 Linux/Android runtime behavior were not revalidated in this change.
+
+
+## Vey 0.1.1 tonal design
+
+The style change is described in `MATERIAL-STYLE.md`. The Rust suite now passes
+153 tests, with seven environment-dependent checks ignored. Two added tests
+cover neutral/transparent artwork, distinct warm/cool hue selection and readable
+primary/foreground contrast across 24 sampled hues. The native and WASM builds
+share the same artwork-change callback and palette roles.
+
+The dedicated browser material check verifies actual warm/cool surface pixels,
+retaining the previous palette during a delayed cover download, palette retention
+across navigation, and volume control through pointer and keyboard input.
+See `material-check.json` and screenshots 41–44 for the current run.
+
+The 0.1.1 optimized Windows executable also completed `--widget-smoke` with
+exit code zero, seven rendered lyric lines, and a 256-pixel ambient frame.
+The archive checksum was verified before publication.

@@ -1,11 +1,12 @@
 import "../assets/fonts/Roboto.ttf";
-import { LineEdit, ListView, ScrollView, Slider, ComboBox, TextEdit } from "std-widgets.slint";
+import { LineEdit, ListView, ScrollView, Palette, ComboBox, TextEdit } from "std-widgets.slint";
 import { WordRow, LyricRow } from "lyric-types.slint";
 export { WordRow, LyricRow } from "lyric-types.slint";
 import { BraccatoLyrics } from "braccato-lyrics.slint";
 import { Tokens } from "tokens.slint";
+export { Tokens } from "tokens.slint";
 import { StageNavigator } from "stage-navigator.slint";
-import { Action, NavItem, Artwork, Transport, SeekBar } from "controls.slint";
+import { Action, NavItem, Artwork, Transport, SeekBar, TonalSlider } from "controls.slint";
 
 export struct TrackRow { title: string, artist: string, album: string, duration: string, path: string, art: image, liked: bool }
 export struct PlaylistRow { id: string, name: string, detail: string }
@@ -13,6 +14,7 @@ export struct PlaylistRow { id: string, name: string, detail: string }
 
 export component MainWindow inherits Window {
     title: "Vey";
+    init => { Palette.color-scheme = ColorScheme.dark; }
     icon: @image-url("../assets/vey-logo.png");
     preferred-width: 1440px;
     preferred-height: 900px;
@@ -123,6 +125,8 @@ export component MainWindow inherits Window {
     in-out property <string> current-artist: "Виберіть пісню";
     in-out property <string> current-album: "";
     in-out property <image> current-art;
+    callback artwork-theme();
+    changed current-art => { root.artwork-theme(); }
     in-out property <image> ambient-frame;
     in-out property <string> player-state: "stopped";
     in-out property <bool> current-liked;
@@ -305,7 +309,7 @@ export component MainWindow inherits Window {
                 max-width: root.mobile ? root.width : 560px;
                 height: 42px;
                 border-radius: 21px;
-                background: #1c1c20;
+                background: Tokens.neutral-100;
                 border-width: 0px;
                 border-color: #ffffff18;
                 HorizontalLayout {
@@ -442,12 +446,9 @@ export component MainWindow inherits Window {
         ambient-surface := Rectangle {
             x: -content.x; y: -content.y;
             width: root.width; height: root.height;
-            background: @linear-gradient(125deg, #26394b 0%, #594051 45%, #342b26 75%, #15282d 100%);
-            Image { source: root.ambient-frame; width: 100%; height: 100%; image-fit: fill; }
-            Rectangle {
-                width: 100%; height: 100%;
-                background: @linear-gradient(110deg, #08080880 0%, #08080899 55%, #080808b0 100%);
-            }
+            background: Tokens.neutral-50;
+            Image { source: root.ambient-frame; width: 100%; height: 100%; image-fit: fill; opacity: 0.06; }
+
         }
 
         // Non-Lyrics Views (Home, Explore, Library, Liked, Playlist, Queue, Search, Settings)
@@ -483,7 +484,7 @@ export component MainWindow inherits Window {
                     content-width: max(self.width, chips-row.preferred-width);
                     chips-row := HorizontalLayout {
                         height: 36px; spacing: 8px; alignment: start;
-                        for chip in ["Всі", "Подкасти", "Енергія", "Відпочинок", "Гарний настрій", "Тренування", "Вечірка", "Зосередження", "Романтика", "Сон"]: Action {
+                        for chip in ["Всі", "Для вас", "Зосередження", "Відпочинок", "Енергія"]: Action {
                             text: chip;
                             chip: true;
                             selected: root.selected-chip == chip;
@@ -496,33 +497,56 @@ export component MainWindow inherits Window {
                 }
 
                 if page-layer.route == "home": HorizontalLayout {
-                    height: 22px; spacing: 8px; alignment: start;
+                    height: root.mobile ? 188px : 208px;
+                    spacing: 14px;
                     Rectangle {
-                        width: 20px; height: 20px; border-radius: 10px;
-                        background: Tokens.brand-500;
-                        Text { text: "V"; color: Tokens.brand-ink; font-size: 11px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
-                    }
-                    Text { text: "ВАША МУЗИКА · VEY"; color: Tokens.ink-200; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; vertical-alignment: center; }
-                }
-
-                if page-layer.route == "home": Rectangle {
-                    height: root.mobile ? 170px : 190px;
-                    border-radius: 24px;
-                    background: #ffffff08;
-                    border-width: 1px; border-color: #ffffff16;
-                    HorizontalLayout {
-                        padding: root.mobile ? 20px : 28px; spacing: 24px;
-                        VerticalLayout {
-                            alignment: center; spacing: 12px;
-                            Text { text: "У ВАШОМУ РИТМІ"; color: #ffffffa0; font-size: 10px; font-weight: 700; letter-spacing: 1.6px; }
-                            Text { text: root.duration > 0 ? root.current-title : "Музика для вашого моменту"; color: Tokens.ink-100; font-size: root.mobile ? 24px : 34px; font-weight: 700; overflow: elide; }
-                            Text { text: root.duration > 0 ? root.current-artist : "Улюблені пісні. Нові відкриття. Ваш власний ритм."; color: Tokens.ink-150; font-size: 13px; overflow: elide; }
-                            HorizontalLayout {
-                                alignment: start;
-                                Action { text: root.duration > 0 ? "До програвача" : "Слухати музику"; primary: true; icon: @image-url("../assets/icons/Play.svg"); clicked => { if root.duration > 0 { root.navigate("lyrics"); } else { root.select-track(0); } } }
+                        horizontal-stretch: 1;
+                        border-radius: 32px;
+                        border-bottom-right-radius: 64px;
+                        background: Tokens.primary-container;
+                        HorizontalLayout {
+                            padding: root.mobile ? 22px : 28px; spacing: 20px;
+                            VerticalLayout {
+                                alignment: center; spacing: 10px;
+                                Text { text: "ВАШ МОМЕНТ"; color: Tokens.brand-300; font-size: 10px; font-weight: 600; letter-spacing: 1.4px; }
+                                Text { text: root.duration > 0 ? root.current-title : "Знайдіть свій ритм"; color: Tokens.ink-100; font-size: root.mobile ? 26px : 34px; font-weight: 600; overflow: elide; }
+                                Text { text: root.duration > 0 ? root.current-artist : "Музика, до якої хочеться повернутись."; color: Tokens.ink-150; font-size: 13px; overflow: elide; }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    Action { text: root.duration > 0 ? "Продовжити" : "Слухати"; primary: true; icon: @image-url("../assets/icons/Play.svg"); clicked => { if root.duration > 0 { root.navigate("lyrics"); } else { root.select-track(0); } } }
+                                }
                             }
+                            if !root.mobile && content.width > 800px: Artwork { art: root.current-art; width: 140px; height: 140px; border-radius: 44px; border-top-right-radius: 70px; }
                         }
-                        if !root.mobile: Artwork { art: root.current-art; width: 118px; height: 118px; border-radius: 14px; }
+                    }
+                    if !root.mobile: VerticalLayout {
+                        width: content.width > 900px ? 208px : 168px; spacing: 14px;
+                        Rectangle {
+                            background: Tokens.secondary-container; border-radius: 28px;
+                            HorizontalLayout {
+                                padding: 20px; spacing: 14px;
+                                Image { source: @image-url("../assets/icons/Heart.svg"); width: 26px; height: 26px; colorize: Tokens.brand-300; }
+                                VerticalLayout { alignment: center; spacing: 6px;
+                                    Text { text: "Улюблене"; color: Tokens.ink-100; font-size: 16px; font-weight: 600; }
+                                    Text { text: "Завжди поруч"; color: Tokens.ink-200; font-size: 12px; }
+                                }
+                            }
+                            TouchArea { mouse-cursor: pointer; clicked => { root.navigate("liked"); } }
+                            accessible-role: button; accessible-label: "Улюблене"; accessible-action-default => { root.navigate("liked"); }
+                        }
+                        Rectangle {
+                            background: Tokens.tertiary-container; border-radius: 28px; border-top-left-radius: 44px;
+                            HorizontalLayout {
+                                padding: 20px; spacing: 14px;
+                                Image { source: @image-url("../assets/icons/Compass.svg"); width: 26px; height: 26px; colorize: Tokens.ink-150; }
+                                VerticalLayout { alignment: center; spacing: 6px;
+                                    Text { text: "Відкривайте"; color: Tokens.ink-100; font-size: 16px; font-weight: 600; }
+                                    Text { text: "Новий настрій"; color: Tokens.ink-200; font-size: 12px; }
+                                }
+                            }
+                            TouchArea { mouse-cursor: pointer; clicked => { root.navigate("explore"); } }
+                            accessible-role: button; accessible-label: "Відкрити нову музику"; accessible-action-default => { root.navigate("explore"); }
+                        }
                     }
                 }
 
@@ -538,7 +562,7 @@ export component MainWindow inherits Window {
                               page-layer.route == "playlist" ? root.playlist-title :
                               page-layer.route == "queue" ? "Черга відтворення" : "Результати пошуку";
                         color: Tokens.ink-100;
-                        font-size: root.mobile ? 24px : page-layer.route == "home" ? 28px : 30px;
+                        font-size: root.mobile ? 24px : page-layer.route == "home" ? 24px : 30px;
                         font-weight: 700;
                         horizontal-stretch: 1;
                         vertical-alignment: center;
@@ -571,7 +595,7 @@ export component MainWindow inherits Window {
 
                 if root.status != "": Rectangle {
                     height: 36px; border-radius: 10px;
-                    background: #fb923c1a; border-width: 0px; border-color: #ffffff18;
+                    background: Tokens.primary-container; border-width: 0px; border-color: #ffffff18;
                     HorizontalLayout {
                         padding-left: 14px; padding-right: 14px;
                         Text { text: root.status; color: Tokens.brand-300; font-size: 12px; font-weight: 600; vertical-alignment: center; overflow: elide; }
@@ -581,26 +605,26 @@ export component MainWindow inherits Window {
                 if page-layer.route == "settings": VerticalLayout {
                     spacing: 18px; padding-bottom: 24px;
                         Rectangle {
-                            background: #141418cc; border-radius: 16px; border-width: 0px; border-color: #ffffff14;
+                            background: Tokens.neutral-100; border-radius: 28px; border-width: 0px; border-color: #ffffff14;
                             VerticalLayout {
                                 padding: 20px; spacing: 14px;
                                 Text { text: "Відтворення та аудіо"; color: Tokens.ink-100; font-size: 18px; font-weight: 700; }
                                 HorizontalLayout {
                                     spacing: 16px;
                                     Text { text: "Швидкість відтворення"; color: Tokens.ink-200; width: 180px; vertical-alignment: center; }
-                                    Slider { minimum: 0.5; maximum: 2; value <=> root.rate; changed(value) => { root.rate-changed(value); } }
+                                    TonalSlider { label: "Швидкість відтворення"; minimum: 0.5; maximum: 2; value <=> root.rate; changed(value) => { root.rate-changed(value); } }
                                     Text { text: round(root.rate * 100) / 100 + "×"; color: Tokens.brand-300; font-weight: 700; width: 48px; vertical-alignment: center; }
                                 }
                             }
                         }
                         Rectangle {
-                            background: #141418cc; border-radius: 16px; border-width: 0px; border-color: #ffffff14;
+                            background: Tokens.neutral-100; border-radius: 28px; border-width: 0px; border-color: #ffffff14;
                             VerticalLayout {
                                 padding: 20px; spacing: 12px;
                                 Text { text: "Джерела музики"; color: Tokens.ink-100; font-size: 18px; font-weight: 700; }
                                 Text { text: "Системна папка «Музика» сканується автоматично разом із вибраними папками."; color: Tokens.ink-300; font-size: 13px; wrap: word-wrap; }
                                 for source[index] in root.sources: Rectangle {
-                                    height: 42px; border-radius: 8px; background: #ffffff08;
+                                    height: 42px; border-radius: 8px; background: Tokens.neutral-100;
                                     HorizontalLayout {
                                         padding-left: 12px; padding-right: 8px; spacing: 8px;
                                         Text { text: source; color: Tokens.ink-150; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
@@ -617,7 +641,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         Rectangle {
-                            background: #141418cc; border-radius: 16px; border-width: 0px; border-color: #ffffff14;
+                            background: Tokens.neutral-100; border-radius: 28px; border-width: 0px; border-color: #ffffff14;
                             VerticalLayout {
                                 padding: 20px; spacing: 14px;
                                 Text { text: "Слова пісень (Better Lyrics)"; color: Tokens.ink-100; font-size: 18px; font-weight: 700; }
@@ -643,7 +667,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         Rectangle {
-                            background: #141418cc; border-radius: 16px; border-width: 0px; border-color: #ffffff14;
+                            background: Tokens.neutral-100; border-radius: 28px; border-width: 0px; border-color: #ffffff14;
                             VerticalLayout {
                                 padding: 20px; spacing: 14px;
                                 Text { text: "Дані, синхронізація та YouTube Music"; color: Tokens.ink-100; font-size: 18px; font-weight: 700; }
@@ -677,11 +701,11 @@ export component MainWindow inherits Window {
                                 width: root.mobile ? 148px : max(156px, min(204px, (content.width - 152px) / 5));
                                 visible: index < 8;
                                 border-radius: 20px;
-                                background: card-touch.has-hover ? #ffffff18 : #ffffff06;
+                                background: card-touch.has-hover ? Tokens.neutral-200 : Tokens.neutral-100;
                                 animate background { duration: 100ms; }
                                 VerticalLayout {
                                     spacing: 8px; padding: 8px;
-                                    Artwork { art: track.art; height: self.width; tone: index; border-radius: 16px; }
+                                    Artwork { art: track.art; height: self.width; tone: index; border-radius: mod(index, 3) == 1 ? self.width / 2 : 28px; border-top-right-radius: mod(index, 3) == 2 ? 64px : self.border-radius; }
                                     Text { text: track.title; color: Tokens.ink-100; font-size: 14px; font-weight: 700; overflow: elide; }
                                     Text { text: "Пісня · " + track.artist; color: Tokens.ink-200; font-size: 12px; overflow: elide; }
                                     Rectangle { vertical-stretch: 1; }
@@ -717,7 +741,7 @@ export component MainWindow inherits Window {
                     }
 
                     if page-layer.page-tracks.length == 0: Rectangle {
-                        height: 220px; border-radius: 16px; background: #ffffff06; border-width: 0px; border-color: #ffffff10;
+                        height: 220px; border-radius: 16px; background: Tokens.neutral-100; border-width: 0px; border-color: #ffffff10;
                         VerticalLayout {
                             alignment: center; spacing: 12px; padding: 24px;
                             Text { text: page-layer.route == "search" ? "Нічого не знайдено" : "Тут з’явиться ваша музика"; color: Tokens.ink-100; font-size: 20px; font-weight: 700; horizontal-alignment: center; }
@@ -731,10 +755,10 @@ export component MainWindow inherits Window {
                             spacing: 4px;
                             for ri in [0, 1, 2, 3]: tile := Rectangle {
                                 height: 64px;
-                                border-radius: 10px;
+                                border-radius: 20px;
                                 visible: col * 4 + ri < page-layer.page-tracks.length;
                                 property <TrackRow> song: page-layer.page-tracks[col * 4 + ri];
-                                background: tile-touch.has-hover ? #ffffff12 : transparent;
+                                background: tile-touch.has-hover ? Tokens.neutral-200 : Tokens.neutral-100;
                                 HorizontalLayout {
                                     padding: 8px; spacing: 12px;
                                     Artwork { art: tile.song.art; width: 48px; height: 48px; tone: col * 4 + ri; border-radius: 12px; }
@@ -873,13 +897,13 @@ export component MainWindow inherits Window {
                 // Left Column: Album Art Showcase + Track Metadata + Full Studio Transport Deck
                 if !root.mobile: Rectangle {
                     width: min(content.width * (root.immersive ? 0.40 : 0.38), root.immersive ? 500px : 430px);
-                    background: transparent;
-                    border-radius: 24px;
+                    background: Tokens.neutral-100;
+                    border-radius: 32px;
                     border-width: 0px;
                     border-color: transparent;
 
                     VerticalLayout {
-                        padding: root.immersive ? 0px : 12px;
+                        padding: root.immersive ? 24px : 20px;
                         spacing: root.immersive ? 20px : 18px;
                         alignment: center;
 
@@ -895,7 +919,9 @@ export component MainWindow inherits Window {
                                     art: root.current-art;
                                     width: 100%; height: 100%;
                                     tone: 0;
-                                    border-radius: 24px;
+                                    border-radius: 36px;
+                                    border-top-right-radius: 76px;
+                                    border-bottom-left-radius: 56px;
                                 }
                             }
                         }
@@ -1040,8 +1066,8 @@ export component MainWindow inherits Window {
                     // Compact Mobile Now-Playing Header + Transport Card
                     if root.mobile: Rectangle {
                         height: 158px;
-                        border-radius: 18px;
-                        background: transparent;
+                        border-radius: 28px;
+                        background: Tokens.neutral-100;
                         border-width: 0px;
                         border-color: #ffffff1c;
                         VerticalLayout {
@@ -1088,7 +1114,7 @@ export component MainWindow inherits Window {
                         Rectangle {
                             horizontal-stretch: 1;
                             border-radius: 21px;
-                            background: transparent;
+                            background: Tokens.neutral-100;
                             border-width: 0px;
                             border-color: #ffffff16;
                             HorizontalLayout {
@@ -1096,17 +1122,13 @@ export component MainWindow inherits Window {
                                 Rectangle {
                                     horizontal-stretch: 1;
                                     border-radius: 17px;
-                                    background: transparent;
+                                    background: root.player-tab == "lyrics" ? Tokens.primary-container : transparent;
                                     Text {
                                         text: "ТЕКСТ ПІСНІ";
                                         color: root.player-tab == "lyrics" ? Tokens.ink-100 : Tokens.ink-300;
                                         font-size: 12px; font-weight: 700; letter-spacing: 0.8px;
                                         width: 100%; height: 100%;
                                         horizontal-alignment: center; vertical-alignment: center;
-                                    }
-                                    if root.player-tab == "lyrics": Rectangle {
-                                        y: parent.height - 2px; x: 0px; width: parent.width; height: 2px;
-                                        border-radius: 2px; background: Tokens.ink-100;
                                     }
                                     TouchArea { mouse-cursor: pointer; clicked => { root.player-tab = "lyrics"; } }
                                     accessible-role: button; accessible-label: "Текст пісні";
@@ -1115,17 +1137,13 @@ export component MainWindow inherits Window {
                                 Rectangle {
                                     horizontal-stretch: 1;
                                     border-radius: 17px;
-                                    background: transparent;
+                                    background: root.player-tab == "queue" ? Tokens.primary-container : transparent;
                                     Text {
                                         text: "ДАЛІ В ЧЕРЗІ";
                                         color: root.player-tab == "queue" ? Tokens.ink-100 : Tokens.ink-300;
                                         font-size: 12px; font-weight: 700; letter-spacing: 0.8px;
                                         width: 100%; height: 100%;
                                         horizontal-alignment: center; vertical-alignment: center;
-                                    }
-                                    if root.player-tab == "queue": Rectangle {
-                                        y: parent.height - 2px; x: 0px; width: parent.width; height: 2px;
-                                        border-radius: 2px; background: Tokens.ink-100;
                                     }
                                     TouchArea { mouse-cursor: pointer; clicked => { root.player-tab = "queue"; } }
                                     accessible-role: button; accessible-label: "Черга відтворення";
@@ -1301,10 +1319,10 @@ export component MainWindow inherits Window {
             y: parent.height - self.height - 16px;
             width: min(380px, parent.width - 32px);
             height: min(304px, parent.height - 32px);
-            background: #19191d;
+            background: Tokens.neutral-100;
             border-radius: 22px;
-            border-width: 1px;
-            border-color: #ffffff20;
+            border-width: 0px;
+            border-color: Tokens.neutral-300;
             clip: true;
             TouchArea {} // Consume clicks on panel gaps.
             VerticalLayout {
@@ -1357,7 +1375,7 @@ export component MainWindow inherits Window {
         height: 56px;
         width: root.width - 16px;
         border-radius: 20px;
-        background: #0d0d10;
+        background: Tokens.neutral-100;
 
         HorizontalLayout {
             alignment: space-around;
@@ -1377,7 +1395,7 @@ export component MainWindow inherits Window {
         width: root.width - 16px;
         height: 72px;
         visible: !root.immersive;
-        background: #101014;
+        background: Tokens.neutral-100;
         border-radius: 24px;
         clip: true;
         // Interactive Top Progress Track
@@ -1437,7 +1455,7 @@ export component MainWindow inherits Window {
             if !root.mobile && root.width >= 1040px: Action { icon: @image-url("../assets/icons/ListMusic.svg"); label: "Черга відтворення"; selected: root.displayed-view == "queue"; clicked => { root.navigate("queue"); } }
             if !root.mobile && root.width >= 1040px: Action { icon: @image-url("../assets/icons/Plus.svg"); label: "Додати до списку"; clicked => { root.dialog = "add"; } }
             if !root.mobile: Action { icon: @image-url("../assets/icons/Volume2.svg"); label: "Гучність"; clicked => { root.volume = root.volume > 0 ? 0 : 1; root.volume-changed(root.volume); } }
-            if !root.mobile: Slider { width: root.width < 1040px ? 64px : 84px; minimum: 0; maximum: 1; value <=> root.volume; changed(value) => { root.volume-changed(value); } }
+            if !root.mobile: TonalSlider { label: "Гучність"; width: root.width < 1040px ? 64px : 84px; minimum: 0; maximum: 1; value <=> root.volume; changed(value) => { root.volume-changed(value); } }
             if !root.mobile && root.width >= 960px: Action { icon: @image-url("../assets/icons/Repeat.svg"); label: "Повтор"; selected: root.repeat-mode != "off"; clicked => { root.toggle-repeat(); } }
             if !root.mobile && root.width >= 960px: Action { icon: @image-url("../assets/icons/Shuffle.svg"); label: "Перемішати"; selected: root.shuffle; clicked => { root.toggle-shuffle(); } }
             Action {
@@ -1460,7 +1478,7 @@ export component MainWindow inherits Window {
             height: root.dialog == "paste" ? 440px : root.dialog == "add" || root.dialog == "match" ? 360px : 210px;
             x: (root.width - self.width) / 2;
             y: (root.height - self.height) / 2;
-            background: #16161c;
+            background: Tokens.neutral-100;
             border-radius: 20px;
             border-width: 0px;
             border-color: #ffffff24;

@@ -184,6 +184,7 @@ impl Bridge {
         #[cfg(target_os = "windows")]
         {
             state["nativeBackdrop"] = serde_json::json!({
+                "surface": format!("#{:02x}{:02x}{:02x}", w.global::<crate::Tokens>().get_neutral_50().red(), w.global::<crate::Tokens>().get_neutral_50().green(), w.global::<crate::Tokens>().get_neutral_50().blue()),
                 "content": {"x":w.get_backdrop_x(),"y":w.get_backdrop_y(),
                     "width":w.get_backdrop_width(),"height":w.get_backdrop_height()},
                 "viewport":{"x":w.get_lyrics_widget_x()+w.get_player_motion_x(),

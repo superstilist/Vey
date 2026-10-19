@@ -120,26 +120,17 @@ export function paintNativeBackdrop(backdrop: any) {
   const ctx = backdropCanvas.getContext('2d')!;
   ctx.setTransform(width / v.width, 0, 0, height / v.height,
     -(v.x - c.x) * width / v.width, -(v.y - c.y) * height / v.height);
-  const gradient = (angle: number, stops: [number,string][]) => {
-    const a = angle * Math.PI / 180, dx = Math.sin(a), dy = -Math.cos(a);
-    const span = Math.abs(c.width * dx) + Math.abs(c.height * dy);
-    const g = ctx.createLinearGradient(c.width/2-dx*span/2,c.height/2-dy*span/2,
-      c.width/2+dx*span/2,c.height/2+dy*span/2);
-    for (const [at,color] of stops) g.addColorStop(at,color);
-    return g;
-  };
+  ctx.fillStyle = /^#[0-9a-f]{6}$/i.test(backdrop.surface) ? backdrop.surface : '#171c15';
+  ctx.fillRect(0,0,c.width,c.height);
+  ctx.globalAlpha = 0.06;
   if (revision > 0) {
     if (sourceRevision !== revision) {
       sourceCanvas!.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(upright.buffer),width,height),0,0);
       sourceRevision = revision;
     }
     ctx.drawImage(sourceCanvas!,0,0,c.width,c.height);
-  } else {
-    ctx.fillStyle = gradient(125,[[0,'#26394b'],[0.45,'#594051'],[0.75,'#342b26'],[1,'#15282d']]);
-    ctx.fillRect(0,0,c.width,c.height);
   }
-  ctx.fillStyle = gradient(110,[[0,'#08080880'],[0.55,'#08080899'],[1,'#080808b0']]);
-  ctx.fillRect(0,0,c.width,c.height);
+  ctx.globalAlpha = 1;
 }
 
 export function disposeAmbient() {
