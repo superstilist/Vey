@@ -1,4 +1,5 @@
 /target/
+/dist/
 /web/pkg/
 /docs/smoke-data/
 *-build.txt

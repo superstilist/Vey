@@ -41,8 +41,10 @@ pub fn load() -> Result<Store, String> {
     }
 }
 pub fn save(store: &Store) -> Result<(), String> {
-    let dir = data_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    save_at(store, &data_dir())
+}
+fn save_at(store: &Store, dir: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let tmp = dir.join("state.pending.json");
     std::fs::write(
         &tmp,
@@ -50,4 +52,104 @@ pub fn save(store: &Store) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     std::fs::rename(tmp, dir.join("state.json")).map_err(|e| e.to_string())
+}
+
+#[derive(Default)]
+struct SaveQueue {
+    pending: Option<Store>,
+    closing: bool,
+}
+/// A single disk writer, with at most one pending snapshot. Drop flushes it.
+pub struct SaveWorker {
+    queue: std::sync::Arc<(std::sync::Mutex<SaveQueue>, std::sync::Condvar)>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+impl SaveWorker {
+    pub fn new(on_error: impl Fn(String) + Send + 'static) -> Self {
+        Self::at_dir(data_dir(), on_error)
+    }
+    fn at_dir(dir: PathBuf, on_error: impl Fn(String) + Send + 'static) -> Self {
+        let queue = std::sync::Arc::new((
+            std::sync::Mutex::new(SaveQueue::default()),
+            std::sync::Condvar::new(),
+        ));
+        let shared = queue.clone();
+        let thread = std::thread::spawn(move || loop {
+            let (lock, wake) = &*shared;
+            let mut state = lock.lock().unwrap();
+            while state.pending.is_none() && !state.closing {
+                state = wake.wait(state).unwrap();
+            }
+            let Some(store) = state.pending.take() else {
+                break;
+            };
+            drop(state);
+            if let Err(e) = save_at(&store, &dir) {
+                on_error(format!("Save failed: {e}"));
+            }
+        });
+        Self {
+            queue,
+            thread: Some(thread),
+        }
+    }
+    pub fn request(&self, store: Store) {
+        let (lock, wake) = &*self.queue;
+        lock.lock().unwrap().pending = Some(store);
+        wake.notify_one();
+    }
+}
+impl Drop for SaveWorker {
+    fn drop(&mut self) {
+        let (lock, wake) = &*self.queue;
+        lock.lock().unwrap().closing = true;
+        wake.notify_one();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn temp_dir() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "vey-save-{}-{}",
+            std::process::id(),
+            crate::services::now_ms()
+        ))
+    }
+    #[test]
+    fn background_writer_flushes_latest_snapshot_on_shutdown() {
+        let dir = temp_dir();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let writer = SaveWorker::at_dir(dir.clone(), move |e| {
+            let _ = tx.send(e);
+        });
+        for i in 0..100 {
+            let mut store = Store::default();
+            store.settings.volume = i as f32 / 100.;
+            writer.request(store);
+        }
+        drop(writer);
+        assert!(rx.try_iter().next().is_none());
+        let saved: Store =
+            serde_json::from_slice(&std::fs::read(dir.join("state.json")).unwrap()).unwrap();
+        assert_eq!(saved.settings.volume, 0.99);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn background_writer_reports_disk_failure() {
+        let dir = temp_dir().with_extension("file");
+        std::fs::write(&dir, b"not a directory").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let writer = SaveWorker::at_dir(dir.clone(), move |e| {
+            let _ = tx.send(e);
+        });
+        writer.request(Store::default());
+        drop(writer);
+        assert!(rx.try_recv().unwrap().contains("Save failed"));
+        std::fs::remove_file(dir).unwrap();
+    }
 }

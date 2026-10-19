@@ -7,6 +7,14 @@ try {
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('http://127.0.0.1:4181/braccato/index.html');
   await page.waitForFunction(() => !!window.PlayerVFBraccato);
+  await page.evaluate(() => {
+    window.ambientReadbacks = 0;
+    const original = WebGLRenderingContext.prototype.readPixels;
+    WebGLRenderingContext.prototype.readPixels = function (...args) {
+      window.ambientReadbacks++;
+      return original.apply(this, args);
+    };
+  });
   const result = await page.evaluate(() => {
     const frames = [];
     addEventListener('playervf:braccato-message', e => {
@@ -28,6 +36,8 @@ try {
   assert.notDeepEqual(frames[0], frames[1], 'domain warp moves with time');
   assert.deepEqual(frames[1], frames[2], 'same time gives a frozen frame');
   assert.notDeepEqual(frames[2], frames[3], 'artwork changes the background');
+  assert.equal(await page.evaluate(() => window.ambientReadbacks), 3,
+    'duplicate frozen frames reuse the GPU target');
   const backdrop = await page.evaluate(() => {
     const geometry = {content:{x:248,y:64,width:1184,height:744},viewport:{x:776,y:210,width:598,height:524}};
     window.PlayerVFBraccato.update({visible:true,mode:'lyrics',nativeBackdrop:geometry});
@@ -67,10 +77,12 @@ try {
     const red=source(230,30,25),blue=source(20,40,230),green=source(20,220,50);
     const start=render(red,true);
     const first=render(blue);
+    const readsBeforeBlend = window.ambientReadbacks;
     await wait(300);
     const early=render();
     await wait(400);
     const middle=render();
+    const blendReadbacks = window.ambientReadbacks - readsBeforeBlend;
     const interrupted=render(green);
     await wait(1500);
     const finished=render();
@@ -82,12 +94,13 @@ try {
     render();
     const immediate=render(blue,true);
     const immediateSteady=render(undefined,true);
-    return {first:delta(start,first),early:delta(start,early),middle:delta(start,middle),
+    return {blendReadbacks,first:delta(start,first),early:delta(start,early),middle:delta(start,middle),
       interrupted:delta(middle,interrupted),finished:delta(middle,finished),frozen:delta(finished,frozen),
       missing:delta(finished,missing),replacement:delta(missing,replacement),
       reduced:delta(immediate,immediateSteady)};
   });
   assert.equal(morph.first,0,'new song starts from exactly the displayed colors');
+  assert.equal(morph.blendReadbacks,0,'paused morph frames perform no additional GPU readbacks');
   assert.ok(morph.early>0 && morph.middle>morph.early,'paused artwork morph progresses gradually');
   assert.equal(morph.interrupted,0,'rapid skips continue from the displayed mixture');
   assert.ok(morph.finished>10,'interrupted morph reaches the latest artwork');

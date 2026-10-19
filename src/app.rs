@@ -3,16 +3,17 @@ use crate::audio::AudioEngine;
 use crate::{local_sync, lyrics::*, lyrics_service as ls, native as core, services::*, storage, *};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::Rc,
     sync::{mpsc, Arc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::runtime::Runtime;
 type Shared = Rc<RefCell<App>>;
 struct App {
     store: Store,
     visible: Vec<Track>,
+    page_results: std::collections::HashMap<String, Vec<Track>>,
     library: Vec<Track>,
     queue: Queue,
     current: Option<Track>,
@@ -35,6 +36,8 @@ struct App {
     art_gate: Arc<tokio::sync::Semaphore>,
     jwt: ls::JwtCache,
     snapshot: bool,
+    save_due: Cell<Option<Instant>>,
+    saver: storage::SaveWorker,
 }
 enum Event {
     Match(String, Result<local_sync::TagSnapshot, String>),
@@ -73,14 +76,14 @@ fn apply_settings(w: &MainWindow, a: &App) {
     let _ = a.audio.volume(s.volume);
     let _ = a.audio.rate(s.rate);
 }
-fn persist(w: &MainWindow, a: &App) {
-    if a.snapshot {
-        return;
-    }
-    if let Err(e) = storage::save(&a.store) {
-        w.set_status(format!("Не вдалося зберегти: {e}").into());
+fn persist(_w: &MainWindow, a: &App) {
+    if !a.snapshot && a.save_due.get().is_none() {
+        // Coalesce settings bursts before cloning the store, without disk IO.
+        a.save_due
+            .set(Some(Instant::now() + Duration::from_millis(200)));
     }
 }
+
 fn art_image(a: &App, t: &Track) -> slint::Image {
     a.art.get(&t.path).cloned().unwrap_or_default()
 }
@@ -133,6 +136,29 @@ fn refresh(w: &MainWindow, a: &mut App) {
         for track in a.visible.clone() {
             load_art(a, &track);
         }
+    }
+    if matches!(view.as_str(), "search" | "explore") {
+        a.page_results.insert(view.clone(), a.visible.clone());
+    }
+    // Seed all local page objects without navigating or starting network work.
+    if !w.get_pages_seeded() {
+        let home = if a.store.history.is_empty() {
+            a.library.clone()
+        } else {
+            a.store.history.iter().map(|h| h.track.clone()).collect()
+        };
+        w.set_home_page_tracks(model(home.iter().map(|t| row(a, t)).collect()));
+        w.set_library_page_tracks(model(a.library.iter().map(|t| row(a, t)).collect()));
+        w.set_liked_page_tracks(model(
+            a.store
+                .tracks
+                .iter()
+                .filter(|t| a.store.likes.contains(&t.path))
+                .map(|t| row(a, t))
+                .collect(),
+        ));
+        w.set_queue_page_tracks(model(a.queue.tracks.iter().map(|t| row(a, t)).collect()));
+        w.set_pages_seeded(true);
     }
     w.set_tracks(model(a.visible.iter().map(|t| row(a, t)).collect()));
     let mut playlists = vec![
@@ -367,13 +393,20 @@ fn start(a: &Shared, w: &MainWindow, track: Track) {
         } else {
             Ok(track.path.clone())
         };
-        let result = path.and_then(|p| {
-            let _guard = gate.lock().map_err(|e| e.to_string())?;
-            if generation.load(std::sync::atomic::Ordering::SeqCst) != serial {
-                return Err("Скасовано".into());
-            }
-            core::player_load(&audio, p.clone(), true).map(|_| p)
-        });
+        // Waiting for the decoder and its serial gate must not occupy async
+        // runtime workers needed for artwork, search and lyric requests.
+        let result = match path {
+            Ok(p) => tokio::task::spawn_blocking(move || {
+                let _guard = gate.lock().map_err(|e| e.to_string())?;
+                if generation.load(std::sync::atomic::Ordering::SeqCst) != serial {
+                    return Err("Скасовано".into());
+                }
+                core::player_load(&audio, p.clone(), true).map(|_| p)
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string())),
+            Err(e) => Err(e),
+        };
         let _ = tx.send(Event::Loaded(track.path, result));
     });
 }
@@ -463,9 +496,14 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
     };
     let audio = Arc::new(core::start_audio());
+    let error_tx = tx.clone();
+    let saver = storage::SaveWorker::new(move |error| {
+        let _ = error_tx.send(Event::Message(error));
+    });
     let a = Rc::new(RefCell::new(App {
         store,
         visible: vec![],
+        page_results: std::collections::HashMap::new(),
         library: vec![],
         queue: Queue::default(),
         current: None,
@@ -488,6 +526,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
         art_gate: Arc::new(tokio::sync::Semaphore::new(2)),
         jwt: ls::JwtCache::load(),
         snapshot,
+        save_due: Cell::new(None),
+        saver,
     }));
     {
         let a = a.borrow();
@@ -519,8 +559,12 @@ pub fn run() -> Result<(), slint::PlatformError> {
     bind!(on_navigate, |ui, state, view| {
         ui.set_status("".into());
         state.borrow_mut().search_generation += 1;
+        let cached = state.borrow().page_results.get(view.as_str()).cloned();
+        if matches!(view.as_str(), "search" | "explore") {
+            state.borrow_mut().visible = cached.clone().unwrap_or_default();
+        }
         ui.set_active_view(view.clone());
-        if view == "explore" {
+        if view == "explore" && cached.is_none() {
             browse(state, &ui, None, false);
         } else {
             refresh(&ui, &mut state.borrow_mut());
@@ -898,7 +942,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
     });
     bind!(on_restore, |ui, state| {
         if let Some(p) = crate::dialogs::FileDialog::new()
-            .add_filter("PlayerVF", &["json"])
+            .add_filter("Vey", &["json"])
             .pick_file()
         {
             let result = std::fs::read(p)
@@ -1019,14 +1063,16 @@ pub fn run() -> Result<(), slint::PlatformError> {
     let weak = w.as_weak();
     let shared = a.clone();
     let timer = slint::Timer::default();
+    let mut last_status = Instant::now();
     timer.start(
         slint::TimerMode::Repeated,
-        Duration::from_millis(100),
+        Duration::from_millis(16),
         move || {
             let Some(w) = weak.upgrade() else {
                 return;
             };
-            for event in rx.try_iter() {
+            let batch_start = Instant::now();
+            for event in rx.try_iter().take(8) {
                 let mut a = shared.borrow_mut();
                 match event {
                     Event::Match(path, result) => match result {
@@ -1169,8 +1215,21 @@ pub fn run() -> Result<(), slint::PlatformError> {
                         Err(e) => w.set_jwt_status(e.into()),
                     },
                 }
+                // Yield to painting/input even when workers finish together.
+                if batch_start.elapsed() >= Duration::from_millis(3) {
+                    break;
+                }
             }
             let mut a = shared.borrow_mut();
+            if a.save_due.get().is_some_and(|due| Instant::now() >= due) {
+                a.save_due.set(None);
+                a.saver.request(a.store.clone());
+            }
+            // Deliver results at frame cadence; poll the clock independently.
+            if last_status.elapsed() < Duration::from_millis(100) {
+                return;
+            }
+            last_status = Instant::now();
             if !a.loading && !a.loaded_path.is_empty() {
                 if let Ok(s) = core::player_status(&a.audio) {
                     if s.current_path.as_deref() != Some(a.loaded_path.as_str()) {
@@ -1219,5 +1278,10 @@ pub fn run() -> Result<(), slint::PlatformError> {
         drop(app);
         scan(&a, &w);
     }
-    w.run()
+    let result = w.run();
+    let app = a.borrow();
+    if app.save_due.take().is_some() {
+        app.saver.request(app.store.clone());
+    }
+    result
 }

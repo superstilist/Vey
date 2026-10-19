@@ -66,7 +66,7 @@ pub fn run_helper() -> Result<(), String> {
     let silent = std::env::args().any(|a| a == "--silent-challenge");
     let builder = WindowBuilder::new()
         .with_visible(!silent)
-        .with_title("PlayerVF — перевірка слів пісень")
+        .with_title("Vey — перевірка слів пісень")
         .with_inner_size(tao::dpi::LogicalSize::new(500., 360.));
     eprintln!("[lyrics-auth] starting browser host");
     let window = builder.build(&event_loop).map_err(|e| e.to_string())?;

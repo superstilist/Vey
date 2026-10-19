@@ -118,7 +118,7 @@ pub fn run() -> Result<(), String> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:4173")
             .await
             .map_err(|e| e.to_string())?;
-        println!("PlayerVF web: http://127.0.0.1:4173");
+        println!("Vey web: http://127.0.0.1:4173");
         axum::serve(listener, app).await.map_err(|e| e.to_string())
     })
 }

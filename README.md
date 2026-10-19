@@ -1,6 +1,11 @@
-# PlayerVF — Rust + Slint
+# Vey — Rust + Slint
 
-A native Rust rewrite of `C:\Users\superstilist\WebstormProjects\playervf`.
+<img src="assets/vey-logo.png" alt="Vey" width="200">
+
+Vey is a native music player with synchronized lyrics. Formerly PlayerVF;
+existing library data and settings remain compatible.
+
+Built in Rust.
 The application shell is Slint. Lyrics use the original Braccato web component
 in an embedded Windows WebView2 widget and in a browser iframe. There is no
 Tauri dependency. The original player project remains untouched.
@@ -9,7 +14,7 @@ Tauri dependency. The original player project remains untouched.
 for working features, platform evidence, and remaining work.
 
 ```powershell
-cargo run
+cargo run --bin vey
 cargo test
 cargo test --test native_services native_audio -- --ignored
 cargo run -- --screenshots
@@ -20,6 +25,17 @@ State lives in `%APPDATA%\PlayerVF-Rust\state.json` on Windows,
 `$XDG_DATA_HOME/playervf-rust` (or `~/.local/share/playervf-rust`) on Linux, and the
 app's internal data directory on Android. `PLAYERVF_DATA_DIR` overrides the location.
 Unreadable state is copied to a timestamped backup before recovery.
+
+## Responsiveness
+
+Pages stay mounted for fast returns and use one shared, interruptible camera.
+The lyrics host follows that camera on the compositor. Background results
+are processed in bounded batches; a dedicated writer coalesces settings saves
+and flushes the latest state on normal shutdown. Existing data paths and
+internal bridge names remain compatible with PlayerVF.
+
+See [page motion](docs/PAGE-MOTION.md), [validation](docs/VEY-VERIFICATION.md),
+and [Windows packaging](docs/RELEASE.md).
 
 ## Web
 
@@ -156,7 +172,7 @@ challenge and are exchanged and cached automatically. Concurrent callers share
 one refresh, including failures; failed attempts have a 30-second cooldown.
 The helper drains and flushes its IPC output while running, so long challenge
 tokens cannot block the process. Challenge errors reach the status display
-without logging credentials. `playervf --lyrics-auth-check` checks this flow
+without logging credentials. `vey --lyrics-auth-check` checks this flow
 without opening the player and prints only whether authentication succeeded.
 The navigation filter allows WebView2's `data:text/html;charset=utf-8;base64,`
 representation only when it matches the exact bundled challenge host. Rejecting

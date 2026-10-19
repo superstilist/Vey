@@ -18,6 +18,7 @@ import '../../third-party/braccato/packages/highlight/src/highlight.css';
 import './widget.css';
 import { renderAmbient, paintNativeBackdrop, disposeAmbient } from './ambient';
 import { PlaybackClock } from './clock';
+import { CameraPresentation } from '../../web/player-motion.js';
 
 export const upstream = { core, element, constants, text, themeSettings, util, parsers, format, highlight, providers };
 export const revision = '1e6b6954b1c18136274681a9bf4985efb2332b01';
@@ -41,6 +42,9 @@ let tickConfig = '';
 let lastTickTime = NaN;
 let lastTickPlaying = false;
 let visibilityAnimation: Animation | undefined;
+let presentationKey = '';
+const cameraPresentation = new CameraPresentation(scroller);
+scroller.style.willChange = 'transform, opacity';
 
 editorInput.addEventListener('input', () => send({type:'edit',text:editorInput.value}));
 document.querySelector('#pretty')!.addEventListener('click', () => {
@@ -109,8 +113,16 @@ export function update(next: any) {
   const wasVisible = state.visible;
   const wasEditing = state.mode === 'editor';
   state = { ...state, ...next };
-  scroller.style.opacity = String(state.presentationOpacity ?? 1);
-  scroller.style.pointerEvents = state.presentationOpacity === 0 ? 'none' : '';
+  const cameraMoving = cameraPresentation.update(!state.grouped && state.visible && state.mode !== 'editor' ? state.camera : null, !!state.reduced);
+  const presentation = JSON.stringify([!!state.grouped,state.presentationOpacity ?? 1,state.grouped ? 0 : cameraMoving ? 'camera' : state.presentationX ?? 0,state.grouped ? 0 : cameraMoving ? 'camera' : state.presentationY ?? 0,!!state.reduced]);
+  if (presentation !== presentationKey) {
+    presentationKey = presentation;
+    scroller.style.opacity = String(state.presentationOpacity ?? 1);
+    // Move the composited content, keeping native child/iframe bounds stable.
+    scroller.style.transition = state.grouped || state.reduced || cameraMoving ? 'none' : 'transform 32ms linear, opacity 32ms linear';
+    if (!cameraMoving) scroller.style.transform = state.grouped ? 'none' : `translate(${state.presentationX ?? 0}px, ${state.presentationY ?? 0}px)`;
+    scroller.style.pointerEvents = state.presentationOpacity === 0 || cameraMoving ? 'none' : '';
+  }
   if (state.visible && state.mode !== 'editor') paintNativeBackdrop(state.nativeBackdrop);
   const editing = state.mode === 'editor';
   const optionsKey = JSON.stringify([state.rate, state.offset, state.passive, state.reduced]);
@@ -121,8 +133,8 @@ export function update(next: any) {
     tickOptionsUpdates++;
     lastTickTime = NaN;
   }
-  editorPane.hidden = !editing;
-  scroller.hidden = editing;
+  if (editorPane.hidden !== !editing) editorPane.hidden = !editing;
+  if (scroller.hidden !== editing) scroller.hidden = editing;
   if (editing) {
     resume.hidden = true;
     if (next.editorText !== undefined && editorInput.value !== next.editorText) {
@@ -172,7 +184,7 @@ export function update(next: any) {
   }
   if (wasVisible !== state.visible) {
     visibilityAnimation?.cancel();
-    if (state.visible && !state.reduced) {
+    if (state.visible && !state.reduced && state.presentationOpacity === undefined) {
       visibilityAnimation = view.animate([{opacity:0},{opacity:1}],{
         duration:180,easing:'cubic-bezier(0.2, 0.8, 0.2, 1)'
       });
@@ -200,6 +212,7 @@ export function diagnostics() {
     packages: Object.keys(upstream), mode: state.mode, html: view.innerHTML };
 }
 export function destroy() {
+  cameraPresentation.cancel();
   visibilityAnimation?.cancel();
   disposeAmbient();
   state.visible = false;

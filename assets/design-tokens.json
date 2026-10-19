@@ -1,9 +1,9 @@
 {
   "$schema": "https://design-tokens.org/schema.json",
   "meta": {
-    "brand": "PlayerVF",
-    "source": "src/styles.css :root — single source of styling truth",
-    "sync": "assets/design-tokens.json → src/styles.css :root + assets/design-tokens.css (keep all three in sync)",
+    "brand": "Vey",
+    "source": "Vey native theme",
+    "sync": "assets/design-tokens.json → ui/tokens.slint + assets/design-tokens.css",
     "mode": "dark-only (color-scheme: dark)"
   },
   "primitive": {
@@ -23,10 +23,10 @@
         "300": { "$value": "#888888", "$type": "color" }
       },
       "brand": {
-        "300": { "$value": "#ff647c", "$type": "color" },
-        "500": { "$value": "#ff0033", "$type": "color" },
-        "600": { "$value": "#db002b", "$type": "color" },
-        "ink": { "$value": "#ffffff", "$type": "color" }
+        "300": { "$value": "#c9ff62", "$type": "color" },
+        "500": { "$value": "#adff12", "$type": "color" },
+        "600": { "$value": "#86c900", "$type": "color" },
+        "ink": { "$value": "#101400", "$type": "color" }
       },
       "status": {
         "ok": { "$value": "#34d399", "$type": "color" },
@@ -42,10 +42,10 @@
         "24": { "$value": "rgba(255, 255, 255, 0.24)", "$type": "color" },
         "40": { "$value": "rgba(255, 255, 255, 0.4)", "$type": "color" },
         "60": { "$value": "rgba(255, 255, 255, 0.6)", "$type": "color" },
-        "brand-08": { "$value": "rgba(255, 0, 51, 0.08)", "$type": "color" },
-        "brand-16": { "$value": "rgba(255, 0, 51, 0.16)", "$type": "color" },
-        "brand-32": { "$value": "rgba(255, 0, 51, 0.32)", "$type": "color" },
-        "brand-48": { "$value": "rgba(255, 0, 51, 0.48)", "$type": "color" },
+        "brand-08": { "$value": "rgba(173, 255, 18, 0.08)", "$type": "color" },
+        "brand-16": { "$value": "rgba(173, 255, 18, 0.16)", "$type": "color" },
+        "brand-32": { "$value": "rgba(173, 255, 18, 0.32)", "$type": "color" },
+        "brand-48": { "$value": "rgba(173, 255, 18, 0.48)", "$type": "color" },
         "danger-40": { "$value": "rgba(248, 113, 113, 0.4)", "$type": "color" },
         "scrim": { "$value": "rgba(8, 8, 12, 0.9)", "$type": "color" }
       }

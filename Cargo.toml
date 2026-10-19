@@ -1,13 +1,23 @@
 [package]
-name = "playervf"
+name = "vey"
 version = "0.1.0"
 edition = "2021"
 build = "build.rs"
 
+[profile.release]
+lto = "thin"
+codegen-units = 8
+strip = "debuginfo"
+
 [build-dependencies]
 slint-build = "1.18.1"
 
+[[bin]]
+name = "vey"
+path = "src/main.rs"
+
 [lib]
+name = "playervf"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
@@ -51,7 +61,7 @@ slint = { version = "1.18.1", features = ["backend-android-activity-06"] }
 
 [package.metadata.android]
 package = "com.playervf.rust"
-label = "PlayerVF"
+label = "Vey"
 build_targets = ["aarch64-linux-android"]
 [package.metadata.android.sdk]
 min_sdk_version = 26

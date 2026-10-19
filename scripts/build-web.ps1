@@ -17,5 +17,9 @@ try {
     }
     wasm-bindgen "target/wasm32-unknown-unknown/$profile/playervf.wasm" --target web --out-dir web/pkg
     if ($LASTEXITCODE -ne 0) { throw 'WASM bindings failed' }
+    # wasm-bindgen copies the declared bridge module, but not its ES imports.
+    Get-ChildItem -LiteralPath web/pkg/snippets -Filter bridge.js -Recurse | ForEach-Object {
+        Copy-Item -LiteralPath web/player-motion.js -Destination (Join-Path $_.DirectoryName 'player-motion.js') -Force
+    }
     Write-Output 'Run: cargo run -- --web-server; open http://127.0.0.1:4173'
 } finally { Pop-Location }

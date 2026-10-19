@@ -1,7 +1,12 @@
+import { CameraPresentation } from './player-motion.js';
 const files = new Map();
 // DOM host for the original, locally bundled Braccato renderer. Playback and
 // authenticated provider traffic remain in Rust.
 let braccatoFrame;
+let braccatoStage;
+let braccatoMotion;
+let braccatoPresentationKey = '';
+let braccatoScaleX = 1, braccatoScaleY = 1;
 let braccatoReady = false;
 let braccatoMessageHandler;
 let braccatoState = {};
@@ -24,6 +29,10 @@ function sendBraccato() {
 export function resetBraccato() {
   if (braccatoMessageHandler) removeEventListener('message', braccatoMessageHandler);
   braccatoFrame?.remove();
+  braccatoStage?.remove();
+  braccatoMotion?.cancel();
+  braccatoStage = braccatoMotion = undefined;
+  braccatoPresentationKey = '';
   braccatoFrame = undefined;
   braccatoReady = false;
   braccatoState = {};
@@ -40,7 +49,11 @@ export function updateBraccato(json) {
   if (!braccatoFrame) {
     braccatoFrame = document.createElement('iframe');
     braccatoFrame.title = 'Braccato lyrics';
-    braccatoFrame.style.cssText = 'position:fixed;border:0;border-radius:20px;background:transparent;display:none;z-index:2';
+    braccatoFrame.style.cssText = 'position:absolute;border:0;border-radius:20px;background:transparent;display:none;pointer-events:auto;will-change:transform';
+    braccatoStage = document.createElement('div');
+    braccatoStage.style.cssText = 'position:fixed;overflow:hidden;pointer-events:none;z-index:2';
+    braccatoStage.appendChild(braccatoFrame);
+    braccatoMotion = new CameraPresentation(braccatoFrame);
     braccatoMessageHandler = event => {
       if (event.source !== braccatoFrame.contentWindow || event.origin !== location.origin || event.data?.channel !== 'playervf-braccato') return;
       if (event.data.type === 'ready') { braccatoReady = true; sendBraccato(); }
@@ -55,18 +68,25 @@ export function updateBraccato(json) {
     };
     addEventListener('message', braccatoMessageHandler);
     braccatoFrame.src = new URL('./braccato/index.html', location.href).href;
-    document.body.appendChild(braccatoFrame);
+    document.body.appendChild(braccatoStage);
   }
   if (document.hidden) return braccatoReady;
   const bounds = braccatoState.bounds;
-  const geometryKey = JSON.stringify([bounds,braccatoState.overlay,braccatoState.windowWidth,braccatoState.windowHeight]);
+  const stage = braccatoState.stageBounds || {x:0,y:0,width:braccatoState.windowWidth,height:braccatoState.windowHeight,radius:0};
+  const geometryKey = JSON.stringify([bounds,stage,braccatoState.overlay,braccatoState.windowWidth,braccatoState.windowHeight]);
   if (braccatoGeometryDirty || geometryKey !== braccatoGeometryKey) {
     const canvas = document.querySelector('canvas').getBoundingClientRect();
     const sx = canvas.width / (braccatoState.windowWidth || canvas.width);
     const sy = canvas.height / (braccatoState.windowHeight || canvas.height);
+    braccatoScaleX = sx; braccatoScaleY = sy;
     Object.assign(braccatoFrame.style, {
-      left: `${canvas.left + bounds.x * sx}px`, top: `${canvas.top + bounds.y * sy}px`,
+      left: `${(bounds.x-stage.x) * sx}px`, top: `${(bounds.y-stage.y) * sy}px`,
       width: `${Math.max(1,bounds.width * sx)}px`, height: `${Math.max(1,bounds.height * sy)}px`,
+    });
+    Object.assign(braccatoStage.style, {
+      left:`${canvas.left+stage.x*sx}px`,top:`${canvas.top+stage.y*sy}px`,
+      width:`${stage.width*sx}px`,height:`${stage.height*sy}px`,
+      borderRadius:`${stage.radius*Math.min(sx,sy)}px`,
     });
     const overlay = braccatoState.overlay;
     if (overlay) {
@@ -80,7 +100,18 @@ export function updateBraccato(json) {
     braccatoGeometryKey = geometryKey;
     braccatoGeometryDirty = false;
   }
-  braccatoFrame.style.display = braccatoState.visible && braccatoReady && bounds.width > 8 && bounds.height > 8 ? 'block' : 'none';
+  const sx = braccatoScaleX, sy = braccatoScaleY;
+  const moving = braccatoState.visible && braccatoState.grouped && braccatoState.camera;
+  braccatoMotion.update(moving ? {...moving,width:moving.width*sx,height:moving.height*sy} : null,!!braccatoState.reduced);
+  const presentationKey = braccatoState.visible ? JSON.stringify([!!moving,moving ? 0 : braccatoState.presentationX,moving ? 0 : braccatoState.presentationY,braccatoState.presentationOpacity]) : 'hidden';
+  if (braccatoState.visible && presentationKey !== braccatoPresentationKey) {
+    if (!moving) braccatoFrame.style.transform = braccatoState.grouped ? `translate(${(braccatoState.presentationX||0)*sx}px,${(braccatoState.presentationY||0)*sy}px)` : 'none';
+    braccatoFrame.style.opacity = String(braccatoState.presentationOpacity ?? 1);
+    braccatoFrame.style.pointerEvents = moving ? 'none' : 'auto';
+  }
+  braccatoPresentationKey = presentationKey;
+  const display = braccatoState.visible && braccatoReady && bounds.width > 8 && bounds.height > 8 ? 'block' : 'none';
+  if (braccatoFrame.style.display !== display) braccatoFrame.style.display = display;
   sendBraccato();
   return braccatoReady;
 }

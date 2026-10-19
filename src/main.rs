@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), slint::PlatformError> {
     if std::env::args().any(|a| a == "--lyrics-challenge") {

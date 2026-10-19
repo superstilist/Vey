@@ -41,6 +41,40 @@ fn same_artwork(a: &slint::Image, b: &slint::Image) -> bool {
     (empty(a) && empty(b)) || a == b
 }
 
+// Invert the shared cubic-bezier(.42,0,.58,1). The camera's actual
+// on-screen displacement is authoritative, including interrupted movement.
+fn camera_time_fraction(displacement: f32) -> f32 {
+    let fraction = displacement.clamp(0., 1.);
+    if fraction == 0. || fraction == 1. {
+        return fraction;
+    }
+    let (mut low, mut high) = (0., 1.);
+    for _ in 0..18 {
+        let t = (low + high) * 0.5;
+        let y = 3. * (1. - t) * t * t + t * t * t;
+        if y < fraction {
+            low = t;
+        } else {
+            high = t;
+        }
+    }
+    let t = (low + high) * 0.5;
+    3. * (1. - t) * (1. - t) * t * 0.42 + 3. * (1. - t) * t * t * 0.58 + t * t * t
+}
+
+fn camera_elapsed(w: &MainWindow) -> f32 {
+    let dx = w.get_camera_end_x() - w.get_camera_start_x();
+    let dy = w.get_camera_end_y() - w.get_camera_start_y();
+    let fraction = if dx.abs() >= dy.abs() && dx.abs() > 0.0001 {
+        (1. - w.get_player_motion_x() / w.get_stage_width().max(1.) - w.get_camera_start_x()) / dx
+    } else if dy.abs() > 0.0001 {
+        (-1. - w.get_player_motion_y() / w.get_stage_height().max(1.) - w.get_camera_start_y()) / dy
+    } else {
+        1.
+    };
+    camera_time_fraction(fraction) * w.get_camera_duration() as f32
+}
+
 impl Bridge {
     fn state(&mut self, w: &MainWindow) -> serde_json::Value {
         let model = w.get_lyric_lines();
@@ -100,7 +134,7 @@ impl Bridge {
         let size = w.window().size().to_logical(w.window().scale_factor());
         let editing = w.get_dialog() == "paste";
         let visible = editing
-            || (w.get_displayed_view() == "lyrics"
+            || (w.get_player_on_stage()
                 && w.get_player_tab() == "lyrics"
                 && w.get_dialog().is_empty()
                 && model.row_count() > 0
@@ -123,17 +157,38 @@ impl Bridge {
             } else { serde_json::json!({"x":w.get_lyrics_widget_x(),"y":w.get_lyrics_widget_y(),"width":w.get_lyrics_widget_width(),"height":w.get_lyrics_widget_height()}) },
             "windowWidth":size.width,"windowHeight":size.height,
             "presentationOpacity": if editing {1.} else {w.get_player_reveal()},
+            "grouped":true,
+            "stageBounds":if editing {
+                serde_json::json!({"x":0,"y":0,"width":size.width,"height":size.height,"radius":0})
+            } else {
+                serde_json::json!({"x":w.get_stage_x(),"y":w.get_stage_y(),"width":w.get_stage_width(),"height":w.get_stage_height(),"radius":if w.get_mobile(){20}else{28}})
+            },
+            "presentationX": if editing {0.} else {w.get_player_motion_x()},
+            "presentationY": if editing {0.} else {w.get_player_motion_y()},
             "overlay": if w.get_tools_visible() {
                 serde_json::json!({"x":w.get_tools_x(),"y":w.get_tools_y(),"width":w.get_tools_width(),"height":w.get_tools_height()})
             } else {serde_json::Value::Null}
         });
         let now = web_time::Instant::now();
+        if !editing && w.get_camera_travelling() {
+            state["camera"] = serde_json::json!({
+                "epoch":w.get_camera_epoch(), "elapsed":camera_elapsed(w),
+                "duration":w.get_camera_duration(),
+                "fromX":w.get_camera_start_x(),"fromY":w.get_camera_start_y(),
+                "toX":w.get_camera_end_x(),"toY":w.get_camera_end_y(),
+                "width":w.get_stage_width(),"height":w.get_stage_height()
+            });
+        } else {
+            state["camera"] = serde_json::Value::Null;
+        }
         #[cfg(target_os = "windows")]
         {
             state["nativeBackdrop"] = serde_json::json!({
                 "content": {"x":w.get_backdrop_x(),"y":w.get_backdrop_y(),
                     "width":w.get_backdrop_width(),"height":w.get_backdrop_height()},
-                "viewport":state["bounds"].clone()
+                "viewport":{"x":w.get_lyrics_widget_x()+w.get_player_motion_x(),
+                    "y":w.get_lyrics_widget_y()+w.get_player_motion_y(),
+                    "width":w.get_lyrics_widget_width(),"height":w.get_lyrics_widget_height()}
             });
         }
         let art = w.get_current_art();
@@ -153,9 +208,11 @@ impl Bridge {
         let morphing = self
             .ambient_transition_until
             .is_some_and(|until| now < until);
+        // Decorative GPU readback/IPC yields bandwidth to foreground slides.
+        // Keep the warp clock continuous; restore normal cadence when settled.
+        let ambient_interval = if w.get_page_moving() { 0.06 } else { 0.03 };
         if !w.window().is_minimized()
-            && matches!(w.get_active_view().as_str(), "home" | "lyrics")
-            && (changed || motion_changed || ((animate || morphing) && elapsed >= 0.03))
+            && (changed || motion_changed || ((animate || morphing) && elapsed >= ambient_interval))
             && self
                 .ambient_pending_at
                 .is_none_or(|at| now.duration_since(at).as_millis() >= 500)
@@ -258,6 +315,7 @@ fn clip_native_view(
     view: &wry::WebView,
     bounds: (i32, i32, i32, i32),
     overlay: &serde_json::Value,
+    stage: &serde_json::Value,
     scale: f32,
 ) {
     use std::ffi::c_void;
@@ -281,6 +339,25 @@ fn clip_native_view(
         let region = CreateRoundRectRgn(0, 0, bounds.2 + 1, bounds.3 + 1, radius, radius);
         if region.is_null() {
             return;
+        }
+        // Move the entire child as one object, clipping it to the player stage.
+        if !stage.is_null() {
+            let px = |key: &str| (stage[key].as_f64().unwrap_or(0.) * scale as f64).round() as i32;
+            let left = px("x") - bounds.0;
+            let top = px("y") - bounds.1;
+            let diameter = px("radius") * 2;
+            let moving = CreateRoundRectRgn(
+                left,
+                top,
+                left + px("width"),
+                top + px("height"),
+                diameter,
+                diameter,
+            );
+            if !moving.is_null() {
+                CombineRgn(region, region, moving, 1); // RGN_AND
+                DeleteObject(moving);
+            }
         }
         if !overlay.is_null() {
             let px =
@@ -330,9 +407,15 @@ pub fn install(w: &MainWindow) -> Option<slint::Timer> {
     let mut generation = w.get_lyrics_renderer_generation();
     let mut retry_at = Instant::now();
     let smoke = std::env::args().any(|s| s == "--widget-smoke");
+    let mut last_tick: Option<Instant> = None;
     let timer = slint::Timer::default();
-    timer.start(slint::TimerMode::Repeated, Duration::from_millis(32), move || {
+    timer.start(slint::TimerMode::Repeated, Duration::from_millis(16), move || {
         let Some(w) = weak.upgrade() else { host.take(); return; };
+        // Native child placement follows the foreground camera at display
+        // cadence. Ordinary lyric/audio updates keep their lower-cost cadence.
+        let moving_player = w.get_page_moving() && w.get_displayed_view() == "lyrics";
+        if !moving_player && last_tick.is_some_and(|at| at.elapsed() < Duration::from_millis(32)) { return; }
+        last_tick = Some(Instant::now());
         if generation != w.get_lyrics_renderer_generation() {
             generation = w.get_lyrics_renderer_generation();
             host.take(); attempted=false;
@@ -405,21 +488,25 @@ pub fn install(w: &MainWindow) -> Option<slint::Timer> {
         if !h.ready {return;}
         let state = h.bridge.state(&w);
         let scale = w.window().scale_factor();
+        let shift = (
+            state["presentationX"].as_f64().unwrap_or(0.),
+            state["presentationY"].as_f64().unwrap_or(0.),
+        );
         let bounds=(
-            (state["bounds"]["x"].as_f64().unwrap_or(0.)*scale as f64).round() as i32,
-            (state["bounds"]["y"].as_f64().unwrap_or(0.)*scale as f64).round() as i32,
+            ((state["bounds"]["x"].as_f64().unwrap_or(0.)+shift.0)*scale as f64).round() as i32,
+            ((state["bounds"]["y"].as_f64().unwrap_or(0.)+shift.1)*scale as f64).round() as i32,
             (state["bounds"]["width"].as_f64().unwrap_or(0.)*scale as f64).round().max(1.) as i32,
             (state["bounds"]["height"].as_f64().unwrap_or(0.)*scale as f64).round().max(1.) as i32);
-        if bounds != h.bounds {
+        let visible=state["visible"] == true && bounds.2 > 8 && bounds.3 > 8;
+        if visible && bounds != h.bounds {
             let _ = h.view.set_bounds(wry::Rect {position:wry::dpi::PhysicalPosition::new(bounds.0,bounds.1).into(),size:wry::dpi::PhysicalSize::new(bounds.2 as u32,bounds.3 as u32).into()});
             h.bounds=bounds;
         }
-        let clip_key = format!("{:?}:{}", bounds, state["overlay"]);
-        if h.clip_key != clip_key {
-            clip_native_view(&h.view, bounds, &state["overlay"], scale);
+        let clip_key = format!("{:?}:{}:{}", bounds, state["stageBounds"], state["overlay"]);
+        if visible && h.clip_key != clip_key {
+            clip_native_view(&h.view, bounds, &state["overlay"], &state["stageBounds"], scale);
             h.clip_key = clip_key;
         }
-        let visible=state["visible"] == true && bounds.2 > 8 && bounds.3 > 8;
         if visible != h.visible {let _=h.view.set_visible(visible);h.visible=visible;}
         let json = state.to_string();
         if json != h.bridge.last_state {
@@ -506,6 +593,14 @@ pub fn install(_: &MainWindow) -> Option<slint::Timer> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn camera_timing_matches_the_displayed_bezier_path() {
+        assert!(camera_time_fraction(-0.5).abs() < 0.00001);
+        assert!((camera_time_fraction(1.5) - 1.).abs() < 0.00001);
+        assert!((camera_time_fraction(0.15625) - 0.274375).abs() < 0.00001);
+        assert!((camera_time_fraction(0.5) - 0.5).abs() < 0.00001);
+        assert!((camera_time_fraction(0.84375) - 0.725625).abs() < 0.00001);
+    }
     #[test]
     fn missing_covers_are_a_stable_ambient_source() {
         let empty = slint::Image::default();

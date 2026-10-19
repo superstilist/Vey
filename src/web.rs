@@ -336,7 +336,20 @@ fn search(w: &MainWindow, a: &Rc<RefCell<WebApp>>, query: Option<String>, radio:
             if a.generation != generation {
                 return;
             }
-            match result{Ok(rows)=>{a.visible=rows.clone();for t in rows{a.store.remember(t);}refresh(&w,&mut a);w.set_status("".into());},Err(_)=>w.set_status("YouTube Music недоступний. Запустіть PlayerVF --web-server для мережевих функцій.".into())}
+            match result {
+                Ok(rows) => {
+                    a.visible = rows.clone();
+                    for t in rows {
+                        a.store.remember(t);
+                    }
+                    refresh(&w, &mut a);
+                    w.set_status("".into());
+                }
+                Err(_) => w.set_status(
+                    "YouTube Music недоступний. Запустіть Vey --web-server для мережевих функцій."
+                        .into(),
+                ),
+            }
         }
     });
 }

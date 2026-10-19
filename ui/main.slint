@@ -4,6 +4,7 @@ import { WordRow, LyricRow } from "lyric-types.slint";
 export { WordRow, LyricRow } from "lyric-types.slint";
 import { BraccatoLyrics } from "braccato-lyrics.slint";
 import { Tokens } from "tokens.slint";
+import { StageNavigator } from "stage-navigator.slint";
 import { Action, NavItem, Artwork, Transport, SeekBar } from "controls.slint";
 
 export struct TrackRow { title: string, artist: string, album: string, duration: string, path: string, art: image, liked: bool }
@@ -11,7 +12,8 @@ export struct PlaylistRow { id: string, name: string, detail: string }
 
 
 export component MainWindow inherits Window {
-    title: "PlayerVF";
+    title: "Vey";
+    icon: @image-url("../assets/vey-logo.png");
     preferred-width: 1440px;
     preferred-height: 900px;
     min-width: 360px;
@@ -21,18 +23,100 @@ export component MainWindow inherits Window {
     default-font-size: 14px;
 
     in-out property <string> active-view: "home";
-    // Keep the current page mounted until its opacity transition completes.
+    // Route motion moves only page content; the background and player host stay fixed.
     out property <string> displayed-view: "home";
+    // Every page has a fixed world position; one camera moves between them.
+    private property <int> page-phase: 1; // 1: settled, 2: travel, 3: prepare
+    private property <float> camera-target-x: 0;
+    private property <float> camera-target-y: 0;
+    private property <float> camera-x: root.camera-target-x;
+    private property <float> camera-y: root.camera-target-y;
+    out property <int> camera-epoch: 0;
+    out property <float> camera-start-x: 0;
+    out property <float> camera-start-y: 0;
+    out property <float> camera-end-x: root.camera-target-x;
+    out property <float> camera-end-y: root.camera-target-y;
+    out property <int> camera-duration: 380;
+    out property <bool> camera-travelling: root.page-phase == 2;
+    out property <float> stage-width: content.width / 1px;
+    out property <float> stage-height: content.height / 1px;
+    out property <float> stage-x: content.x / 1px;
+    out property <float> stage-y: content.y / 1px;
+    animate camera-x { duration: root.lyrics-reduced-motion ? 0ms : root.camera-duration * 1ms; easing: cubic-bezier(0.42, 0, 0.58, 1); }
+    animate camera-y { duration: root.lyrics-reduced-motion ? 0ms : root.camera-duration * 1ms; easing: cubic-bezier(0.42, 0, 0.58, 1); }
+    out property <float> player-motion-x: (1 - root.camera-x) * content.width / 1px;
+    out property <float> player-motion-y: (-1 - root.camera-y) * content.height / 1px;
+    out property <bool> page-moving: root.page-phase != 1;
+    in-out property <[TrackRow]> home-page-tracks;
+    in-out property <[TrackRow]> explore-page-tracks;
+    in-out property <[TrackRow]> library-page-tracks;
+    in-out property <[TrackRow]> liked-page-tracks;
+    in-out property <[TrackRow]> playlist-page-tracks;
+    in-out property <[TrackRow]> queue-page-tracks;
+    in-out property <[TrackRow]> search-page-tracks;
+    in-out property <[TrackRow]> settings-page-tracks;
+    in-out property <bool> pages-seeded: false;
+    private property <int> warm-page: 1;
+    out property <bool> player-on-stage: abs(1 - root.camera-x) < 1 && abs(-1 - root.camera-y) < 1;
+    function stage-navigate(column: int, row: int) {
+        let route = row < 0 ? (column < 0 ? "search" : column > 0 ? "lyrics" : "settings") : row > 0 ? (column < 0 ? "playlist" : column > 0 ? "library" : "liked") : (column < 0 ? "queue" : column > 0 ? "explore" : "home");
+        if route == "playlist" && root.playlists.length > 2 { root.open-playlist(root.playlists[2].id); }
+        else { root.navigate(route); }
+    }
+    // Warm one viewport at a time, yielding to input and camera movement.
+    Timer {
+        interval: 120ms;
+        running: root.warm-page < 9 && root.page-phase == 1;
+        triggered => { root.warm-page += 1; }
+    }
+    pure function page-column(view: string) -> int {
+        return view == "explore" || view == "library" || view == "lyrics" ? 1 : view == "playlist" || view == "queue" || view == "search" ? -1 : 0;
+    }
+    pure function page-row(view: string) -> int {
+        return view == "library" || view == "liked" || view == "playlist" ? 1 : view == "search" || view == "settings" || view == "lyrics" ? -1 : 0;
+    }
+    function finish-travel() {
+        root.displayed-view = root.active-view;
+        root.page-phase = 1;
+    }
+    function start-travel() {
+        root.camera-start-x = root.camera-x;
+        root.camera-start-y = root.camera-y;
+        root.camera-duration = round(clamp(230 + max(abs(root.page-column(root.active-view) - root.camera-start-x), abs(root.page-row(root.active-view) - root.camera-start-y)) * 150, 230, 520));
+        root.camera-target-x = root.page-column(root.active-view);
+        root.camera-target-y = root.page-row(root.active-view);
+        root.camera-epoch += 1;
+        if root.active-view == "lyrics" { root.displayed-view = "lyrics"; }
+        root.page-phase = 2;
+        if root.lyrics-reduced-motion { root.finish-travel(); }
+    }
+    changed tracks => {
+        if root.active-view == "home" { root.home-page-tracks = root.tracks; }
+        else if root.active-view == "explore" { root.explore-page-tracks = root.tracks; }
+        else if root.active-view == "library" { root.library-page-tracks = root.tracks; }
+        else if root.active-view == "liked" { root.liked-page-tracks = root.tracks; }
+        else if root.active-view == "playlist" { root.playlist-page-tracks = root.tracks; }
+        else if root.active-view == "queue" { root.queue-page-tracks = root.tracks; }
+        else if root.active-view == "search" { root.search-page-tracks = root.tracks; }
+        else if root.active-view == "settings" { root.settings-page-tracks = root.tracks; }
+    }
     changed active-view => {
         root.player-tools = false;
-        if root.active-view == "lyrics" || root.displayed-view != "lyrics" || root.lyrics-reduced-motion {
-            root.displayed-view = root.active-view;
-        }
+        root.page-phase = 3;
+        if root.lyrics-reduced-motion { root.start-travel(); }
     }
     Timer {
-        interval: 200ms;
-        running: root.active-view != root.displayed-view;
-        triggered => { root.displayed-view = root.active-view; }
+        interval: 32ms;
+        running: root.page-phase == 3;
+        triggered => { root.start-travel(); }
+    }
+    Timer {
+        interval: (root.camera-duration + 20) * 1ms;
+        running: root.page-phase == 2;
+        triggered => { root.finish-travel(); }
+    }
+    changed lyrics-reduced-motion => {
+        if root.lyrics-reduced-motion && root.page-phase != 1 { root.start-travel(); }
     }
     in-out property <string> search-query;
     in-out property <string> current-title: "Нічого не грає";
@@ -64,10 +148,10 @@ export component MainWindow inherits Window {
     in-out property <bool> lyrics-web-required;
     in-out property <string> lyrics-renderer-error;
     in-out property <int> lyrics-renderer-generation;
-    out property <float> backdrop-x: content.x / 1px;
-    out property <float> backdrop-y: content.y / 1px;
-    out property <float> backdrop-width: content.width / 1px;
-    out property <float> backdrop-height: content.height / 1px;
+    out property <float> backdrop-x: 0;
+    out property <float> backdrop-y: 0;
+    out property <float> backdrop-width: root.width / 1px;
+    out property <float> backdrop-height: root.height / 1px;
     out property <bool> tools-visible: tools-panel.visible;
     out property <float> tools-x: (content.x + tools-panel.x) / 1px;
     out property <float> tools-y: (content.y + tools-panel.y) / 1px;
@@ -114,8 +198,8 @@ export component MainWindow inherits Window {
     in-out property <string> jwt-status: "Потрібна перевірка";
     in-out property <bool> sidebar-collapsed;
     in-out property <bool> focus-player: false;
-    out property <float> player-reveal: root.active-view == "lyrics" ? 1 : 0;
-    animate player-reveal { duration: root.lyrics-reduced-motion ? 0ms : 180ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    out property <float> player-reveal: 1;
+
     in-out property <bool> player-tools: false;
     in-out property <string> player-tab: "lyrics";
     private property <bool> immersive: root.displayed-view == "lyrics" && (root.focus-player || root.mobile);
@@ -200,19 +284,16 @@ export component MainWindow inherits Window {
                 width: root.mobile ? 32px : (root.sidebar-collapsed ? 110px : 184px);
                 VerticalLayout {
                     alignment: center;
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 14px;
-                        background: @linear-gradient(135deg, Tokens.brand-300 0%, Tokens.brand-600 100%);
-                        Image {
-                            source: @image-url("../assets/icons/Play.svg");
-                            width: 14px; height: 14px;
-                            x: 8px; y: 7px;
-                            colorize: Tokens.brand-ink;
-                        }
+                    Image {
+                        source: @image-url("../assets/vey-logo.png");
+                        width: 38px; height: 38px;
+                        image-fit: contain;
+
+                        accessible-label: "Vey";
                     }
                 }
                 if !root.mobile: Text {
-                    text: "PlayerVF";
+                    text: "Vey";
                     color: Tokens.ink-100;
                     font-size: 21px;
                     font-weight: 700;
@@ -266,6 +347,12 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
+            }
+            if root.mobile: StageNavigator {
+                width: 48px; height: 48px;
+                stage-column: root.page-column(root.active-view); stage-row: root.page-row(root.active-view);
+                reduced: root.lyrics-reduced-motion;
+                navigate(column,row) => { root.stage-navigate(column,row); }
             }
             if !root.mobile: Rectangle { horizontal-stretch: 1; }
             if !root.mobile: Action {
@@ -331,6 +418,12 @@ export component MainWindow inherits Window {
                 }
             }
             if root.sidebar-collapsed: Rectangle { vertical-stretch: 1; }
+            StageNavigator {
+                width: 48px; height: 48px;
+                stage-column: root.page-column(root.active-view); stage-row: root.page-row(root.active-view);
+                reduced: root.lyrics-reduced-motion;
+                navigate(column,row) => { root.stage-navigate(column,row); }
+            }
         }
     }
 
@@ -344,31 +437,47 @@ export component MainWindow inherits Window {
         clip: true;
         background: Tokens.neutral-0;
 
-        if root.displayed-view == "home" || root.displayed-view == "lyrics": Rectangle {
-            width: 100%; height: 100%;
+        // One persistent surface on every route. Window coordinates keep its
+        // pattern fixed when the player expands or the sidebar changes width.
+        ambient-surface := Rectangle {
+            x: -content.x; y: -content.y;
+            width: root.width; height: root.height;
             background: @linear-gradient(125deg, #26394b 0%, #594051 45%, #342b26 75%, #15282d 100%);
             Image { source: root.ambient-frame; width: 100%; height: 100%; image-fit: fill; }
             Rectangle {
                 width: 100%; height: 100%;
-                background: root.displayed-view == "home"
-                    ? @linear-gradient(180deg, #08080890 0%, #080808d9 55%, #080808fa 100%)
-                    : @linear-gradient(110deg, #08080880 0%, #08080899 55%, #080808b0 100%);
+                background: @linear-gradient(110deg, #08080880 0%, #08080899 55%, #080808b0 100%);
             }
         }
 
         // Non-Lyrics Views (Home, Explore, Library, Liked, Playlist, Queue, Search, Settings)
-        if root.displayed-view != "lyrics": ScrollView {
+        for page-name[index] in ["home", "explore", "library", "liked", "playlist", "queue", "search", "settings"]: page-layer := Rectangle {
+            property <string> route: page-name;
+            property <[TrackRow]> page-tracks: self.route == "home" ? root.home-page-tracks : self.route == "explore" ? root.explore-page-tracks : self.route == "library" ? root.library-page-tracks : self.route == "liked" ? root.liked-page-tracks : self.route == "playlist" ? root.playlist-page-tracks : self.route == "queue" ? root.queue-page-tracks : self.route == "search" ? root.search-page-tracks : root.settings-page-tracks;
+            property <bool> warming: (root.warm-page == index && root.page-phase == 1 && self.route != root.displayed-view) || (root.page-phase == 3 && self.route == root.active-view);
+            visible: true;
+            // A clipped edge strip warms the cached surface without covering
+            // the active page's controls or intercepting its normal gestures.
+            x: self.warming ? content.width - 1px : (root.page-column(self.route) - root.camera-x) * content.width;
+            y: self.warming ? 0px : (root.page-row(self.route) - root.camera-y) * content.height;
+            opacity: self.warming ? 0.003922 : 1;
+            clip: true;
+            width: 100%; height: 100%;
+            cache-rendering-hint: true;
+            ScrollView {
+            private property <string> page: page-layer.route;
+            changed page => { self.content-y = 0px; }
             width: 100%; height: 100%;
             content-width: self.width;
-            content-height: (root.displayed-view == "home" && !root.mobile) || root.displayed-view == "settings" ? max(self.height, page-layout.preferred-height) : self.height;
+            content-height: (page-layer.route == "home" && !root.mobile) || page-layer.route == "settings" ? max(self.height, page-layout.preferred-height) : self.height;
             page-layout := VerticalLayout {
                 padding-left: root.mobile ? 16px : max(40px, (content.width - 1440px) / 2);
                 padding-right: root.mobile ? 16px : max(40px, (content.width - 1440px) / 2);
                 padding-top: root.mobile ? 20px : 32px;
                 padding-bottom: 24px;
-                spacing: root.displayed-view == "home" ? 22px : 16px;
+                spacing: page-layer.route == "home" ? 22px : 16px;
 
-                if root.displayed-view == "home" || root.displayed-view == "explore": ScrollView {
+                if page-layer.route == "home" || page-layer.route == "explore": ScrollView {
                     height: 36px;
                     content-height: 36px;
                     content-width: max(self.width, chips-row.preferred-width);
@@ -386,17 +495,17 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                if root.displayed-view == "home": HorizontalLayout {
+                if page-layer.route == "home": HorizontalLayout {
                     height: 22px; spacing: 8px; alignment: start;
                     Rectangle {
                         width: 20px; height: 20px; border-radius: 10px;
                         background: Tokens.brand-500;
-                        Text { text: "P"; color: Tokens.brand-ink; font-size: 11px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                        Text { text: "V"; color: Tokens.brand-ink; font-size: 11px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
                     }
-                    Text { text: "ВАША МУЗИКА · PLAYERVF"; color: Tokens.ink-200; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; vertical-alignment: center; }
+                    Text { text: "ВАША МУЗИКА · VEY"; color: Tokens.ink-200; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; vertical-alignment: center; }
                 }
 
-                if root.displayed-view == "home": Rectangle {
+                if page-layer.route == "home": Rectangle {
                     height: root.mobile ? 170px : 190px;
                     border-radius: 24px;
                     background: #ffffff08;
@@ -418,42 +527,42 @@ export component MainWindow inherits Window {
                 }
 
                 HorizontalLayout {
-                    height: root.displayed-view == "home" && !root.mobile ? 48px : 44px;
+                    height: page-layer.route == "home" && !root.mobile ? 48px : 44px;
                     spacing: 10px;
                     Text {
-                        text: root.displayed-view == "home" ? "Послухати ще раз" :
-                              root.displayed-view == "explore" ? "Відкривайте нову музику" :
-                              root.displayed-view == "library" ? "Бібліотека" :
-                              root.displayed-view == "liked" ? "Музика, яка сподобалась" :
-                              root.displayed-view == "settings" ? "Налаштування" :
-                              root.displayed-view == "playlist" ? root.playlist-title :
-                              root.displayed-view == "queue" ? "Черга відтворення" : "Результати пошуку";
+                        text: page-layer.route == "home" ? "Послухати ще раз" :
+                              page-layer.route == "explore" ? "Відкривайте нову музику" :
+                              page-layer.route == "library" ? "Бібліотека" :
+                              page-layer.route == "liked" ? "Музика, яка сподобалась" :
+                              page-layer.route == "settings" ? "Налаштування" :
+                              page-layer.route == "playlist" ? root.playlist-title :
+                              page-layer.route == "queue" ? "Черга відтворення" : "Результати пошуку";
                         color: Tokens.ink-100;
-                        font-size: root.mobile ? 24px : root.displayed-view == "home" ? 28px : 30px;
+                        font-size: root.mobile ? 24px : page-layer.route == "home" ? 28px : 30px;
                         font-weight: 700;
                         horizontal-stretch: 1;
                         vertical-alignment: center;
                         overflow: elide;
                     }
-                    if root.displayed-view == "explore": Action {
+                    if page-layer.route == "explore": Action {
                         text: "Оновити";
                         icon: @image-url("../assets/icons/RefreshCw.svg");
                         outlined: true;
                         clicked => { root.navigate("explore"); }
                     }
-                    if root.displayed-view == "library": Action {
+                    if page-layer.route == "library": Action {
                         text: root.mobile ? "" : "Додати папку";
                         icon: @image-url("../assets/icons/FolderPlus.svg");
                         outlined: true;
                         clicked => { root.add-source("folder"); }
                     }
-                    if root.displayed-view == "library": Action {
+                    if page-layer.route == "library": Action {
                         icon: @image-url("../assets/icons/RefreshCw.svg");
                         label: "Сканувати бібліотеку";
                         outlined: true;
                         clicked => { root.scan(); }
                     }
-                    if root.displayed-view == "library" && !root.mobile: Action {
+                    if page-layer.route == "library" && !root.mobile: Action {
                         text: "Синхронізувати з YT";
                         outlined: true;
                         clicked => { root.sync-tags(); }
@@ -469,7 +578,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                if root.displayed-view == "settings": VerticalLayout {
+                if page-layer.route == "settings": VerticalLayout {
                     spacing: 18px; padding-bottom: 24px;
                         Rectangle {
                             background: #141418cc; border-radius: 16px; border-width: 0px; border-color: #ffffff14;
@@ -556,15 +665,15 @@ export component MainWindow inherits Window {
                         }
                 }
 
-                if root.displayed-view != "settings": VerticalLayout {
+                if page-layer.route != "settings": VerticalLayout {
                     spacing: 18px;
-                    if root.displayed-view == "home" || root.displayed-view == "explore": ScrollView {
+                    if page-layer.route == "home" || page-layer.route == "explore": ScrollView {
                         height: root.mobile ? 218px : (content.width < 900px ? 236px : 284px);
-                        content-width: max(self.width, min(root.tracks.length, 8) * ((root.mobile ? 148px : max(156px, min(204px, (content.width - 152px) / 5))) + 20px));
+                        content-width: max(self.width, min(page-layer.page-tracks.length, 8) * ((root.mobile ? 148px : max(156px, min(204px, (content.width - 152px) / 5))) + 20px));
                         content-height: self.height;
                         HorizontalLayout {
                             spacing: 20px; alignment: start;
-                            for track[index] in root.tracks: Rectangle {
+                            for track[index] in page-layer.page-tracks: Rectangle {
                                 width: root.mobile ? 148px : max(156px, min(204px, (content.width - 152px) / 5));
                                 visible: index < 8;
                                 border-radius: 20px;
@@ -596,35 +705,35 @@ export component MainWindow inherits Window {
                         height: root.mobile ? 40px : 52px;
                         spacing: 10px;
                         Text {
-                            text: root.displayed-view == "home" ? "Швидкий вибір" : root.tracks.length + " композицій";
+                            text: page-layer.route == "home" ? "Швидкий вибір" : page-layer.page-tracks.length + " композицій";
                             color: Tokens.ink-100;
-                            font-size: root.displayed-view == "home" && !root.mobile ? 26px : 16px;
+                            font-size: page-layer.route == "home" && !root.mobile ? 26px : 16px;
                             font-weight: 700;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
                         }
                         Action { text: "Відтворити все"; icon: @image-url("../assets/icons/Play.svg"); outlined: true; clicked => { root.select-track(0); } }
-                        if root.displayed-view == "playlist": Action { text: "Видалити список"; outlined: true; clicked => { root.delete-playlist(); } }
+                        if page-layer.route == "playlist": Action { text: "Видалити список"; outlined: true; clicked => { root.delete-playlist(); } }
                     }
 
-                    if root.tracks.length == 0: Rectangle {
+                    if page-layer.page-tracks.length == 0: Rectangle {
                         height: 220px; border-radius: 16px; background: #ffffff06; border-width: 0px; border-color: #ffffff10;
                         VerticalLayout {
                             alignment: center; spacing: 12px; padding: 24px;
-                            Text { text: root.displayed-view == "search" ? "Нічого не знайдено" : "Тут з’явиться ваша музика"; color: Tokens.ink-100; font-size: 20px; font-weight: 700; horizontal-alignment: center; }
+                            Text { text: page-layer.route == "search" ? "Нічого не знайдено" : "Тут з’явиться ваша музика"; color: Tokens.ink-100; font-size: 20px; font-weight: 700; horizontal-alignment: center; }
                             Text { text: "Додайте папку з музикою або скористайтеся пошуком YouTube Music"; color: Tokens.ink-300; horizontal-alignment: center; wrap: word-wrap; }
                         }
                     }
 
-                    if root.displayed-view == "home" && !root.mobile: HorizontalLayout {
+                    if page-layer.route == "home" && !root.mobile: HorizontalLayout {
                         spacing: 20px;
                         for col in [0, 1, 2]: VerticalLayout {
                             spacing: 4px;
                             for ri in [0, 1, 2, 3]: tile := Rectangle {
                                 height: 64px;
                                 border-radius: 10px;
-                                visible: col * 4 + ri < root.tracks.length;
-                                property <TrackRow> song: root.tracks[col * 4 + ri];
+                                visible: col * 4 + ri < page-layer.page-tracks.length;
+                                property <TrackRow> song: page-layer.page-tracks[col * 4 + ri];
                                 background: tile-touch.has-hover ? #ffffff12 : transparent;
                                 HorizontalLayout {
                                     padding: 8px; spacing: 12px;
@@ -641,8 +750,8 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    if root.displayed-view != "home" || root.mobile: ListView {
-                        for track[index] in root.tracks: Rectangle {
+                    if page-layer.route != "home" || root.mobile: ListView {
+                        for track[index] in page-layer.page-tracks: Rectangle {
                             height: 64px;
                             border-radius: 10px;
                             background: track.title == root.current-title && track.artist == root.current-artist ? #ffffff12 : row-touch.has-hover ? #ffffff10 : transparent;
@@ -660,20 +769,28 @@ export component MainWindow inherits Window {
                                 Action { icon: @image-url("../assets/icons/Heart.svg"); label: "Подобається"; selected: track.liked; clicked => { root.toggle-like(index); } }
                                 if !root.mobile: Text { text: track.duration; color: Tokens.ink-300; width: 48px; font-size: 12px; vertical-alignment: center; horizontal-alignment: right; }
                                 if !root.mobile: Action { icon: @image-url("../assets/icons/Download.svg"); label: "Завантажити"; clicked => { root.download(index); } }
-                                if root.displayed-view == "playlist": Action { icon: @image-url("../assets/icons/X.svg"); label: "Видалити зі списку"; clicked => { root.remove-from-playlist(index); } }
+                                if page-layer.route == "playlist": Action { icon: @image-url("../assets/icons/X.svg"); label: "Видалити зі списку"; clicked => { root.remove-from-playlist(index); } }
                             }
                         }
                     }
                 }
             }
         }
+        }
+
+        if root.page-phase != 1 && root.displayed-view != "lyrics": TouchArea { }
 
         // =========================================================================
         // Now playing: open artwork stage and synchronized lyrics
         // =========================================================================
-        if root.displayed-view == "lyrics": VerticalLayout {
-            x: 0px; y: 0px; width: 100%; height: 100%;
-            opacity: root.player-reveal;
+        player-stage := Rectangle {
+            property <bool> warming: root.warm-page == 8 && root.page-phase == 1 && !root.player-on-stage;
+            visible: root.player-on-stage || self.warming;
+            x: self.warming ? content.width - 1px : root.player-motion-x * 1px; y: self.warming ? 0px : root.player-motion-y * 1px; width: 100%; height: 100%;
+            opacity: self.warming ? 0.003922 : root.player-reveal;
+            cache-rendering-hint: true;
+            VerticalLayout {
+            width: 100%; height: 100%;
             padding-left: root.mobile ? 16px : (root.immersive ? max(44px, (content.width - 1560px) / 2) : max(40px, (content.width - 1480px) / 2));
             padding-right: root.mobile ? 16px : (root.immersive ? max(44px, (content.width - 1560px) / 2) : max(40px, (content.width - 1480px) / 2));
             padding-top: root.mobile ? 12px : (root.immersive ? 22px : 18px);
@@ -1100,7 +1217,10 @@ export component MainWindow inherits Window {
                         load-error: root.lyrics-renderer-error;
                         retry => { root.lyrics-renderer-generation += 1; }
                         widget-geometry(x,y,width,height) => {
-                            root.lyrics-widget-x=x; root.lyrics-widget-y=y;
+                            // The embedded viewport stays fixed; its content receives
+                            // the same visual translation through the host bridge.
+                            root.lyrics-widget-x=round((x - player-stage.x / 1px) * 1000) / 1000;
+                            root.lyrics-widget-y=round((y - player-stage.y / 1px) * 1000) / 1000;
                             root.lyrics-widget-width=width; root.lyrics-widget-height=height;
                         }
                         lyrics-timed: root.lyrics-timed;
@@ -1171,6 +1291,7 @@ export component MainWindow inherits Window {
                 }
             }
 
+        }
         }
 
         // Independent overlay: opening tools never changes player geometry.

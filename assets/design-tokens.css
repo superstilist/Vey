@@ -1,5 +1,5 @@
-/* PlayerVF design tokens — generated mirror of assets/design-tokens.json.
-   Source of truth is the JSON; src/styles.css :root is the runtime copy.
+/* Vey design tokens — generated mirror of assets/design-tokens.json.
+   Source of truth is the JSON; ui/tokens.slint is the native runtime copy.
    Keep all three in sync. Dark-only (color-scheme: dark). */
 :root {
   color-scheme: dark;
@@ -19,10 +19,10 @@
   --i-300: #888888;
 
   /* Brand + status */
-  --brand-300: #ff647c;
-  --brand: #ff0033;
-  --brand-600: #db002b;
-  --brand-ink: #ffffff;
+  --brand-300: #c9ff62;
+  --brand: #adff12;
+  --brand-600: #86c900;
+  --brand-ink: #101400;
   --ok: #34d399;
   --warn: #fbbf24;
   --danger: #f87171;
@@ -36,10 +36,10 @@
   --a-24: rgba(255, 255, 255, 0.24);
   --a-40: rgba(255, 255, 255, 0.4);
   --a-60: rgba(255, 255, 255, 0.6);
-  --brand-a08: rgba(255, 0, 51, 0.08);
-  --brand-a16: rgba(255, 0, 51, 0.16);
-  --brand-a32: rgba(255, 0, 51, 0.32);
-  --brand-a48: rgba(255, 0, 51, 0.48);
+  --brand-a08: rgba(173, 255, 18, 0.08);
+  --brand-a16: rgba(173, 255, 18, 0.16);
+  --brand-a32: rgba(173, 255, 18, 0.32);
+  --brand-a48: rgba(173, 255, 18, 0.48);
   --danger-a40: rgba(248, 113, 113, 0.4);
   --scrim: rgba(8, 8, 12, 0.9);
 
