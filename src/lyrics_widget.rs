@@ -463,8 +463,10 @@ pub fn install(w: &MainWindow) -> Option<slint::Timer> {
             match result {
                 Ok(view) => {host=Some(Host {view,_context:context,events:rx,ready:false,started:Instant::now(),visible:false,bounds:(0,0,0,0),bridge:Bridge::default(),clip_key:String::new(),diagnostic_at:Instant::now(),diagnostics:vec![]});}
                 Err(e) => {
-                    w.set_lyrics_renderer_error(format!("Не вдалося запустити Braccato: {e}").into());
-                    w.set_status(format!("Braccato WebView2: {e}").into());
+                    // Startup can race native handle creation. Keep retry feedback
+                    // on the lyric surface instead of a persistent Home banner.
+                    w.set_lyrics_renderer_error("Не вдалося запустити слова. Повторюємо запуск…".into());
+                    eprintln!("Braccato WebView2: {e}");
                 },
             }
         }

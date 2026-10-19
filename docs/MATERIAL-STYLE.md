@@ -25,3 +25,6 @@ Validation evidence is in `material-check.json`, the `material::` unit tests,
 and screenshots 41–44. The browser test changes warm/cool artwork, delays the
 second cover, navigates between pages, checks real audio volume through pointer
 and keyboard input, and captures desktop/mobile views.
+
+Native renderer startup retry feedback stays on the lyric surface instead of
+leaving implementation diagnostics in a persistent home-page banner.
