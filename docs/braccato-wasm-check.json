@@ -1,0 +1,60 @@
+{
+  "passed": true,
+  "checks": [
+    "Rust WASM startup",
+    "original widget mounted",
+    "canonical Rust document",
+    "word effects",
+    "clock bridge",
+    "seek reaches Rust audio",
+    "Kawarp frame bridge",
+    "transparent lyric background",
+    "pause freezes background",
+    "desktop geometry",
+    "mobile resize",
+    "settings overlay input",
+    "settings preserve widget geometry",
+    "player close and reopen preserve renderer"
+  ],
+  "before": {
+    "revision": "1e6b6954b1c18136274681a9bf4985efb2332b01",
+    "status": "rendering",
+    "currentTime": 0.6603989953994751,
+    "syncType": "richsync",
+    "lineCount": 3,
+    "layout": "scroll",
+    "letters": 70,
+    "animations": 74,
+    "themeCompiles": 1,
+    "builds": 2,
+    "ticks": 6,
+    "tickOptionsUpdates": 1,
+    "scrollTop": 0,
+    "visible": true,
+    "packages": [
+      "core",
+      "element",
+      "constants",
+      "text",
+      "themeSettings",
+      "util",
+      "parsers",
+      "format",
+      "highlight",
+      "providers"
+    ],
+    "mode": "lyrics"
+  },
+  "desktopBounds": {
+    "x": 776,
+    "y": 210,
+    "width": 598,
+    "height": 524
+  },
+  "mobileBounds": {
+    "x": 24,
+    "y": 298,
+    "width": 342,
+    "height": 484
+  }
+}

@@ -1,0 +1,205 @@
+import { Tokens } from "tokens.slint";
+
+export component Action inherits Rectangle {
+    in property <string> text;
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> chip;
+    in property <bool> primary;
+    in property <bool> selected;
+    in property <bool> outlined;
+    callback clicked();
+    horizontal-stretch: 0;
+    min-width: text == "" ? 36px : max(chip ? 64px : 84px, (icon.width > 0 ? 54px : 32px) + label-text.preferred-width);
+    preferred-width: self.min-width;
+    max-width: text == "" ? 36px : 280px;
+    height: chip ? 32px : 36px;
+    border-width: 0px;
+    border-color: primary ? Tokens.brand-300 : selected ? #fb923c66 : touch.has-hover ? #ffffff3d : (chip ? #ffffff18 : Tokens.neutral-300);
+    background: primary ? (touch.has-hover ? Tokens.ink-150 : Tokens.ink-100) : chip ? (selected ? Tokens.ink-100 : touch.has-hover ? #ffffff24 : #ffffff12) : selected ? #ffffff20 : touch.has-hover ? #ffffff16 : transparent;
+    border-radius: Tokens.radius-pill;
+    animate background { duration: 110ms; }
+    animate border-color { duration: 110ms; }
+    HorizontalLayout {
+        x: 0px; y: 0px; width: 100%; height: 100%;
+        alignment: center;
+        spacing: text == "" ? 0px : 8px;
+        padding-left: text == "" ? 0px : 14px;
+        padding-right: text == "" ? 0px : 14px;
+        if root.icon.width > 0: VerticalLayout {
+            width: 18px;
+            alignment: center;
+            Image {
+                source: root.icon;
+                width: 18px;
+                height: 18px;
+                colorize: root.primary || (root.chip && root.selected) ? Tokens.neutral-0 : root.selected ? Tokens.ink-100 : touch.has-hover ? Tokens.ink-100 : Tokens.ink-200;
+            }
+        }
+        if root.text != "": Text {
+            text: root.text;
+            color: root.primary || (root.chip && root.selected) ? Tokens.neutral-0 : root.selected ? Tokens.ink-100 : Tokens.ink-100;
+            font-size: Tokens.font-sm;
+            font-weight: root.primary || root.selected ? 700 : 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    label-text := Text {
+        visible: false;
+        text: root.text;
+        font-size: Tokens.font-sm;
+        font-weight: root.primary || root.selected ? 700 : 600;
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    accessible-role: button;
+    accessible-label: label == "" ? text : label;
+    accessible-action-default => { root.clicked(); }
+}
+
+export component NavItem inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> selected;
+    in property <bool> collapsed;
+    callback clicked();
+    height: 44px;
+    border-radius: 14px;
+    background: selected ? #ffffff1f : touch.has-hover ? #ffffff10 : transparent;
+    border-width: 0px;
+    border-color: #ffffff14;
+    animate background { duration: 110ms; }
+    Image {
+        source: root.icon;
+        x: root.collapsed ? (root.width - 20px) / 2 : 16px;
+        y: 12px;
+        width: 20px;
+        height: 20px;
+        colorize: root.selected ? Tokens.ink-100 : touch.has-hover ? Tokens.ink-100 : Tokens.ink-200;
+    }
+    if !root.collapsed: Text {
+        x: 52px;
+        y: 0px;
+        width: max(0px, root.width - 60px);
+        height: 44px;
+        text: root.text;
+        color: root.selected ? Tokens.ink-100 : touch.has-hover ? Tokens.ink-100 : Tokens.ink-150;
+        font-size: 14px;
+        font-weight: root.selected ? 700 : 500;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    accessible-role: button;
+    accessible-label: text;
+    accessible-action-default => { root.clicked(); }
+}
+
+export component Artwork inherits Rectangle {
+    in property <image> art;
+    in property <int> tone;
+    border-radius: 16px;
+    clip: true;
+    border-width: 0px;
+    border-color: #ffffff14;
+    background: Math.mod(tone, 6) == 0 ? @linear-gradient(135deg, #2a2415 0%, #151412 100%) :
+                Math.mod(tone, 6) == 1 ? @linear-gradient(135deg, #2b182c 0%, #141118 100%) :
+                Math.mod(tone, 6) == 2 ? @linear-gradient(135deg, #2c1e16 0%, #161210 100%) :
+                Math.mod(tone, 6) == 3 ? @linear-gradient(135deg, #21182b 0%, #121018 100%) :
+                Math.mod(tone, 6) == 4 ? @linear-gradient(135deg, #142a28 0%, #101717 100%) :
+                                         @linear-gradient(135deg, #19291e 0%, #101612 100%);
+    Image {
+        source: @image-url("../assets/icons/Music2.svg");
+        width: root.width * 0.32;
+        height: root.height * 0.32;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        colorize: #ffffff38;
+    }
+    Image {
+        source: root.art;
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        image-fit: cover;
+    }
+}
+
+export component Transport inherits Rectangle {
+    in property <bool> playing;
+    in property <bool> brand;
+    callback clicked();
+    width: brand ? 42px : 58px;
+    height: brand ? 42px : 58px;
+    border-radius: self.width / 2;
+    background: touch.has-hover ? Tokens.ink-150 : Tokens.ink-100;
+    animate background { duration: 110ms; }
+    Image {
+        source: root.playing ? @image-url("../assets/icons/Pause.svg") : @image-url("../assets/icons/Play.svg");
+        width: root.brand ? 20px : 26px;
+        height: root.brand ? 20px : 26px;
+        x: (root.width - self.width) / 2 + (root.playing ? 0px : 1px);
+        y: (root.height - self.height) / 2;
+        colorize: Tokens.neutral-0;
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    accessible-role: button;
+    accessible-label: playing ? "Пауза" : "Відтворити";
+    accessible-action-default => { root.clicked(); }
+}
+
+export component SeekBar inherits Rectangle {
+    in property <float> position;
+    in property <float> duration;
+    in property <bool> accent;
+    callback seek(float);
+    height: 20px;
+    private property <float> ratio: root.duration > 0 ? clamp(root.position / root.duration, 0, 1) : 0;
+    Rectangle {
+        y: (root.height - self.height) / 2;
+        height: touch.has-hover ? 6px : 4px;
+        width: 100%;
+        border-radius: 3px;
+        background: #ffffff26;
+        animate height { duration: 100ms; }
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width * root.ratio;
+            height: 100%;
+            border-radius: 3px;
+            background: root.accent ? Tokens.brand-500 : Tokens.ink-100;
+        }
+    }
+    Rectangle {
+        x: (root.width - self.width) * root.ratio;
+        y: (root.height - self.height) / 2;
+        width: touch.has-hover || touch.pressed ? 12px : 0px;
+        height: touch.has-hover || touch.pressed ? 12px : 0px;
+        border-radius: self.width / 2;
+        background: root.accent ? Tokens.brand-300 : Tokens.ink-100;
+        animate width, height { duration: 100ms; }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        moved => {
+            if self.pressed && root.duration > 0 {
+                root.seek(clamp(self.mouse-x / self.width, 0, 1) * root.duration);
+            }
+        }
+        clicked => {
+            if root.duration > 0 {
+                root.seek(clamp(self.mouse-x / self.width, 0, 1) * root.duration);
+            }
+        }
+    }
+    accessible-role: slider;
+    accessible-label: "Позиція відтворення";
+    accessible-value: root.position;
+    accessible-value-minimum: 0;
+    accessible-value-maximum: root.duration;
+    accessible-value-step: 5;
+    accessible-action-increment => { root.seek(min(root.duration, root.position + 5)); }
+    accessible-action-decrement => { root.seek(max(0, root.position - 5)); }
+}

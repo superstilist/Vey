@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en" data-page-rules="on">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>braccato: a custom element for synchronized lyrics</title>
+    <link rel="icon" href="/icons/icon-48.png" />
+    <meta
+      name="description"
+      content="The lyrics renderer behind Better Lyrics, published as one custom element with no runtime dependencies. Bring an audio file and a TTML, LRC, SRT or QRC file."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://api.fontshare.com" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Instrument+Sans:wght@400..600&display=swap"
+    />
+    <link
+      rel="stylesheet"
+      href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@500,700,800&f[]=satoshi@400,500,700&display=swap"
+    />
+
+    <!-- Every stylesheet this page wears, the package's three and its own, is imported at the head of
+         demo.js. They are package subpaths rather than paths, and the order they load in is a line
+         of that file rather than four lines of this one. -->
+  </head>
+
+  <body>
+    <svg class="sprite" aria-hidden="true">
+        <symbol id="i-pause" viewBox="0 0 256 256"><path d="M216,48V208a16,16,0,0,1-16,16H160a16,16,0,0,1-16-16V48a16,16,0,0,1,16-16h40A16,16,0,0,1,216,48ZM96,32H56A16,16,0,0,0,40,48V208a16,16,0,0,0,16,16H96a16,16,0,0,0,16-16V48A16,16,0,0,0,96,32Z" /></symbol>
+        <symbol id="i-play" viewBox="0 0 256 256"><path d="M240,128a15.74,15.74,0,0,1-7.6,13.51L88.32,229.65a16,16,0,0,1-16.2.3A15.86,15.86,0,0,1,64,216.13V39.87a15.86,15.86,0,0,1,8.12-13.82,16,16,0,0,1,16.2.3L232.4,114.49A15.74,15.74,0,0,1,240,128Z" /></symbol>
+        <symbol id="i-arrow-down" viewBox="0 0 256 256"><path d="M205.66,149.66l-72,72a8,8,0,0,1-11.32,0l-72-72a8,8,0,0,1,11.32-11.32L120,196.69V40a8,8,0,0,1,16,0V196.69l58.34-58.35a8,8,0,0,1,11.32,11.32Z" /></symbol>
+        <symbol id="i-arrow-right" viewBox="0 0 256 256"><path d="M221.66,133.66l-72,72a8,8,0,0,1-11.32-11.32L196.69,136H40a8,8,0,0,1,0-16H196.69L138.34,61.66a8,8,0,0,1,11.32-11.32l72,72A8,8,0,0,1,221.66,133.66Z" /></symbol>
+        <symbol id="i-arrow-up-right" viewBox="0 0 256 256"><path d="M200,64V168a8,8,0,0,1-16,0V83.31L69.66,197.66a8,8,0,0,1-11.32-11.32L172.69,72H88a8,8,0,0,1,0-16H192A8,8,0,0,1,200,64Z" /></symbol>
+        <symbol id="i-arrows-out-line-horizontal" viewBox="0 0 256 256"><path d="M136,40V216a8,8,0,0,1-16,0V40a8,8,0,0,1,16,0ZM96,120H35.31l18.35-18.34A8,8,0,0,0,42.34,90.34l-32,32a8,8,0,0,0,0,11.32l32,32a8,8,0,0,0,11.32-11.32L35.31,136H96a8,8,0,0,0,0-16Zm149.66,2.34-32-32a8,8,0,0,0-11.32,11.32L220.69,120H160a8,8,0,0,0,0,16h60.69l-18.35,18.34a8,8,0,0,0,11.32,11.32l32-32A8,8,0,0,0,245.66,122.34Z" /></symbol>
+        <symbol id="i-book-open-text" viewBox="0 0 256 256"><path d="M232,48H160a40,40,0,0,0-32,16A40,40,0,0,0,96,48H24a8,8,0,0,0-8,8V200a8,8,0,0,0,8,8H96a24,24,0,0,1,24,24,8,8,0,0,0,16,0,24,24,0,0,1,24-24h72a8,8,0,0,0,8-8V56A8,8,0,0,0,232,48ZM96,192H32V64H96a24,24,0,0,1,24,24V200A39.81,39.81,0,0,0,96,192Zm128,0H160a39.81,39.81,0,0,0-24,8V88a24,24,0,0,1,24-24h64ZM160,88h40a8,8,0,0,1,0,16H160a8,8,0,0,1,0-16Zm48,40a8,8,0,0,1-8,8H160a8,8,0,0,1,0-16h40A8,8,0,0,1,208,128Zm0,32a8,8,0,0,1-8,8H160a8,8,0,0,1,0-16h40A8,8,0,0,1,208,160Z" /></symbol>
+        <symbol id="i-check" viewBox="0 0 256 256"><path d="M229.66,77.66l-128,128a8,8,0,0,1-11.32,0l-56-56a8,8,0,0,1,11.32-11.32L96,188.69,218.34,66.34a8,8,0,0,1,11.32,11.32Z" /></symbol>
+        <symbol id="i-copy" viewBox="0 0 256 256"><path d="M216,32H88a8,8,0,0,0-8,8V80H40a8,8,0,0,0-8,8V216a8,8,0,0,0,8,8H168a8,8,0,0,0,8-8V176h40a8,8,0,0,0,8-8V40A8,8,0,0,0,216,32ZM160,208H48V96H160Zm48-48H176V88a8,8,0,0,0-8-8H96V48H208Z" /></symbol>
+        <symbol id="i-file-arrow-up" viewBox="0 0 256 256"><path d="M213.66,82.34l-56-56A8,8,0,0,0,152,24H56A16,16,0,0,0,40,40V216a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V88A8,8,0,0,0,213.66,82.34ZM160,51.31,188.69,80H160ZM200,216H56V40h88V88a8,8,0,0,0,8,8h48V216Zm-42.34-77.66a8,8,0,0,1-11.32,11.32L136,139.31V184a8,8,0,0,1-16,0V139.31l-10.34,10.35a8,8,0,0,1-11.32-11.32l24-24a8,8,0,0,1,11.32,0Z" /></symbol>
+        <symbol id="i-github-logo" viewBox="0 0 256 256"><path d="M208.31,75.68A59.78,59.78,0,0,0,202.93,28,8,8,0,0,0,196,24a59.75,59.75,0,0,0-48,24H124A59.75,59.75,0,0,0,76,24a8,8,0,0,0-6.93,4,59.78,59.78,0,0,0-5.38,47.68A58.14,58.14,0,0,0,56,104v8a56.06,56.06,0,0,0,48.44,55.47A39.8,39.8,0,0,0,96,192v8H72a24,24,0,0,1-24-24A40,40,0,0,0,8,136a8,8,0,0,0,0,16,24,24,0,0,1,24,24,40,40,0,0,0,40,40H96v16a8,8,0,0,0,16,0V192a24,24,0,0,1,48,0v40a8,8,0,0,0,16,0V192a39.8,39.8,0,0,0-8.44-24.53A56.06,56.06,0,0,0,216,112v-8A58.14,58.14,0,0,0,208.31,75.68ZM200,112a40,40,0,0,1-40,40H112a40,40,0,0,1-40-40v-8a41.74,41.74,0,0,1,6.9-22.48A8,8,0,0,0,80,73.83a43.81,43.81,0,0,1,.79-33.58,43.88,43.88,0,0,1,32.32,20.06A8,8,0,0,0,119.82,64h32.35a8,8,0,0,0,6.74-3.69,43.87,43.87,0,0,1,32.32-20.06A43.81,43.81,0,0,1,192,73.83a8.09,8.09,0,0,0,1,7.65A41.72,41.72,0,0,1,200,104Z" /></symbol>
+        <symbol id="i-lightning" viewBox="0 0 256 256"><path d="M215.79,118.17a8,8,0,0,0-5-5.66L153.18,90.9l14.66-73.33a8,8,0,0,0-13.69-7l-112,120a8,8,0,0,0,3,13l57.63,21.61L88.16,238.43a8,8,0,0,0,13.69,7l112-120A8,8,0,0,0,215.79,118.17ZM109.37,214l10.47-52.38a8,8,0,0,0-5-9.06L62,132.71l84.62-90.66L136.16,94.43a8,8,0,0,0,5,9.06l52.8,19.8Z" /></symbol>
+        <symbol id="i-music-notes-simple" viewBox="0 0 256 256"><path d="M212.92,17.69a8,8,0,0,0-6.86-1.45l-128,32A8,8,0,0,0,72,56V166.08A36,36,0,1,0,88,196V62.25l112-28v99.83A36,36,0,1,0,216,164V24A8,8,0,0,0,212.92,17.69ZM52,216a20,20,0,1,1,20-20A20,20,0,0,1,52,216Zm128-32a20,20,0,1,1,20-20A20,20,0,0,1,180,184Z" /></symbol>
+        <symbol id="i-package" viewBox="0 0 256 256"><path d="M223.68,66.15,135.68,18a15.88,15.88,0,0,0-15.36,0l-88,48.17a16,16,0,0,0-8.32,14v95.64a16,16,0,0,0,8.32,14l88,48.17a15.88,15.88,0,0,0,15.36,0l88-48.17a16,16,0,0,0,8.32-14V80.18A16,16,0,0,0,223.68,66.15ZM128,32l80.34,44-29.77,16.3-80.35-44ZM128,120,47.66,76l33.9-18.56,80.34,44ZM40,90l80,43.78v85.79L40,175.82Zm176,85.78h0l-80,43.79V133.82l32-17.51V152a8,8,0,0,0,16,0V107.55L216,90v85.77Z" /></symbol>
+        <symbol id="i-sparkle" viewBox="0 0 256 256"><path d="M197.58,129.06,146,110l-19-51.62a15.92,15.92,0,0,0-29.88,0L78,110l-51.62,19a15.92,15.92,0,0,0,0,29.88L78,178l19,51.62a15.92,15.92,0,0,0,29.88,0L146,178l51.62-19a15.92,15.92,0,0,0,0-29.88ZM137,164.22a8,8,0,0,0-4.74,4.74L112,223.85,91.78,169A8,8,0,0,0,87,164.22L32.15,144,87,123.78A8,8,0,0,0,91.78,119L112,64.15,132.22,119a8,8,0,0,0,4.74,4.74L191.85,144ZM144,40a8,8,0,0,1,8-8h16V16a8,8,0,0,1,16,0V32h16a8,8,0,0,1,0,16H184V64a8,8,0,0,1-16,0V48H152A8,8,0,0,1,144,40ZM248,88a8,8,0,0,1-8,8h-8v8a8,8,0,0,1-16,0V96h-8a8,8,0,0,1,0-16h8V72a8,8,0,0,1,16,0v8h8A8,8,0,0,1,248,88Z" /></symbol>
+        <symbol id="i-translate" viewBox="0 0 256 256"><path d="M247.15,212.42l-56-112a8,8,0,0,0-14.31,0l-21.71,43.43A88,88,0,0,1,108,126.93,103.65,103.65,0,0,0,135.69,64H160a8,8,0,0,0,0-16H104V32a8,8,0,0,0-16,0V48H32a8,8,0,0,0,0,16h87.63A87.76,87.76,0,0,1,96,116.35a87.74,87.74,0,0,1-19-31,8,8,0,1,0-15.08,5.34A103.63,103.63,0,0,0,84,127a87.55,87.55,0,0,1-52,17,8,8,0,0,0,0,16,103.46,103.46,0,0,0,64-22.08,104.18,104.18,0,0,0,51.44,21.31l-26.6,53.19a8,8,0,0,0,14.31,7.16L148.94,192h70.11l13.79,27.58A8,8,0,0,0,240,224a8,8,0,0,0,7.15-11.58ZM156.94,176,184,121.89,211.05,176Z" /></symbol>
+        <symbol id="i-users" viewBox="0 0 256 256"><path d="M117.25,157.92a60,60,0,1,0-66.5,0A95.83,95.83,0,0,0,3.53,195.63a8,8,0,1,0,13.4,8.74,80,80,0,0,1,134.14,0,8,8,0,0,0,13.4-8.74A95.83,95.83,0,0,0,117.25,157.92ZM40,108a44,44,0,1,1,44,44A44.05,44.05,0,0,1,40,108Zm210.14,98.7a8,8,0,0,1-11.07-2.33A79.83,79.83,0,0,0,172,168a8,8,0,0,1,0-16,44,44,0,1,0-16.34-84.87,8,8,0,1,1-5.94-14.85,60,60,0,0,1,55.53,105.64,95.83,95.83,0,0,1,47.22,37.71A8,8,0,0,1,250.14,206.7Z" /></symbol>
+        <symbol id="i-users-three" viewBox="0 0 256 256"><path d="M244.8,150.4a8,8,0,0,1-11.2-1.6A51.6,51.6,0,0,0,192,128a8,8,0,0,1-7.37-4.89,8,8,0,0,1,0-6.22A8,8,0,0,1,192,112a24,24,0,1,0-23.24-30,8,8,0,1,1-15.5-4A40,40,0,1,1,219,117.51a67.94,67.94,0,0,1,27.43,21.68A8,8,0,0,1,244.8,150.4ZM190.92,212a8,8,0,1,1-13.84,8,57,57,0,0,0-98.16,0,8,8,0,1,1-13.84-8,72.06,72.06,0,0,1,33.74-29.92,48,48,0,1,1,58.36,0A72.06,72.06,0,0,1,190.92,212ZM128,176a32,32,0,1,0-32-32A32,32,0,0,0,128,176ZM72,120a8,8,0,0,0-8-8A24,24,0,1,1,87.24,82a8,8,0,1,0,15.5-4A40,40,0,1,0,37,117.51,67.94,67.94,0,0,0,9.6,139.19a8,8,0,1,0,12.8,9.61A51.6,51.6,0,0,1,64,128,8,8,0,0,0,72,120Z" /></symbol>
+        <symbol id="i-waveform" viewBox="0 0 256 256"><path d="M56,96v64a8,8,0,0,1-16,0V96a8,8,0,0,1,16,0ZM88,24a8,8,0,0,0-8,8V224a8,8,0,0,0,16,0V32A8,8,0,0,0,88,24Zm40,32a8,8,0,0,0-8,8V192a8,8,0,0,0,16,0V64A8,8,0,0,0,128,56Zm40,32a8,8,0,0,0-8,8v64a8,8,0,0,0,16,0V96A8,8,0,0,0,168,88Zm40-16a8,8,0,0,0-8,8v96a8,8,0,0,0,16,0V80A8,8,0,0,0,208,72Z" /></symbol>
+    </svg>
+
+    <a class="skip" href="#docs">Skip to content</a>
+
+    <!-- First in the document on purpose: `source` is resolved with querySelector when the element
+         connects, so a media element the parser has not reached yet is not found. -->
+    <audio id="player" src="/generated/kettle.wav" preload="auto"></audio>
+
+    <div class="layout">
+      <main class="story">
+        <header class="topbar">
+          <a class="wordmark" href="#top" id="top">
+            <img src="/icons/icon-48.png" alt="" width="26" height="26" decoding="async" />
+            braccato
+            <span class="wordmark__version" id="package-version">0.0.0</span>
+          </a>
+          <nav aria-label="Package">
+            <a id="docs-link" href="https://docs.betterlyrics.org/braccato">
+              <svg class="icon" aria-hidden="true"><use href="#i-book-open-text" /></svg><span class="topbar__label">Docs</span>
+            </a>
+            <a id="npm-link" href="https://www.npmjs.com/package/@braccato/core">
+              <svg class="icon" aria-hidden="true"><use href="#i-package" /></svg><span class="topbar__label">npm</span>
+            </a>
+            <a id="repo-link" href="https://github.com/better-lyrics/braccato">
+              <svg class="icon" aria-hidden="true"><use href="#i-github-logo" /></svg><span class="topbar__label">GitHub</span>
+            </a>
+          </nav>
+        </header>
+
+        <section class="hero" data-chapter="intro" aria-labelledby="hero-heading">
+          <h1 id="hero-heading">braccato makes it dead simple to show <em>synced lyrics</em>.</h1>
+          <p>
+            The lyrics renderer from Better Lyrics, one of the most used YouTube Music extensions, as a single custom element with no dependencies.
+          </p>
+
+          <div class="actions">
+            <button class="primary" id="hero-play" type="button" data-playing="false">
+              <span class="primary__icon" aria-hidden="true">
+                <svg class="icon icon--play"><use href="#i-play" /></svg>
+                <svg class="icon icon--pause"><use href="#i-pause" /></svg>
+              </span>
+              <span class="primary__label" id="hero-play-label">Play the demo</span>
+            </button>
+
+            <div class="install">
+              <fieldset class="seg seg--small" id="install-tabs">
+                <legend class="visually-hidden">Package manager</legend>
+                <span class="seg__thumb" aria-hidden="true"></span>
+              </fieldset>
+              <div class="install__command">
+                <code><span class="install__prompt" aria-hidden="true">$ </span><span id="install-text"></span></code>
+                <button class="icon-button" id="install-copy" type="button">
+                  <svg class="icon icon--idle" aria-hidden="true"><use href="#i-copy" /></svg>
+                  <svg class="icon icon--done" aria-hidden="true"><use href="#i-check" /></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div id="docs">
+          <section class="chapter" id="syllables" data-chapter="syllables" aria-labelledby="syllables-heading">
+            <h2 id="syllables-heading">Each syllable lights up as it is sung.</h2>
+            <p>
+              Import the element and its three stylesheets, point it at an audio or video element, and give it an array of lines. It follows that element's playback, and clicking a line seeks to it.
+            </p>
+            <div class="code" data-snippet="quickstart"></div>
+            <p class="aside">
+              Autoscroll moves the nearest scrollable parent. To use a different one, set <code>view.host = { getScrollElement: () =&gt; frame }</code>, like this page does.
+            </p>
+
+            <div class="block">
+              <h3>Pick a song</h3>
+              <div class="songs" id="song-list"></div>
+            </div>
+
+            <div class="block">
+              <h3>Or play your own</h3>
+              <div class="row">
+                <button class="chip" id="song-file" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-music-notes-simple" /></svg>Choose an audio file
+                </button>
+              </div>
+              <div class="url">
+                <label class="visually-hidden" for="song-url">Audio URL</label>
+                <input class="input" id="song-url" type="url" placeholder="https://example.com/song.mp3" />
+                <button class="chip" id="song-url-load" type="button">Load</button>
+              </div>
+              <p class="hint">Or drop an audio file anywhere on this page.</p>
+              <p class="status" id="song-status" role="status"></p>
+            </div>
+          </section>
+
+          <section class="chapter" id="lines" data-chapter="lines" aria-labelledby="lines-heading">
+            <h2 id="lines-heading">Line synced, or not synced at all.</h2>
+            <p>
+              There is no mode to set. Leave out <code>parts</code> and whole lines light up. Leave out the times too and you get plain, unsynced lyrics.
+            </p>
+            <fieldset class="seg" id="timing">
+              <legend class="visually-hidden">How the built-in lyrics are timed</legend>
+              <span class="seg__thumb" aria-hidden="true"></span>
+              <label><input type="radio" name="timing" value="syllables" checked /><span>Syllable</span></label>
+              <label><input type="radio" name="timing" value="lines" /><span>Line</span></label>
+              <label><input type="radio" name="timing" value="plain" /><span>None</span></label>
+              <label><input type="radio" name="timing" value="empty" /><span>Not found</span></label>
+            </fieldset>
+            <p class="hint" id="timing-hint"></p>
+
+            <label class="switch">
+              <input id="passive-scroll" type="checkbox" role="switch" />
+              <span class="switch__track" aria-hidden="true"></span>
+              <span class="switch__text">
+                <b>Passive scroll</b>
+                <span>Slowly scrolls unsynced lyrics. Pick None to see it.</span>
+              </span>
+            </label>
+          </section>
+
+          <section class="chapter" id="duets" data-chapter="duets" aria-labelledby="duets-heading">
+            <h2 id="duets-heading">Two voices, and the one behind them.</h2>
+            <p>
+              Give a line an <code>agent</code> and the second singer's lines move to the other side. Background vocals show up smaller, under their line.
+            </p>
+            <div class="row">
+              <button class="chip" type="button" data-seek="9000">
+                <svg class="icon" aria-hidden="true"><use href="#i-users" /></svg>Hear the second voice
+              </button>
+              <button class="chip" type="button" data-seek="18000">
+                <svg class="icon" aria-hidden="true"><use href="#i-waveform" /></svg>Hear the background vocal
+              </button>
+            </div>
+
+            <div class="block">
+              <h3>Translations stream in</h3>
+              <p class="hint">
+                These often arrive after the lyrics. Add them to a line at any time and they animate in. Changing the song or timing clears them.
+              </p>
+              <div class="row">
+                <button class="chip" id="inject-romanizations" type="button" aria-pressed="false">
+                  <span data-label>Show romanizations</span>
+                </button>
+                <button class="chip" id="inject-translations" type="button" aria-pressed="false">
+                  <span data-label>Show translations</span>
+                </button>
+                <button class="chip" id="inject-both" type="button" aria-pressed="false">
+                  <span data-label>Show both</span>
+                </button>
+              </div>
+              <label class="switch">
+                <input id="animate-decorations" type="checkbox" role="switch" checked />
+                <span class="switch__track" aria-hidden="true"></span>
+                <span class="switch__text">
+                  <b>Animate them in</b>
+                  <span>When off, they appear at once and the lines jump apart.</span>
+                </span>
+              </label>
+            </div>
+
+            <div class="block">
+              <h3>Credits close the song</h3>
+              <p class="hint">
+                Pass <code>songwriters</code> and the last line hands over to who wrote it. The credits wait, dim, and brighten once the song ends. One CSS rule hides them.
+              </p>
+              <div class="row">
+                <button class="chip" id="seek-ending" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-waveform" /></svg>Hear the ending
+                </button>
+                <button class="chip" id="toggle-credits" type="button" aria-pressed="true">
+                  <span data-label>Hide credits</span>
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section class="chapter" id="stage-layout" data-chapter="stage" aria-labelledby="stage-heading">
+            <h2 id="stage-heading">One line at a time, over the picture.</h2>
+            <p>
+              Set <code>layout="stage"</code> and load <code>stage.css</code>, and the element shows only the lines being sung, like subtitles over a video. It fills the nearest positioned parent. The theme stays the same.
+            </p>
+            <fieldset class="seg" id="layout-choice">
+              <legend class="visually-hidden">Layout</legend>
+              <span class="seg__thumb" aria-hidden="true"></span>
+              <label><input type="radio" name="layout" value="scroll" /><span>Scroll</span></label>
+              <label><input type="radio" name="layout" value="stage" checked /><span>Stage</span></label>
+            </fieldset>
+            <div class="code" data-snippet="stage"></div>
+
+            <div class="block">
+              <h3>A backdrop that follows the words</h3>
+              <p class="hint">
+                <code>braccato:stage-layout</code> gives the box around the sung lines, or <code>null</code> when nobody is singing. This page draws the plate behind them from it, outside the element, so no theme can restyle it.
+              </p>
+            </div>
+
+            <div class="block">
+              <h3>Duets keep their sides</h3>
+              <p class="hint">Each singer stays on their own side of the stage. Everyone together stays in the middle.</p>
+              <div class="row">
+                <button class="chip" type="button" data-seek="9000">
+                  <svg class="icon" aria-hidden="true"><use href="#i-users" /></svg>Hear the second voice
+                </button>
+                <button class="chip" id="stage-unsynced" type="button" aria-pressed="false">
+                  <span data-label>Try unsynced lyrics</span>
+                </button>
+              </div>
+              <p class="hint">
+                A stage places lines by their time, so unsynced lyrics show nothing. The element says so: <code>status</code> becomes <code>"unsynced-on-stage"</code> and it dispatches <code>braccato:error</code> with <code>phase: "layout"</code>.
+              </p>
+            </div>
+          </section>
+
+          <section class="chapter" id="themes" data-chapter="themes" aria-labelledby="theme-heading">
+            <h2 id="theme-heading">A theme is a stylesheet.</h2>
+            <p>
+              Style the class names with plain CSS. Settings, like where the active line sits, go in <code>blyrics-*</code> comments in the same stylesheet, so there is no separate config. An empty theme resets everything.
+            </p>
+            <div class="code" data-snippet="theme"></div>
+
+            <div class="block">
+              <h3>Pick a starting point</h3>
+              <div class="presets" id="theme-list"></div>
+              <p class="hint" id="theme-summary"></p>
+            </div>
+
+            <div class="block">
+              <h3>Edit it live</h3>
+              <!-- A textarea cannot colour its own text, so the colours are painted by the <pre> and the
+                   input sits transparent on top of it. The paint comes first so the caret and the
+                   selection, drawn in the input's own layer, stay above it. -->
+              <div class="editor">
+                <pre class="editor__paint" id="theme-paint" aria-hidden="true"></pre>
+                <label class="visually-hidden" for="theme-text">Theme stylesheet</label>
+                <textarea
+                  class="editor__input"
+                  id="theme-text"
+                  rows="14"
+                  spellcheck="false"
+                  aria-describedby="theme-status"
+                ></textarea>
+              </div>
+              <p class="status" id="theme-status" role="status"></p>
+            </div>
+
+            <details class="disclosure">
+              <summary>All theme settings</summary>
+              <dl class="terms" id="theme-settings-list"></dl>
+            </details>
+          </section>
+
+          <section class="chapter" id="formats" data-chapter="formats" aria-labelledby="parsers-heading">
+            <h2 id="parsers-heading">Bring your own lyrics.</h2>
+            <p>
+              The element only takes an array.
+              <a id="parsers-npm-link" href="https://www.npmjs.com/package/@braccato/parsers"><code>@braccato/parsers</code></a>
+              reads a lyrics file, detects the format, and gives you that array.
+            </p>
+            <ul class="formats" aria-label="Supported formats">
+              <li>TTML</li>
+              <li>LRC</li>
+              <li>SRT</li>
+              <li>QRC</li>
+              <li>Plain text</li>
+            </ul>
+
+            <label class="drop" id="lyrics-drop">
+              <svg class="icon" aria-hidden="true"><use href="#i-file-arrow-up" /></svg>
+              <span><strong>Drop a lyrics file</strong> or choose one</span>
+              <input class="visually-hidden" id="lyrics-file" type="file" accept=".ttml,.xml,.lrc,.srt,.qrc,.txt,text/*" />
+            </label>
+
+            <div class="paste">
+              <label class="visually-hidden" for="lyrics-text">Paste lyrics</label>
+              <textarea
+                class="input input--area"
+                id="lyrics-text"
+                rows="4"
+                spellcheck="false"
+                placeholder="Or paste the file here"
+                aria-describedby="lyrics-status"
+              ></textarea>
+              <button class="chip" id="lyrics-import" type="button">Import</button>
+            </div>
+            <p class="status" id="lyrics-status" role="status"></p>
+            
+
+            <div class="code" data-snippet="parsers"></div>
+
+            <a class="more" id="parsers-guide-link" href="https://docs.betterlyrics.org/braccato/parsers">
+              Read the parsers guide<svg class="icon" aria-hidden="true"><use href="#i-arrow-right" /></svg>
+            </a>
+
+            <details class="disclosure">
+              <summary>Show the array the element got</summary>
+              <pre class="array" id="lyrics-array"></pre>
+            </details>
+          </section>
+
+          <section class="chapter" id="playback" data-chapter="playback" aria-labelledby="playback-heading">
+            <h2 id="playback-heading">Shift the timing, scroll the lyrics.</h2>
+            <p>
+              Both apply straight away, playing or paused. The offset goes through <code>tickOptions</code>.
+            </p>
+
+            <div class="field">
+              <div class="field__row">
+                <label for="offset">Offset</label>
+                <output id="offset-value" for="offset">0 ms</output>
+              </div>
+              <input class="slider" id="offset" type="range" min="-2000" max="2000" step="25" value="0" />
+              <p class="hint">Moves the lyrics against the audio. Negative values make the words show up earlier.</p>
+            </div>
+
+            <label class="switch">
+              <input id="scrollable-view" type="checkbox" role="switch" />
+              <span class="switch__track" aria-hidden="true"></span>
+              <span class="switch__text">
+                <b>Scroll the lyrics by hand</b>
+                <span>
+                  Use the wheel or a finger on the lyrics. Autoscroll pauses while you read ahead, and a button brings it back.
+                  This page calls <code>renderer.noteUserScroll()</code> to make that work.
+                </span>
+              </span>
+            </label>
+          </section>
+
+          <section class="chapter chapter--wide" id="reference" data-chapter="reference" aria-labelledby="reference-heading">
+            <h2 id="reference-heading">The full API.</h2>
+            <p>
+              Twelve properties, five attributes, five events, and the class names themes can use. The renderer guide covers each one in more depth.
+            </p>
+
+            <fieldset class="seg seg--scroll" id="reference-tabs">
+              <legend class="visually-hidden">Reference section</legend>
+              <span class="seg__thumb" aria-hidden="true"></span>
+              <label><input type="radio" name="reference" value="properties" checked /><span>Properties</span></label>
+              <label><input type="radio" name="reference" value="attributes" /><span>Attributes</span></label>
+              <label><input type="radio" name="reference" value="events" /><span>Events</span></label>
+              <label><input type="radio" name="reference" value="class-names" /><span>Class names</span></label>
+              <label><input type="radio" name="reference" value="custom-properties" /><span>Custom properties</span></label>
+              <label><input type="radio" name="reference" value="stylesheets" /><span>Stylesheets</span></label>
+            </fieldset>
+
+            <div class="panels">
+              <section class="panel" data-panel="properties" aria-labelledby="properties-heading">
+                <h3 class="visually-hidden" id="properties-heading">Properties</h3>
+                <p class="hint">
+                  You can set any of these before the element is in the document. They are all applied when it connects.
+                </p>
+                <dl class="terms" id="properties-list"></dl>
+              </section>
+              <section class="panel" data-panel="attributes" aria-labelledby="attributes-heading" hidden>
+                <h3 class="visually-hidden" id="attributes-heading">Attributes</h3>
+                <p class="hint">
+                  Attributes set their property, but properties never update the attribute. Otherwise <code>current-time</code> would change in the DOM sixty times a second.
+                </p>
+                <dl class="terms" id="attributes-list"></dl>
+              </section>
+              <section class="panel" data-panel="events" aria-labelledby="events-heading" hidden>
+                <h3 class="visually-hidden" id="events-heading">Events</h3>
+                <p class="hint">
+                  All five bubble and cross shadow roots, so a listener outside your own components still hears them.
+                </p>
+                <dl class="terms" id="events-list"></dl>
+              </section>
+              <section class="panel" data-panel="class-names" aria-labelledby="class-names-heading" hidden>
+                <h3 class="visually-hidden" id="class-names-heading">Class names</h3>
+                <p class="hint">
+                  These are public API, so renaming one would be a breaking change. Import them from <code>@braccato/core/constants</code> instead of typing them.
+                </p>
+                <dl class="terms" id="class-names-list"></dl>
+              </section>
+              <section class="panel" data-panel="custom-properties" aria-labelledby="custom-properties-heading" hidden>
+                <h3 class="visually-hidden" id="custom-properties-heading">Custom properties</h3>
+                <p class="hint">The ones you will use most. <code>variables.css</code> has the full list.</p>
+                <dl class="terms" id="custom-properties-list"></dl>
+              </section>
+              <section class="panel" data-panel="stylesheets" aria-labelledby="stylesheets-heading" hidden>
+                <h3 class="visually-hidden" id="stylesheets-heading">Stylesheets</h3>
+                <p class="hint">
+                  Load these like any package CSS. Without them the lines are still there, just unstyled.
+                </p>
+                <dl class="terms" id="stylesheets-list"></dl>
+                <p class="hint">
+                  The element works out the space the first and last lines need and sets <code>--blyrics-padding-top</code> and <code>--blyrics-padding-bottom</code>, but <code>lyrics.css</code> only uses the bottom one. Add the top one yourself, like this page does.
+                </p>
+              </section>
+            </div>
+
+            <a class="more" id="renderer-guide-link" href="https://docs.betterlyrics.org/braccato/renderer">
+              Read the renderer guide<svg class="icon" aria-hidden="true"><use href="#i-arrow-right" /></svg>
+            </a>
+          </section>
+
+          <section class="chapter chapter--wide" id="light-dom" data-chapter="light-dom" aria-labelledby="light-dom-heading">
+            <h2 id="light-dom-heading">Light DOM, so your CSS reaches it.</h2>
+            <p>
+              The element renders into its own children, not a shadow root, so your page's CSS reaches the lines and the package's <code>@property</code> registrations work. This page checks both when it loads.
+            </p>
+
+            <div class="cards">
+              <section class="card" aria-labelledby="upgrade-heading">
+                <h3 id="upgrade-heading">HTML written before the script loads still works</h3>
+                <p class="hint">The tag is in the HTML before the script defines it. Once the script loads, its <code>source</code> and <code>theme</code> attributes should still apply. Checked once, on load.</p>
+                <p class="verdict" id="upgrade-verdict">Checking once the script loads.</p>
+                <dl class="readout" id="upgrade-readout"></dl>
+              </section>
+
+              <section class="card" aria-labelledby="cascade-heading">
+                <h3 id="cascade-heading">Your CSS reaches the lines</h3>
+                <p class="hint">
+                  This page's CSS tightens the letter spacing on the container. It couldn't with a shadow root.
+                </p>
+                <label class="switch">
+                  <input id="page-rules" type="checkbox" role="switch" checked />
+                  <span class="switch__track" aria-hidden="true"></span>
+                  <span class="switch__text"><b>Apply this page's CSS</b></span>
+                </label>
+                <dl class="readout" id="cascade-readout"></dl>
+              </section>
+
+              <section class="card" aria-labelledby="events-log-heading">
+                <h3 id="events-log-heading">Events</h3>
+                <p class="hint">Every <code>braccato:*</code> event, newest first.</p>
+                <ol class="log" id="event-log"></ol>
+              </section>
+            </div>
+
+            <div class="block">
+              <h3>One view per document</h3>
+              <p>
+                Two views on one page share the theme <code>&lt;style&gt;</code>, scroll padding, settings and playback clock, so the second
+                overrides the first. That is fine if both use the same theme. If the themes differ, both dispatch
+                <code>braccato:error</code> with <code>phase: "conflict"</code>, their status becomes
+                <code>"theme-conflict"</code>, and both keep rendering.
+              </p>
+            </div>
+          </section>
+        </div>
+
+        <footer class="colophon">
+          <p>
+            The songs here are generated by <a href="https://github.com/better-lyrics/braccato/blob/master/tooling/generate-demo-audio.ts"><code>generate-demo-audio.ts</code></a> from the same score as the lyrics, so every syllable lands on its note.
+          </p>
+          <a class="ecosystem" href="https://better-lyrics.boidu.dev" target="_blank" rel="noopener noreferrer">
+            <img src="/icons/icon-48.png" alt="" width="20" height="20" loading="lazy" decoding="async" />
+            <span>Part of the <strong>Better Lyrics</strong> ecosystem</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-arrow-up-right" /></svg>
+          </a>
+        </footer>
+      </main>
+
+      <aside class="stage" id="stage" aria-label="Live lyrics view" data-chapter="intro">
+        <nav class="rail" id="rail" aria-label="Chapters">
+          <span class="rail__pill" aria-hidden="true"></span>
+          <a href="#syllables" data-go="syllables">Syllables</a>
+          <a href="#lines" data-go="lines">Lines</a>
+          <a href="#duets" data-go="duets">Duets</a>
+          <a href="#stage-layout" data-go="stage">Stage</a>
+          <a href="#themes" data-go="themes">Themes</a>
+          <a href="#formats" data-go="formats">Formats</a>
+          <a href="#playback" data-go="playback">Playback</a>
+          <a href="#reference" data-go="reference">Reference</a>
+        </nav>
+
+        <p class="caption">
+          <strong class="caption__label" id="caption-label">Syllable timing</strong>
+          <span class="caption__sep" aria-hidden="true"></span>
+          <span class="caption__song" id="now-playing"></span>
+          <span class="caption__sep" aria-hidden="true"></span>
+          <span class="caption__theme" id="caption-theme"></span>
+        </p>
+
+        <div class="scene" id="stage-scene" aria-hidden="true"></div>
+        <div class="view" id="stage-frame">
+          <div class="plate" id="stage-plate" aria-hidden="true"></div>
+          <braccato-lyrics
+            id="view"
+            source="#player"
+            theme="/* blyrics-target-scroll-pos-ratio = 0.42; */"
+          ></braccato-lyrics>
+        </div>
+        <p class="stage__status" id="stage-status" role="status">Loading @braccato/core.</p>
+
+        <!-- Raised and put away by the renderer through `host.setResumeAffordanceVisible`, so what is on
+             the screen is the module's own reading of whether the reader has scrolled away. -->
+        <button class="resume" id="resume" type="button">Resume autoscroll</button>
+
+        <div class="transport">
+          <button class="transport__play" id="play" type="button" aria-label="Play" data-playing="false">
+            <svg class="icon icon--play" aria-hidden="true"><use href="#i-play" /></svg>
+            <svg class="icon icon--pause" aria-hidden="true"><use href="#i-pause" /></svg>
+          </button>
+          <label class="visually-hidden" for="song-select">Song</label>
+          <select class="transport__song" id="song-select">
+            <button type="button"><selectedcontent></selectedcontent></button>
+          </select>
+          <label class="visually-hidden" for="seek">Seek</label>
+          <input class="transport__seek" id="seek" type="range" min="0" max="45" step="0.01" value="0" />
+          <p class="transport__clock">
+            <span id="elapsed">0:00</span><span class="visually-hidden"> of </span><span aria-hidden="true"> / </span
+            ><span id="duration">0:00</span>
+          </p>
+        </div>
+      </aside>
+    </div>
+
+    <div class="dropzone" id="dropzone" hidden>
+      <p>Drop an audio file or a lyrics file.</p>
+    </div>
+
+    <script type="module" src="./demo.js"></script>
+  </body>
+</html>

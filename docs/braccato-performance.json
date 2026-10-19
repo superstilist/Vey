@@ -1,0 +1,18 @@
+{
+  "after": {
+    "dormant_rebuilds": 1,
+    "dormant_render_ms": 11.168199999999999,
+    "indexed_lookup_ms": 6.819999999999999,
+    "linear_scan_ms": 589.6895,
+    "parser_ms": 425.47790000000003
+  },
+  "before": {
+    "parser_ms": 463.799,
+    "scan_ms": 520.183
+  },
+  "lines": 1000,
+  "lookup_speedup_vs_same_run_scan": 86.46473607038124,
+  "parse_runs": 50,
+  "profile": "debug, same workstation; microbenchmark, not end-to-end FPS",
+  "ticks": 50000
+}

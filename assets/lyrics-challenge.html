@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="uk">
+<meta charset="utf-8">
+<style>body{background:#08080c;color:#f5f3f8;font:14px system-ui}iframe{width:100%;height:280px;border:0}</style>
+<p>Перевірка доступу до слів пісень</p>
+<script>
+// Register before navigating the frame, as in the WebStorm authentication host.
+const frame = document.createElement('iframe');
+const status = state => window.ipc.postMessage(JSON.stringify({type:'challenge-status',state}));
+status('host-ready');
+frame.addEventListener('load', () => status('frame-loaded'));
+addEventListener('message', event => {
+  if (event.origin !== 'https://lyrics.api.dacubeking.com' || event.source !== frame.contentWindow) return;
+  const data = event.data;
+  if (!data || typeof data !== 'object') return;
+  if (data.type === 'turnstile-token' && typeof data.token === 'string' && data.token.trim() && data.token.length < 16384) {
+    window.ipc.postMessage(JSON.stringify({type: data.type, token: data.token}));
+  } else if (['turnstile-error','turnstile-expired','turnstile-timeout'].includes(data.type)) {
+    window.ipc.postMessage(JSON.stringify({type: data.type, error: String(data.error || '').slice(0,64)}));
+  }
+});
+frame.src = 'https://lyrics.api.dacubeking.com/challenge';
+document.body.appendChild(frame);
+</script>
+</html>

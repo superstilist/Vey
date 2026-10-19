@@ -1,0 +1,151 @@
+// Native Rust Braccato surface. Selection, word state and animation clock live in Rust.
+import { ScrollView } from "std-widgets.slint";
+import { Action } from "controls.slint";
+import { Tokens } from "tokens.slint";
+import { WordRow, LyricRow } from "lyric-types.slint";
+export component BraccatoLyrics inherits Rectangle {
+    in property <[LyricRow]> lyric-lines;
+    in property <bool> external-view;
+    in property <bool> waiting;
+    in property <string> load-error;
+    callback retry();
+    out property <float> widget-x: self.absolute-position.x / 1px;
+    out property <float> widget-y: self.absolute-position.y / 1px;
+    callback widget-geometry(float,float,float,float);
+    changed widget-x => {root.widget-geometry(root.widget-x,root.widget-y,root.width / 1px,root.height / 1px);}
+    changed widget-y => {root.widget-geometry(root.widget-x,root.widget-y,root.width / 1px,root.height / 1px);}
+    changed width => {root.widget-geometry(root.widget-x,root.widget-y,root.width / 1px,root.height / 1px);}
+    // Transparent external surfaces may not be painted by Slint. Sample their
+    // laid-out bounds as well, including the first frame after mounting.
+    Timer {
+        interval: 50ms;
+        running: root.external-view;
+        triggered => {root.widget-geometry(root.widget-x,root.widget-y,root.width / 1px,root.height / 1px);}
+    }
+    in property <bool> lyrics-timed;
+    in property <int> active-lyric-index;
+    in property <int> lyrics-position;
+    in property <int> lyrics-offset;
+    in property <bool> mobile;
+    in property <float> lyric-size;
+    in property <color> lyric-active;
+    in property <color> lyric-inactive;
+    in property <int> lyric-weight;
+    in property <float> scroll-target;
+    private property <length> manual-y;
+    callback geometry(int, float, float);
+    callback viewport(float);
+    changed height => {root.viewport(root.height / 1px);root.widget-geometry(root.widget-x,root.widget-y,root.width / 1px,root.height / 1px);}
+    in property <string> credits;
+    in property <bool> stage;
+    in property <bool> passive;
+    in property <bool> reduced-motion;
+    in property <bool> user-scrolling;
+    in property <float> scroll-ratio;
+    in property <int> scroll-duration-ms: 750;
+    in property <bool> disable-richsync;
+    callback user-scroll();
+    callback resume();
+    callback seek-to(int);
+    if root.waiting: VerticalLayout {
+        width: 100%; height: 100%; alignment: center;
+        spacing: 16px; padding: 24px;
+        Text {
+            text: root.load-error == "" ? "Завантаження Braccato…" : root.load-error;
+            color: Tokens.ink-200; font-size: 16px;
+            horizontal-alignment: center; wrap: word-wrap;
+        }
+        if root.load-error != "": HorizontalLayout {
+            alignment: center;
+            Action { text: "Спробувати знову"; outlined: true; clicked => { root.retry(); } }
+        }
+    }
+    view := ScrollView {
+        visible: !root.external-view;
+        width: 100%; height: 100%;
+        content-width: self.width;
+        content-height: stage ? max(self.height, lyric-layout.preferred-height) : lyric-layout.preferred-height;
+        scrolled => { root.manual-y = self.content-y; root.user-scroll(); }
+        content-y: root.stage ? 0px : root.user-scrolling ? root.manual-y : root.lyrics-timed || root.passive ? -clamp(root.scroll-target * 1px, 0px, max(0px, self.content-height - self.height)) : 0px;
+        animate content-y { duration: root.reduced-motion ? 0ms : root.scroll-duration-ms * 1ms; easing: ease-in-out; }
+        lyric-layout := VerticalLayout {
+            width: parent.width;
+            spacing: 0px;
+            alignment: root.stage ? center : start;
+            for line[index] in root.lyric-lines: lyric-card := Rectangle {
+                property <bool> is-active: line.active;
+                property <bool> is-anchor: index == root.active-lyric-index;
+                changed y => {root.geometry(index,self.y / 1px,self.height / 1px);}
+                changed height => {root.geometry(index,self.y / 1px,self.height / 1px);}
+                height: root.stage && line.stage-role == 0 ? 0px : max(root.mobile ? 86px : 100px, lyric-stack.preferred-height);
+                visible: !root.stage || line.stage-role != 0;
+                // Keep lyric geometry stable while playback advances; animate color only.
+                property <length> text-size: (line.instrumental ? 18 : (root.mobile ? min(root.lyric-size, 26) : max(root.lyric-size, 48))) * 1px;
+                border-radius: 16px;
+                background: lyric-touch.has-hover ? #ffffff08 : transparent;
+                border-width: 0px;
+                border-color: #ffffff1e;
+                opacity: !root.lyrics-timed || self.is-active ? 1.0 : lyric-touch.has-hover ? 0.85 : 0.65;
+                animate opacity, background { duration: root.reduced-motion ? 0ms : 120ms; }
+
+                lyric-stack := VerticalLayout {
+                    padding-left: root.mobile ? 8px : 12px;
+                    padding-right: root.mobile ? 8px : 12px;
+                    padding-top: 14px;
+                    padding-bottom: 14px;
+                    spacing: 6px;
+                    alignment: center;
+
+                    if line.instrumental || line.words.length == 0 || root.disable-richsync: Text {
+                        horizontal-alignment: root.stage ? center : line.rtl ? right : left;
+                        text: line.instrumental ? "♪  Інструментальна пауза" : line.text;
+                        color: lyric-card.is-active ? #ffffff : Tokens.ink-200;
+                        font-size: lyric-card.text-size;
+                        font-weight: lyric-card.is-active ? 800 : root.lyric-weight;
+                        wrap: word-wrap;
+                    }
+                    if !line.instrumental && line.words.length > 0 && !root.disable-richsync: StyledText {
+                        horizontal-alignment: line.rtl ? right : root.stage ? center : left;
+                        default-font-size: lyric-card.text-size;
+                        default-color: root.lyric-inactive;
+                        text: line.rendered;
+                    }
+                    if line.background-text != "": StyledText {
+                        horizontal-alignment: root.stage ? center : line.rtl ? right : left;
+                        text: line.background-rendered;
+                        default-color: Tokens.ink-200;
+                        default-font-size: 16px;
+                    }
+                    if line.roman_words.length > 0: StyledText {
+                        horizontal-alignment: root.stage ? center : line.rtl ? right : left;
+                        text: line.roman-rendered; default-color: Tokens.ink-200; default-font-size: 14px;
+                    }
+                    if line.romanization != "" && line.roman_words.length == 0: Text {
+                        horizontal-alignment: root.stage ? center : line.rtl ? right : left;
+                        text: line.romanization; color: Tokens.ink-200; font-size: 14px; wrap: word-wrap;
+                    }
+                    if line.translation != "": Text {
+                        horizontal-alignment: root.stage ? center : line.rtl ? right : left;
+                        text: line.translation;
+                        color: lyric-card.is-active ? Tokens.ink-150 : Tokens.ink-300;
+                        font-size: 14px;
+                        font-weight: 500;
+                        wrap: word-wrap;
+                    }
+                }
+                lyric-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { if root.lyrics-timed { root.seek-to(max(0, line.start-ms - root.lyrics-offset)); } }
+                }
+            }
+            if root.credits != "" && !root.stage: Text {
+                text: "Автори: " + root.credits; color: Tokens.ink-300; font-size: 12px; wrap: word-wrap;
+            }
+        }
+
+    }
+    if root.user-scrolling && !root.external-view: Action {
+        x: (root.width - self.width) / 2; y: root.height - 44px;
+        text: "Повернутися до слів"; primary: true; clicked => { root.resume(); }
+    }
+}

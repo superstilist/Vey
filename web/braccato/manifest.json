@@ -1,0 +1,26 @@
+{
+  "repository": "https://github.com/better-lyrics/braccato",
+  "commit": "1e6b6954b1c18136274681a9bf4985efb2332b01",
+  "packages": [
+    "core",
+    "parsers",
+    "highlight",
+    "provider-blyrics",
+    "types"
+  ],
+  "bundledModules": 96,
+  "assets": {
+    "widget.js": {
+      "bytes": 258218,
+      "sha256": "ccd79caa36619dd1288abbd29141cd65a84672b8f86d2f4bcda340e8d65dd250"
+    },
+    "widget.css": {
+      "bytes": 675441,
+      "sha256": "2aed6d0ace94c26c38df674e80a974e3b41a53c9039dbe8d3028dbdbe8fa0eab"
+    },
+    "LICENSES.txt": {
+      "bytes": 14337,
+      "sha256": "78ccac3af37acd932a8e97c201066d378d142d55a4594cb924bafbca826c0569"
+    }
+  }
+}

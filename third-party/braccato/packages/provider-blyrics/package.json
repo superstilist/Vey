@@ -1,0 +1,43 @@
+{
+	"name": "@braccato/provider-blyrics",
+	"version": "0.2.3",
+	"description": "Lyrics provider chain with priority and validation",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/better-lyrics/braccato",
+		"directory": "packages/provider-blyrics"
+	},
+	"homepage": "https://braccato.boidu.dev",
+	"keywords": ["lyrics", "provider", "lrclib", "musixmatch"],
+	"sideEffects": false,
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": ["dist"],
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"build": "vite build",
+		"dev": "vite build --watch",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"test:watch": "vitest"
+	},
+	"dependencies": {
+		"@braccato/parsers": "workspace:^0.4.0"
+	},
+	"devDependencies": {
+		"typescript": "^5.7.3",
+		"vite": "^6.0.7",
+		"vite-plugin-dts": "^4.3.0",
+		"vitest": "^3.0.4"
+	}
+}

@@ -1,0 +1,1426 @@
+import "../assets/fonts/Roboto.ttf";
+import { LineEdit, ListView, ScrollView, Slider, ComboBox, TextEdit } from "std-widgets.slint";
+import { WordRow, LyricRow } from "lyric-types.slint";
+export { WordRow, LyricRow } from "lyric-types.slint";
+import { BraccatoLyrics } from "braccato-lyrics.slint";
+import { Tokens } from "tokens.slint";
+import { Action, NavItem, Artwork, Transport, SeekBar } from "controls.slint";
+
+export struct TrackRow { title: string, artist: string, album: string, duration: string, path: string, art: image, liked: bool }
+export struct PlaylistRow { id: string, name: string, detail: string }
+
+
+export component MainWindow inherits Window {
+    title: "PlayerVF";
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    min-width: 360px;
+    min-height: 560px;
+    background: Tokens.neutral-0;
+    default-font-family: "Roboto";
+    default-font-size: 14px;
+
+    in-out property <string> active-view: "home";
+    // Keep the current page mounted until its opacity transition completes.
+    out property <string> displayed-view: "home";
+    changed active-view => {
+        root.player-tools = false;
+        if root.active-view == "lyrics" || root.displayed-view != "lyrics" || root.lyrics-reduced-motion {
+            root.displayed-view = root.active-view;
+        }
+    }
+    Timer {
+        interval: 200ms;
+        running: root.active-view != root.displayed-view;
+        triggered => { root.displayed-view = root.active-view; }
+    }
+    in-out property <string> search-query;
+    in-out property <string> current-title: "Нічого не грає";
+    in-out property <string> current-artist: "Виберіть пісню";
+    in-out property <string> current-album: "";
+    in-out property <image> current-art;
+    in-out property <image> ambient-frame;
+    in-out property <string> player-state: "stopped";
+    in-out property <bool> current-liked;
+    in-out property <float> position;
+    in-out property <float> duration;
+    in-out property <string> time-label: "0:00 / 0:00";
+    in-out property <float> volume: 1;
+    in-out property <float> rate: 1;
+    in-out property <bool> shuffle;
+    in-out property <string> repeat-mode: "off";
+    in-out property <string> art-mode: "cover";
+    in-out property <string> status;
+    in-out property <[TrackRow]> tracks;
+    in-out property <[TrackRow]> queue-tracks;
+    in-out property <[PlaylistRow]> playlists;
+    in-out property <[string]> sources;
+    in-out property <string> playlist-title: "Список відтворення";
+    in-out property <[LyricRow]> lyric-lines;
+    in-out property <bool> lyrics-timed: true;
+    in-out property <string> lyrics-credits;
+    in-out property <string> lyrics-document;
+    in-out property <bool> lyrics-web-ready;
+    in-out property <bool> lyrics-web-required;
+    in-out property <string> lyrics-renderer-error;
+    in-out property <int> lyrics-renderer-generation;
+    out property <float> backdrop-x: content.x / 1px;
+    out property <float> backdrop-y: content.y / 1px;
+    out property <float> backdrop-width: content.width / 1px;
+    out property <float> backdrop-height: content.height / 1px;
+    out property <bool> tools-visible: tools-panel.visible;
+    out property <float> tools-x: (content.x + tools-panel.x) / 1px;
+    out property <float> tools-y: (content.y + tools-panel.y) / 1px;
+    out property <float> tools-width: tools-panel.width / 1px;
+    out property <float> tools-height: tools-panel.height / 1px;
+    in-out property <float> lyrics-widget-x;
+    in-out property <float> lyrics-widget-y;
+    in-out property <float> lyrics-widget-width;
+    in-out property <float> lyrics-widget-height;
+    in-out property <float> lyrics-editor-x;
+    in-out property <float> lyrics-editor-y;
+    in-out property <float> lyrics-editor-width;
+    in-out property <float> lyrics-editor-height;
+    in-out property <bool> lyrics-stage: false;
+    in-out property <bool> lyrics-passive-scroll: false;
+    callback lyric-mode-changed(bool,bool,bool);
+    in-out property <bool> lyrics-reduced-motion: false;
+    in-out property <bool> lyrics-user-scrolling: false;
+    in-out property <float> lyrics-scroll-ratio: 0.37;
+    in-out property <int> lyrics-lookahead-ms: 540;
+    in-out property <int> lyrics-scroll-duration-ms: 750;
+    in-out property <float> lyrics-passive-seconds: 3.5;
+    in-out property <bool> lyrics-disable-richsync: false;
+    in-out property <int> lyrics-richsync-offset-ms;
+    in-out property <int> lyrics-line-offset-ms;
+    in-out property <int> lyrics-effective-offset-ms;
+    callback lyric-user-scroll();
+    callback lyric-resume();
+    callback lyric-geometry(int, float, float);
+    in-out property <float> lyrics-viewport-height;
+    in-out property <float> lyrics-scroll-target;
+    in-out property <int> active-lyric-index: -1;
+    in-out property <int> lyrics-position;
+    in-out property <int> lyrics-offset;
+    in-out property <string> lyrics-status: "Виберіть пісню, щоб побачити слова";
+    in-out property <[string]> providers;
+    in-out property <int> provider-index;
+    in-out property <string> lyrics-provider: "auto";
+    in-out property <float> lyric-size: 28;
+    in-out property <color> lyric-active: Tokens.ink-100;
+    in-out property <color> lyric-inactive: Tokens.ink-300;
+    in-out property <int> lyric-weight: 700;
+    in-out property <string> lyrics-paste;
+    in-out property <string> jwt-status: "Потрібна перевірка";
+    in-out property <bool> sidebar-collapsed;
+    in-out property <bool> focus-player: false;
+    out property <float> player-reveal: root.active-view == "lyrics" ? 1 : 0;
+    animate player-reveal { duration: root.lyrics-reduced-motion ? 0ms : 180ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    in-out property <bool> player-tools: false;
+    in-out property <string> player-tab: "lyrics";
+    private property <bool> immersive: root.displayed-view == "lyrics" && (root.focus-player || root.mobile);
+
+    pure function clock(seconds: float) -> string {
+        return floor(max(0, seconds) / 60) + ":" + (Math.mod(floor(max(0, seconds)), 60) < 10 ? "0" : "") + Math.mod(floor(max(0, seconds)), 60);
+    }
+
+    in-out property <bool> mobile: false;
+    changed width => { root.mobile = root.width < 800px; }
+
+    in-out property <string> dialog;
+    in-out property <string> source-kind: "folder";
+    private property <string> new-name;
+    private property <string> selected-chip: "Всі";
+
+    callback navigate(string);
+    callback search(string);
+    callback select-track(int);
+    callback play-toggle();
+    callback previous-track();
+    callback next-track();
+    callback seek-to(int);
+    callback volume-changed(float);
+    callback rate-changed(float);
+    callback toggle-like(int);
+    callback toggle-shuffle();
+    callback toggle-repeat();
+    callback change-art-mode();
+    callback add-path(string, string);
+    callback scan();
+    callback add-source(string);
+    callback remove-source(int);
+    callback create-playlist(string);
+    callback open-playlist(string);
+    callback add-to-playlist(string);
+    callback remove-from-playlist(int);
+    callback delete-playlist();
+    callback refresh-lyrics();
+    callback request-lyrics();
+    callback choose-provider(int);
+    callback adjust-offset(int);
+    callback provider-changed(string);
+    callback import-lyrics(string);
+    callback copy-lyrics();
+    in-out property <string> match-title;
+    in-out property <string> match-artist;
+    in-out property <string> match-album;
+    callback apply-tags(string, string, string);
+    callback download(int);
+    callback radio();
+    callback sync-tags();
+    callback restore-tags();
+    callback migrate();
+    callback backup();
+    callback restore();
+    callback open-login();
+    callback open-challenge();
+    callback submit-auth(string);
+    private property <string> auth-token;
+    changed dialog => { if root.dialog != "auth" { root.auth-token = ""; } }
+    callback clear-history();
+
+    // Top Navigation Bar
+    Rectangle {
+        x: 0px; y: 0px; height: 64px; width: 100%;
+        visible: !root.immersive;
+        background: Tokens.neutral-0;
+
+        HorizontalLayout {
+            x: 0px; y: 0px; width: 100%; height: 100%;
+            padding-left: 16px; padding-right: 16px; padding-top: 10px; padding-bottom: 10px;
+            spacing: 12px;
+            Action {
+                icon: @image-url("../assets/icons/Menu.svg");
+                label: "Меню";
+                clicked => { root.sidebar-collapsed = !root.sidebar-collapsed; }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                width: root.mobile ? 32px : (root.sidebar-collapsed ? 110px : 184px);
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 14px;
+                        background: @linear-gradient(135deg, Tokens.brand-300 0%, Tokens.brand-600 100%);
+                        Image {
+                            source: @image-url("../assets/icons/Play.svg");
+                            width: 14px; height: 14px;
+                            x: 8px; y: 7px;
+                            colorize: Tokens.brand-ink;
+                        }
+                    }
+                }
+                if !root.mobile: Text {
+                    text: "PlayerVF";
+                    color: Tokens.ink-100;
+                    font-size: 21px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                max-width: root.mobile ? root.width : 560px;
+                height: 42px;
+                border-radius: 21px;
+                background: #1c1c20;
+                border-width: 0px;
+                border-color: #ffffff18;
+                HorizontalLayout {
+                    padding-left: 16px; padding-right: 6px; spacing: 10px;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            source: @image-url("../assets/icons/Search.svg");
+                            width: 18px; height: 18px;
+                            colorize: Tokens.ink-200;
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        if root.search-query == "": Text {
+                            text: root.mobile ? "Пошук музики" : "Шукати пісні, альбоми, виконавців, подкасти";
+                            color: Tokens.ink-300;
+                            width: 100%; height: 100%;
+                            vertical-alignment: center;
+                            font-size: 14px;
+                            overflow: elide;
+                        }
+                        TextInput {
+                            text <=> root.search-query;
+                            width: 100%; height: 100%;
+                            color: Tokens.ink-100;
+                            font-size: 14px;
+                            vertical-alignment: center;
+                            single-line: true;
+                            accepted => { root.search(self.text); }
+                        }
+                    }
+                    if root.search-query != "": VerticalLayout {
+                        alignment: center;
+                        Action {
+                            icon: @image-url("../assets/icons/X.svg");
+                            label: "Очистити пошук";
+                            clicked => { root.search-query = ""; root.search(""); }
+                        }
+                    }
+                }
+            }
+            if !root.mobile: Rectangle { horizontal-stretch: 1; }
+            if !root.mobile: Action {
+                icon: @image-url("../assets/icons/Radio.svg");
+                label: "Радіо за треком";
+                clicked => { root.radio(); }
+            }
+            if !root.mobile: Action {
+                text: "YouTube Music";
+                outlined: true;
+                clicked => { root.open-login(); }
+            }
+        }
+    }
+
+    // Left Navigation Rail / Sidebar
+    Rectangle {
+        x: 0px; y: 64px;
+        width: root.mobile ? 0px : root.sidebar-collapsed ? 72px : 240px;
+        height: root.height - 136px;
+        visible: !root.mobile && !root.immersive;
+        background: Tokens.neutral-0;
+
+        VerticalLayout {
+            x: 0px; y: 0px; width: 100%; height: 100%;
+            padding-left: 12px; padding-right: 12px; padding-top: 12px; padding-bottom: 12px;
+            spacing: 4px;
+            NavItem { text: "Головна"; icon: @image-url("../assets/icons/House.svg"); selected: root.displayed-view == "home"; collapsed: root.sidebar-collapsed; clicked => { root.navigate("home"); } }
+            NavItem { text: "Огляд"; icon: @image-url("../assets/icons/Compass.svg"); selected: root.displayed-view == "explore"; collapsed: root.sidebar-collapsed; clicked => { root.navigate("explore"); } }
+            NavItem { text: "Бібліотека"; icon: @image-url("../assets/icons/Library.svg"); selected: root.displayed-view == "library"; collapsed: root.sidebar-collapsed; clicked => { root.navigate("library"); } }
+            NavItem { text: "Сподобалось"; icon: @image-url("../assets/icons/Heart.svg"); selected: root.displayed-view == "liked"; collapsed: root.sidebar-collapsed; clicked => { root.navigate("liked"); } }
+            NavItem { text: "Налаштування"; icon: @image-url("../assets/icons/Settings.svg"); selected: root.displayed-view == "settings"; collapsed: root.sidebar-collapsed; clicked => { root.navigate("settings"); } }
+            Rectangle { height: 8px; }
+            if !root.sidebar-collapsed: Action {
+                text: "Новий список";
+                icon: @image-url("../assets/icons/Plus.svg");
+                outlined: true;
+                clicked => { root.dialog = "create"; }
+            }
+            if root.sidebar-collapsed: Action {
+                icon: @image-url("../assets/icons/Plus.svg");
+                label: "Новий список відтворення";
+                outlined: true;
+                clicked => { root.dialog = "create"; }
+            }
+            Rectangle { height: 12px; }
+
+            Rectangle { height: 6px; }
+            if !root.sidebar-collapsed: ListView {
+                vertical-stretch: 1;
+                for item in root.playlists: pl-row := Rectangle {
+                    height: 56px;
+                    border-radius: 8px;
+                    background: pl-touch.has-hover ? #ffffff10 : transparent;
+                    VerticalLayout {
+                        padding-left: 12px; padding-right: 12px; padding-top: 8px; padding-bottom: 8px;
+                        spacing: 2px;
+                        alignment: center;
+                        Text { text: item.name; color: Tokens.ink-100; font-size: 13px; font-weight: 600; overflow: elide; }
+                        Text { text: item.detail; color: Tokens.ink-300; font-size: 11px; overflow: elide; }
+                    }
+                    pl-touch := TouchArea { mouse-cursor: pointer; clicked => { root.open-playlist(item.id); } }
+                }
+            }
+            if root.sidebar-collapsed: Rectangle { vertical-stretch: 1; }
+        }
+    }
+
+    // Main Content Canvas
+    content := Rectangle {
+        x: 8px + (root.immersive || root.mobile ? 0px : root.sidebar-collapsed ? 72px : 240px);
+        y: root.immersive ? 8px : 64px;
+        width: root.width - self.x - 8px;
+        height: root.immersive ? root.height - 16px : root.height - 152px - (root.mobile ? 56px : 0px);
+        border-radius: root.mobile ? 20px : 28px;
+        clip: true;
+        background: Tokens.neutral-0;
+
+        if root.displayed-view == "home" || root.displayed-view == "lyrics": Rectangle {
+            width: 100%; height: 100%;
+            background: @linear-gradient(125deg, #26394b 0%, #594051 45%, #342b26 75%, #15282d 100%);
+            Image { source: root.ambient-frame; width: 100%; height: 100%; image-fit: fill; }
+            Rectangle {
+                width: 100%; height: 100%;
+                background: root.displayed-view == "home"
+                    ? @linear-gradient(180deg, #08080890 0%, #080808d9 55%, #080808fa 100%)
+                    : @linear-gradient(110deg, #08080880 0%, #08080899 55%, #080808b0 100%);
+            }
+        }
+
+        // Non-Lyrics Views (Home, Explore, Library, Liked, Playlist, Queue, Search, Settings)
+        if root.displayed-view != "lyrics": ScrollView {
+            width: 100%; height: 100%;
+            content-width: self.width;
+            content-height: (root.displayed-view == "home" && !root.mobile) || root.displayed-view == "settings" ? max(self.height, page-layout.preferred-height) : self.height;
+            page-layout := VerticalLayout {
+                padding-left: root.mobile ? 16px : max(40px, (content.width - 1440px) / 2);
+                padding-right: root.mobile ? 16px : max(40px, (content.width - 1440px) / 2);
+                padding-top: root.mobile ? 20px : 32px;
+                padding-bottom: 24px;
+                spacing: root.displayed-view == "home" ? 22px : 16px;
+
+                if root.displayed-view == "home" || root.displayed-view == "explore": ScrollView {
+                    height: 36px;
+                    content-height: 36px;
+                    content-width: max(self.width, chips-row.preferred-width);
+                    chips-row := HorizontalLayout {
+                        height: 36px; spacing: 8px; alignment: start;
+                        for chip in ["Всі", "Подкасти", "Енергія", "Відпочинок", "Гарний настрій", "Тренування", "Вечірка", "Зосередження", "Романтика", "Сон"]: Action {
+                            text: chip;
+                            chip: true;
+                            selected: root.selected-chip == chip;
+                            clicked => {
+                                root.selected-chip = chip;
+                                if chip != "Всі" { root.search(chip); } else { root.navigate("home"); }
+                            }
+                        }
+                    }
+                }
+
+                if root.displayed-view == "home": HorizontalLayout {
+                    height: 22px; spacing: 8px; alignment: start;
+                    Rectangle {
+                        width: 20px; height: 20px; border-radius: 10px;
+                        background: Tokens.brand-500;
+                        Text { text: "P"; color: Tokens.brand-ink; font-size: 11px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Text { text: "ВАША МУЗИКА · PLAYERVF"; color: Tokens.ink-200; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; vertical-alignment: center; }
+                }
+
+                if root.displayed-view == "home": Rectangle {
+                    height: root.mobile ? 170px : 190px;
+                    border-radius: 24px;
+                    background: #ffffff08;
+                    border-width: 1px; border-color: #ffffff16;
+                    HorizontalLayout {
+                        padding: root.mobile ? 20px : 28px; spacing: 24px;
+                        VerticalLayout {
+                            alignment: center; spacing: 12px;
+                            Text { text: "У ВАШОМУ РИТМІ"; color: #ffffffa0; font-size: 10px; font-weight: 700; letter-spacing: 1.6px; }
+                            Text { text: root.duration > 0 ? root.current-title : "Музика для вашого моменту"; color: Tokens.ink-100; font-size: root.mobile ? 24px : 34px; font-weight: 700; overflow: elide; }
+                            Text { text: root.duration > 0 ? root.current-artist : "Улюблені пісні. Нові відкриття. Ваш власний ритм."; color: Tokens.ink-150; font-size: 13px; overflow: elide; }
+                            HorizontalLayout {
+                                alignment: start;
+                                Action { text: root.duration > 0 ? "До програвача" : "Слухати музику"; primary: true; icon: @image-url("../assets/icons/Play.svg"); clicked => { if root.duration > 0 { root.navigate("lyrics"); } else { root.select-track(0); } } }
+                            }
+                        }
+                        if !root.mobile: Artwork { art: root.current-art; width: 118px; height: 118px; border-radius: 14px; }
+                    }
+                }
+
+                HorizontalLayout {
+                    height: root.displayed-view == "home" && !root.mobile ? 48px : 44px;
+                    spacing: 10px;
+                    Text {
+                        text: root.displayed-view == "home" ? "Послухати ще раз" :
+                              root.displayed-view == "explore" ? "Відкривайте нову музику" :
+                              root.displayed-view == "library" ? "Бібліотека" :
+                              root.displayed-view == "liked" ? "Музика, яка сподобалась" :
+                              root.displayed-view == "settings" ? "Налаштування" :
+                              root.displayed-view == "playlist" ? root.playlist-title :
+                              root.displayed-view == "queue" ? "Черга відтворення" : "Результати пошуку";
+                        color: Tokens.ink-100;
+                        font-size: root.mobile ? 24px : root.displayed-view == "home" ? 28px : 30px;
+                        font-weight: 700;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    if root.displayed-view == "explore": Action {
+                        text: "Оновити";
+                        icon: @image-url("../assets/icons/RefreshCw.svg");
+                        outlined: true;
+                        clicked => { root.navigate("explore"); }
+                    }
+                    if root.displayed-view == "library": Action {
+                        text: root.mobile ? "" : "Додати папку";
+                        icon: @image-url("../assets/icons/FolderPlus.svg");
+                        outlined: true;
+                        clicked => { root.add-source("folder"); }
+                    }
+                    if root.displayed-view == "library": Action {
+                        icon: @image-url("../assets/icons/RefreshCw.svg");
+                        label: "Сканувати бібліотеку";
+                        outlined: true;
+                        clicked => { root.scan(); }
+                    }
+                    if root.displayed-view == "library" && !root.mobile: Action {
+                        text: "Синхронізувати з YT";
+                        outlined: true;
+                        clicked => { root.sync-tags(); }
+                    }
+                }
+
+                if root.status != "": Rectangle {
+                    height: 36px; border-radius: 10px;
+                    background: #fb923c1a; border-width: 0px; border-color: #ffffff18;
+                    HorizontalLayout {
+                        padding-left: 14px; padding-right: 14px;
+                        Text { text: root.status; color: Tokens.brand-300; font-size: 12px; font-weight: 600; vertical-alignment: center; overflow: elide; }
+                    }
+                }
+
+                if root.displayed-view == "settings": VerticalLayout {
+                    spacing: 18px; padding-bottom: 24px;
+                        Rectangle {
+                            background: #141418cc; border-radius: 16px; border-width: 0px; border-color: #ffffff14;
+                            VerticalLayout {
+                                padding: 20px; spacing: 14px;
+                                Text { text: "Відтворення та аудіо"; color: Tokens.ink-100; font-size: 18px; font-weight: 700; }
+                                HorizontalLayout {
+                                    spacing: 16px;
+                                    Text { text: "Швидкість відтворення"; color: Tokens.ink-200; width: 180px; vertical-alignment: center; }
+                                    Slider { minimum: 0.5; maximum: 2; value <=> root.rate; changed(value) => { root.rate-changed(value); } }
+                                    Text { text: round(root.rate * 100) / 100 + "×"; color: Tokens.brand-300; font-weight: 700; width: 48px; vertical-alignment: center; }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            background: #141418cc; border-radius: 16px; border-width: 0px; border-color: #ffffff14;
+                            VerticalLayout {
+                                padding: 20px; spacing: 12px;
+                                Text { text: "Джерела музики"; color: Tokens.ink-100; font-size: 18px; font-weight: 700; }
+                                Text { text: "Системна папка «Музика» сканується автоматично разом із вибраними папками."; color: Tokens.ink-300; font-size: 13px; wrap: word-wrap; }
+                                for source[index] in root.sources: Rectangle {
+                                    height: 42px; border-radius: 8px; background: #ffffff08;
+                                    HorizontalLayout {
+                                        padding-left: 12px; padding-right: 8px; spacing: 8px;
+                                        Text { text: source; color: Tokens.ink-150; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                                        Action { text: "Видалити"; clicked => { root.remove-source(index); } }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Action { text: "Додати папку"; icon: @image-url("../assets/icons/FolderPlus.svg"); outlined: true; clicked => { root.add-source("folder"); } }
+                                    Action { text: "Додати шлях"; outlined: true; clicked => { root.dialog = "source"; root.new-name = ""; } }
+                                    Action { text: "Додати файли"; outlined: true; clicked => { root.add-source("file"); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            background: #141418cc; border-radius: 16px; border-width: 0px; border-color: #ffffff14;
+                            VerticalLayout {
+                                padding: 20px; spacing: 14px;
+                                Text { text: "Слова пісень (Better Lyrics)"; color: Tokens.ink-100; font-size: 18px; font-weight: 700; }
+                                HorizontalLayout {
+                                    spacing: 16px;
+                                    Text { text: "Провайдер слів"; color: Tokens.ink-200; width: 140px; vertical-alignment: center; }
+                                    ComboBox { model: ["auto", "dacubeking", "unison", "lrclib", "youtube"]; current-value <=> root.lyrics-provider; selected(value) => { root.provider-changed(value); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 16px;
+                                    Text { text: "Тема оформлення"; color: Tokens.ink-200; width: 140px; vertical-alignment: center; }
+                                    Text { text: "Braccato"; color: Tokens.ink-100; vertical-alignment: center; }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    Action { text: "Перевірка Turnstile"; outlined: true; clicked => { root.open-challenge(); } }
+                                    Action { text: "Вставити JWT"; clicked => { root.dialog = "auth"; } }
+                                    Text { text: root.jwt-status; color: Tokens.ink-300; vertical-alignment: center; }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            background: #141418cc; border-radius: 16px; border-width: 0px; border-color: #ffffff14;
+                            VerticalLayout {
+                                padding: 20px; spacing: 14px;
+                                Text { text: "Дані, синхронізація та YouTube Music"; color: Tokens.ink-100; font-size: 18px; font-weight: 700; }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Action { text: "Перенести дані"; outlined: true; clicked => { root.migrate(); } }
+                                    Action { text: "Експорт"; outlined: true; clicked => { root.backup(); } }
+                                    Action { text: "Імпорт"; outlined: true; clicked => { root.restore(); } }
+                                    Action { text: "Очистити історію"; outlined: true; clicked => { root.clear-history(); } }
+                                    Action { text: "Відновити теги"; outlined: true; clicked => { root.restore-tags(); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                                Text { text: "Вхід відкривається в системному браузері. Уподобання та списки відтворення зберігаються локально."; color: Tokens.ink-300; font-size: 13px; wrap: word-wrap; }
+                                HorizontalLayout {
+                                    Action { text: "Відкрити YouTube Music"; outlined: true; clicked => { root.open-login(); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                            }
+                        }
+                }
+
+                if root.displayed-view != "settings": VerticalLayout {
+                    spacing: 18px;
+                    if root.displayed-view == "home" || root.displayed-view == "explore": ScrollView {
+                        height: root.mobile ? 218px : (content.width < 900px ? 236px : 284px);
+                        content-width: max(self.width, min(root.tracks.length, 8) * ((root.mobile ? 148px : max(156px, min(204px, (content.width - 152px) / 5))) + 20px));
+                        content-height: self.height;
+                        HorizontalLayout {
+                            spacing: 20px; alignment: start;
+                            for track[index] in root.tracks: Rectangle {
+                                width: root.mobile ? 148px : max(156px, min(204px, (content.width - 152px) / 5));
+                                visible: index < 8;
+                                border-radius: 20px;
+                                background: card-touch.has-hover ? #ffffff18 : #ffffff06;
+                                animate background { duration: 100ms; }
+                                VerticalLayout {
+                                    spacing: 8px; padding: 8px;
+                                    Artwork { art: track.art; height: self.width; tone: index; border-radius: 16px; }
+                                    Text { text: track.title; color: Tokens.ink-100; font-size: 14px; font-weight: 700; overflow: elide; }
+                                    Text { text: "Пісня · " + track.artist; color: Tokens.ink-200; font-size: 12px; overflow: elide; }
+                                    Rectangle { vertical-stretch: 1; }
+                                }
+                                if card-touch.has-hover: Rectangle {
+                                    width: 44px; height: 44px;
+                                    x: parent.width - 60px; y: parent.width - 60px;
+                                    border-radius: 22px;
+                                    background: Tokens.brand-500;
+                                    Image { source: @image-url("../assets/icons/Play.svg"); width: 20px; height: 20px; x: 13px; y: 12px; colorize: Tokens.brand-ink; }
+                                }
+                                card-touch := TouchArea { mouse-cursor: pointer; clicked => { root.select-track(index); } }
+                                accessible-role: button;
+                                accessible-label: track.title + " · " + track.artist;
+                                accessible-action-default => { root.select-track(index); }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        height: root.mobile ? 40px : 52px;
+                        spacing: 10px;
+                        Text {
+                            text: root.displayed-view == "home" ? "Швидкий вибір" : root.tracks.length + " композицій";
+                            color: Tokens.ink-100;
+                            font-size: root.displayed-view == "home" && !root.mobile ? 26px : 16px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        Action { text: "Відтворити все"; icon: @image-url("../assets/icons/Play.svg"); outlined: true; clicked => { root.select-track(0); } }
+                        if root.displayed-view == "playlist": Action { text: "Видалити список"; outlined: true; clicked => { root.delete-playlist(); } }
+                    }
+
+                    if root.tracks.length == 0: Rectangle {
+                        height: 220px; border-radius: 16px; background: #ffffff06; border-width: 0px; border-color: #ffffff10;
+                        VerticalLayout {
+                            alignment: center; spacing: 12px; padding: 24px;
+                            Text { text: root.displayed-view == "search" ? "Нічого не знайдено" : "Тут з’явиться ваша музика"; color: Tokens.ink-100; font-size: 20px; font-weight: 700; horizontal-alignment: center; }
+                            Text { text: "Додайте папку з музикою або скористайтеся пошуком YouTube Music"; color: Tokens.ink-300; horizontal-alignment: center; wrap: word-wrap; }
+                        }
+                    }
+
+                    if root.displayed-view == "home" && !root.mobile: HorizontalLayout {
+                        spacing: 20px;
+                        for col in [0, 1, 2]: VerticalLayout {
+                            spacing: 4px;
+                            for ri in [0, 1, 2, 3]: tile := Rectangle {
+                                height: 64px;
+                                border-radius: 10px;
+                                visible: col * 4 + ri < root.tracks.length;
+                                property <TrackRow> song: root.tracks[col * 4 + ri];
+                                background: tile-touch.has-hover ? #ffffff12 : transparent;
+                                HorizontalLayout {
+                                    padding: 8px; spacing: 12px;
+                                    Artwork { art: tile.song.art; width: 48px; height: 48px; tone: col * 4 + ri; border-radius: 12px; }
+                                    VerticalLayout {
+                                        spacing: 4px; alignment: center; horizontal-stretch: 1;
+                                        Text { text: tile.song.title; color: Tokens.ink-100; font-size: 14px; font-weight: 600; overflow: elide; }
+                                        Text { text: tile.song.artist + " · " + tile.song.album; color: Tokens.ink-300; font-size: 12px; overflow: elide; }
+                                    }
+                                }
+                                tile-touch := TouchArea { mouse-cursor: pointer; clicked => { root.select-track(col * 4 + ri); } }
+                            }
+                            Rectangle { vertical-stretch: 1; }
+                        }
+                    }
+
+                    if root.displayed-view != "home" || root.mobile: ListView {
+                        for track[index] in root.tracks: Rectangle {
+                            height: 64px;
+                            border-radius: 10px;
+                            background: track.title == root.current-title && track.artist == root.current-artist ? #ffffff12 : row-touch.has-hover ? #ffffff10 : transparent;
+                            row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.select-track(index); } }
+                            HorizontalLayout {
+                                padding-left: 10px; padding-right: 10px; padding-top: 8px; padding-bottom: 8px;
+                                spacing: 14px;
+                                Artwork { art: track.art; width: 48px; height: 48px; tone: index; border-radius: 12px; }
+                                VerticalLayout {
+                                    spacing: 4px; alignment: center; horizontal-stretch: 1;
+                                    Text { text: track.title; color: track.title == root.current-title && track.artist == root.current-artist ? Tokens.brand-300 : Tokens.ink-100; font-size: 14px; font-weight: 600; overflow: elide; }
+                                    Text { text: track.artist; color: Tokens.ink-300; font-size: 12px; overflow: elide; }
+                                }
+                                if !root.mobile: Text { text: track.album; color: Tokens.ink-300; horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
+                                Action { icon: @image-url("../assets/icons/Heart.svg"); label: "Подобається"; selected: track.liked; clicked => { root.toggle-like(index); } }
+                                if !root.mobile: Text { text: track.duration; color: Tokens.ink-300; width: 48px; font-size: 12px; vertical-alignment: center; horizontal-alignment: right; }
+                                if !root.mobile: Action { icon: @image-url("../assets/icons/Download.svg"); label: "Завантажити"; clicked => { root.download(index); } }
+                                if root.displayed-view == "playlist": Action { icon: @image-url("../assets/icons/X.svg"); label: "Видалити зі списку"; clicked => { root.remove-from-playlist(index); } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // =========================================================================
+        // Now playing: open artwork stage and synchronized lyrics
+        // =========================================================================
+        if root.displayed-view == "lyrics": VerticalLayout {
+            x: 0px; y: 0px; width: 100%; height: 100%;
+            opacity: root.player-reveal;
+            padding-left: root.mobile ? 16px : (root.immersive ? max(44px, (content.width - 1560px) / 2) : max(40px, (content.width - 1480px) / 2));
+            padding-right: root.mobile ? 16px : (root.immersive ? max(44px, (content.width - 1560px) / 2) : max(40px, (content.width - 1480px) / 2));
+            padding-top: root.mobile ? 12px : (root.immersive ? 22px : 18px);
+            padding-bottom: root.mobile ? 12px : (root.immersive ? 24px : 18px);
+            spacing: root.mobile ? 10px : (root.immersive ? 18px : 14px);
+
+            // Player Stage Header Bar
+            HorizontalLayout {
+                height: 40px;
+                spacing: 10px;
+                Action {
+                    icon: @image-url("../assets/icons/ChevronDown.svg");
+                    label: "Згорнути програвач";
+                    outlined: true;
+                    clicked => { root.navigate("home"); }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    Text {
+                        text: root.mobile ? root.current-title : "Зараз грає";
+                        color: Tokens.ink-100;
+                        font-size: 14px;
+                        font-weight: 700;
+                        letter-spacing: 0px;
+                        overflow: elide;
+                    }
+                    if !root.mobile && root.current-album != "": Text {
+                        text: root.current-artist + " · " + root.current-album;
+                        color: Tokens.ink-300;
+                        font-size: 12px;
+                        overflow: elide;
+                    }
+                }
+                // Cover / Clip Pill Switcher
+                if !root.mobile: Rectangle {
+                    height: 36px; width: 176px;
+                    border-radius: 18px;
+                    background: #ffffff12;
+                    border-width: 0px;
+                    border-color: #ffffff18;
+                    HorizontalLayout {
+                        padding: 3px; spacing: 2px;
+                        Rectangle {
+                            horizontal-stretch: 1; border-radius: 15px;
+                            background: root.art-mode == "cover" ? Tokens.ink-100 : transparent;
+                            Text { text: "Обкладинка"; color: root.art-mode == "cover" ? Tokens.neutral-0 : Tokens.ink-200; font-size: 12px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { mouse-cursor: pointer; clicked => { if root.art-mode != "cover" { root.change-art-mode(); } } }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1; border-radius: 15px;
+                            background: root.art-mode != "cover" ? Tokens.ink-100 : transparent;
+                            Text { text: "Кліп"; color: root.art-mode != "cover" ? Tokens.neutral-0 : Tokens.ink-200; font-size: 12px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { mouse-cursor: pointer; clicked => { if root.art-mode == "cover" { root.change-art-mode(); } } }
+                        }
+                    }
+                }
+                if !root.mobile: Action {
+                    icon: @image-url("../assets/icons/MonitorPlay.svg");
+                    label: "Режим фокусування";
+                    selected: root.immersive;
+                    outlined: true;
+                    clicked => { root.focus-player = !root.focus-player; }
+                }
+                Action {
+                    icon: @image-url("../assets/icons/Settings.svg");
+                    label: "Інструменти слів пісні";
+                    selected: root.player-tools;
+                    outlined: true;
+                    clicked => { root.player-tools = !root.player-tools; }
+                }
+            }
+
+            // Main Split Stage: Left Hero Vinyl/Cover Card + Right Synchronized Lyrics & Queue
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: root.immersive ? 64px : 40px;
+
+                // Left Column: Album Art Showcase + Track Metadata + Full Studio Transport Deck
+                if !root.mobile: Rectangle {
+                    width: min(content.width * (root.immersive ? 0.40 : 0.38), root.immersive ? 500px : 430px);
+                    background: transparent;
+                    border-radius: 24px;
+                    border-width: 0px;
+                    border-color: transparent;
+
+                    VerticalLayout {
+                        padding: root.immersive ? 0px : 12px;
+                        spacing: root.immersive ? 20px : 18px;
+                        alignment: center;
+
+                        // Framed Square Album Artwork with Soft Shadow
+                        HorizontalLayout {
+                            alignment: center;
+                            Rectangle {
+                                property <length> art-edge: min(parent.width, max(132px, content.height - (root.immersive ? 340px : 220px)));
+                                width: self.art-edge;
+                                height: self.art-edge;
+                                border-radius: 24px;
+                                Artwork {
+                                    art: root.current-art;
+                                    width: 100%; height: 100%;
+                                    tone: 0;
+                                    border-radius: 24px;
+                                }
+                            }
+                        }
+
+                        // Track Title, Artist, Quick Like & More Actions
+                        HorizontalLayout {
+                            height: 54px;
+                            spacing: 12px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: 4px;
+                                Text {
+                                    text: root.current-title;
+                                    color: Tokens.ink-100;
+                                    font-size: root.immersive ? 24px : 20px;
+                                    font-weight: 700;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: root.current-artist;
+                                    color: Tokens.ink-200;
+                                    font-size: 15px;
+                                    font-weight: 500;
+                                    overflow: elide;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Action {
+                                        icon: @image-url("../assets/icons/Heart.svg");
+                                        label: "Подобається";
+                                        selected: root.current-liked;
+                                        outlined: true;
+                                        clicked => { root.toggle-like(-1); }
+                                    }
+                                    Action {
+                                        icon: @image-url("../assets/icons/Plus.svg");
+                                        label: "Додати до списку";
+                                        outlined: true;
+                                        clicked => { root.dialog = "add"; }
+                                    }
+                                    Action {
+                                        icon: @image-url("../assets/icons/Ellipsis.svg");
+                                        label: "Дії з композицією";
+                                        selected: root.player-tools;
+                                        outlined: true;
+                                        clicked => { root.player-tools = !root.player-tools; }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Interactive Scrubber, Timestamps & Transport Controls (Full-screen / Focus mode only)
+                        if root.immersive: VerticalLayout {
+                            spacing: 6px;
+                            SeekBar {
+                                position: root.position;
+                                duration: root.duration;
+                                accent: true;
+                                seek(value) => { root.seek-to(round(value * 1000)); }
+                            }
+                            HorizontalLayout {
+                                height: 16px;
+                                Text { text: root.clock(root.position); color: Tokens.ink-200; font-size: 12px; font-weight: 600; }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text {
+                                    text: root.lyrics-timed ? "СИНХРОНІЗОВАНО" : "ТЕКСТ";
+                                    color: Tokens.brand-300;
+                                    font-size: 10px;
+                                    font-weight: 700;
+                                    letter-spacing: 0.8px;
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text { text: root.clock(root.duration); color: Tokens.ink-300; font-size: 12px; font-weight: 600; }
+                            }
+                        }
+
+                        if root.immersive: HorizontalLayout {
+                            height: 60px;
+                            alignment: center;
+                            spacing: 16px;
+                            VerticalLayout {
+                                alignment: center;
+                                Action {
+                                    icon: @image-url("../assets/icons/Shuffle.svg");
+                                    label: "Перемішати";
+                                    selected: root.shuffle;
+                                    clicked => { root.toggle-shuffle(); }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Action {
+                                    icon: @image-url("../assets/icons/SkipBack.svg");
+                                    label: "Попередня композиція";
+                                    clicked => { root.previous-track(); }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Transport {
+                                    playing: root.player-state == "playing";
+                                    clicked => { root.play-toggle(); }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Action {
+                                    icon: @image-url("../assets/icons/SkipForward.svg");
+                                    label: "Наступна композиція";
+                                    clicked => { root.next-track(); }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Action {
+                                    icon: @image-url("../assets/icons/Repeat.svg");
+                                    label: "Повтор";
+                                    selected: root.repeat-mode != "off";
+                                    clicked => { root.toggle-repeat(); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Right Column: Synchronized Lyrics Stage & Inline Up-Next Queue
+                Rectangle {
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    background: transparent;
+                    border-radius: 24px;
+                    border-width: 0px;
+                    border-color: transparent;
+                    VerticalLayout {
+                    padding: root.mobile ? 0px : 18px;
+                    spacing: 14px;
+
+                    // Compact Mobile Now-Playing Header + Transport Card
+                    if root.mobile: Rectangle {
+                        height: 158px;
+                        border-radius: 18px;
+                        background: transparent;
+                        border-width: 0px;
+                        border-color: #ffffff1c;
+                        VerticalLayout {
+                            padding: 12px; spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Artwork { art: root.current-art; width: 56px; height: 56px; tone: 0; border-radius: 10px; }
+                                VerticalLayout {
+                                    alignment: center; horizontal-stretch: 1; spacing: 3px;
+                                    Text { text: root.current-title; color: Tokens.ink-100; font-size: 16px; font-weight: 700; overflow: elide; }
+                                    Text { text: root.current-artist; color: Tokens.ink-200; font-size: 13px; overflow: elide; }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Action { icon: @image-url("../assets/icons/Heart.svg"); selected: root.current-liked; clicked => { root.toggle-like(-1); } }
+                                }
+                            }
+                            SeekBar {
+                                position: root.position;
+                                duration: root.duration;
+                                accent: true;
+                                seek(value) => { root.seek-to(round(value * 1000)); }
+                            }
+                            HorizontalLayout {
+                                height: 42px; alignment: space-between;
+                                Text { text: root.clock(root.position); color: Tokens.ink-300; font-size: 11px; vertical-alignment: center; width: 38px; }
+                                HorizontalLayout {
+                                    spacing: 10px; alignment: center;
+                                    Action { icon: @image-url("../assets/icons/Shuffle.svg"); selected: root.shuffle; clicked => { root.toggle-shuffle(); } }
+                                    Action { icon: @image-url("../assets/icons/SkipBack.svg"); clicked => { root.previous-track(); } }
+                                    Transport { playing: root.player-state == "playing"; brand: true; clicked => { root.play-toggle(); } }
+                                    Action { icon: @image-url("../assets/icons/SkipForward.svg"); clicked => { root.next-track(); } }
+                                    Action { icon: @image-url("../assets/icons/Repeat.svg"); selected: root.repeat-mode != "off"; clicked => { root.toggle-repeat(); } }
+                                }
+                                Text { text: root.clock(root.duration); color: Tokens.ink-300; font-size: 11px; vertical-alignment: center; horizontal-alignment: right; width: 38px; }
+                            }
+                        }
+                    }
+
+                    // Pill Tab Switcher (ТЕКСТ ПІСНІ / ДАЛІ В ЧЕРЗІ / ПОВ’ЯЗАНІ) + Provider Badge
+                    HorizontalLayout {
+                        height: 42px;
+                        spacing: 12px;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            border-radius: 21px;
+                            background: transparent;
+                            border-width: 0px;
+                            border-color: #ffffff16;
+                            HorizontalLayout {
+                                padding: 4px; spacing: 4px;
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    border-radius: 17px;
+                                    background: transparent;
+                                    Text {
+                                        text: "ТЕКСТ ПІСНІ";
+                                        color: root.player-tab == "lyrics" ? Tokens.ink-100 : Tokens.ink-300;
+                                        font-size: 12px; font-weight: 700; letter-spacing: 0.8px;
+                                        width: 100%; height: 100%;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                    if root.player-tab == "lyrics": Rectangle {
+                                        y: parent.height - 2px; x: 0px; width: parent.width; height: 2px;
+                                        border-radius: 2px; background: Tokens.ink-100;
+                                    }
+                                    TouchArea { mouse-cursor: pointer; clicked => { root.player-tab = "lyrics"; } }
+                                    accessible-role: button; accessible-label: "Текст пісні";
+                                    accessible-action-default => { root.player-tab = "lyrics"; }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    border-radius: 17px;
+                                    background: transparent;
+                                    Text {
+                                        text: "ДАЛІ В ЧЕРЗІ";
+                                        color: root.player-tab == "queue" ? Tokens.ink-100 : Tokens.ink-300;
+                                        font-size: 12px; font-weight: 700; letter-spacing: 0.8px;
+                                        width: 100%; height: 100%;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                    if root.player-tab == "queue": Rectangle {
+                                        y: parent.height - 2px; x: 0px; width: parent.width; height: 2px;
+                                        border-radius: 2px; background: Tokens.ink-100;
+                                    }
+                                    TouchArea { mouse-cursor: pointer; clicked => { root.player-tab = "queue"; } }
+                                    accessible-role: button; accessible-label: "Черга відтворення";
+                                    accessible-action-default => { root.player-tab = "queue"; }
+                                }
+                                if !root.mobile: Rectangle {
+                                    horizontal-stretch: 1;
+                                    border-radius: 17px;
+                                    Text {
+                                        text: "РАДІО ТРЕКУ";
+                                        color: Tokens.ink-300;
+                                        font-size: 12px; font-weight: 700; letter-spacing: 0.8px;
+                                        width: 100%; height: 100%;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                    TouchArea { mouse-cursor: pointer; clicked => { root.radio(); } }
+                                    accessible-role: button; accessible-label: "Радіо треку";
+                                    accessible-action-default => { root.radio(); }
+                                }
+                            }
+                        }
+                    }
+
+                    // Active Tab: Up Next Queue List inside Player View
+                    if root.player-tab == "queue": Rectangle {
+                        vertical-stretch: 1;
+                        border-radius: 20px;
+                        background: transparent;
+                        border-width: 0px;
+                        border-color: #ffffff14;
+                        ListView {
+                            for track[index] in root.tracks: Rectangle {
+                                height: 64px;
+                                border-radius: 12px;
+                                background: track.title == root.current-title && track.artist == root.current-artist ? #ffffff16 : q-touch.has-hover ? #ffffff10 : transparent;
+                                q-touch := TouchArea { mouse-cursor: pointer; clicked => { root.select-track(index); } }
+                                HorizontalLayout {
+                                    padding-left: 14px; padding-right: 14px; padding-top: 8px; padding-bottom: 8px;
+                                    spacing: 14px;
+                                    Artwork { art: track.art; width: 46px; height: 46px; tone: index; border-radius: 8px; }
+                                    VerticalLayout {
+                                        alignment: center; horizontal-stretch: 1; spacing: 3px;
+                                        Text {
+                                            text: track.title;
+                                            color: track.title == root.current-title && track.artist == root.current-artist ? Tokens.brand-300 : Tokens.ink-100;
+                                            font-size: 14px; font-weight: 700; overflow: elide;
+                                        }
+                                        Text { text: track.artist + " · " + track.album; color: Tokens.ink-300; font-size: 12px; overflow: elide; }
+                                    }
+                                    Text { text: track.duration; color: Tokens.ink-300; font-size: 12px; vertical-alignment: center; width: 44px; horizontal-alignment: right; }
+                                }
+                            }
+                        }
+                    }
+
+                    // Active Tab: Empty Lyrics State
+                    if root.player-tab == "lyrics" && root.lyric-lines.length == 0: Rectangle {
+                        vertical-stretch: 1;
+                        border-radius: 24px;
+                        background: transparent;
+                        border-width: 0px;
+                        border-color: #ffffff12;
+                        VerticalLayout {
+                            alignment: center; spacing: 14px; padding: 32px;
+                            HorizontalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 56px; height: 56px; border-radius: 28px;
+                                    background: #ffffff10; border-width: 0px; border-color: #ffffff18;
+                                    Image { source: @image-url("../assets/icons/Captions.svg"); width: 26px; height: 26px; x: 15px; y: 15px; colorize: Tokens.brand-300; }
+                                }
+                            }
+                            Text { text: "Слова пісні"; color: Tokens.ink-100; font-size: 26px; font-weight: 700; horizontal-alignment: center; }
+                            Text { text: root.lyrics-status; color: Tokens.ink-200; font-size: 14px; wrap: word-wrap; horizontal-alignment: center; }
+                            HorizontalLayout {
+                                alignment: center; spacing: 10px;
+                                Action { text: "Вставити слова"; outlined: true; clicked => { root.dialog = "paste"; } }
+                                Action { text: "Оновити"; icon: @image-url("../assets/icons/RefreshCw.svg"); outlined: true; clicked => { root.refresh-lyrics(); } }
+                            }
+                        }
+                    }
+
+                    // Active Tab: Synchronized Karaoke / Line-by-Line Lyrics Stage
+                    if root.player-tab == "lyrics" && root.lyric-lines.length > 0: BraccatoLyrics {
+                        vertical-stretch: 1;
+                        lyric-lines: root.lyric-lines;
+                        external-view: root.lyrics-web-required || root.lyrics-web-ready;
+                        waiting: root.lyrics-web-required && !root.lyrics-web-ready;
+                        load-error: root.lyrics-renderer-error;
+                        retry => { root.lyrics-renderer-generation += 1; }
+                        widget-geometry(x,y,width,height) => {
+                            root.lyrics-widget-x=x; root.lyrics-widget-y=y;
+                            root.lyrics-widget-width=width; root.lyrics-widget-height=height;
+                        }
+                        lyrics-timed: root.lyrics-timed;
+                        active-lyric-index: root.active-lyric-index;
+                        lyrics-position: root.lyrics-position;
+                        lyrics-offset: root.lyrics-offset + root.lyrics-effective-offset-ms;
+                        mobile: root.mobile;
+                        lyric-size: root.lyric-size;
+                        lyric-active: root.lyric-active;
+                        lyric-inactive: root.lyric-inactive;
+                        lyric-weight: root.lyric-weight;
+                        scroll-target: root.lyrics-scroll-target;
+                        geometry(index, top, height) => {root.lyric-geometry(index,top,height);}
+                        viewport(height) => {root.lyrics-viewport-height=height;}
+                        credits: root.lyrics-credits;
+                        passive: root.lyrics-passive-scroll;
+                        stage: root.lyrics-stage;
+                        reduced-motion: root.lyrics-reduced-motion;
+                        user-scrolling: root.lyrics-user-scrolling;
+                        scroll-ratio: root.lyrics-scroll-ratio;
+                        scroll-duration-ms: root.lyrics-scroll-duration-ms;
+                        disable-richsync: root.lyrics-disable-richsync;
+                        user-scroll => { root.lyric-user-scroll(); }
+                        resume => { root.lyric-resume(); }
+                        seek-to(position) => { root.seek-to(position); }
+                    }
+
+                    // Subtle Status & Sync Offset Footer Pill
+                    HorizontalLayout {
+                        height: 28px;
+                        spacing: 10px;
+                        Rectangle {
+                            height: 26px;
+                            border-radius: 13px;
+                            background: transparent;
+                            border-width: 0px;
+                            border-color: #ffffff14;
+                            HorizontalLayout {
+                                padding-left: 12px; padding-right: 12px; spacing: 8px;
+                                Text {
+                                    text: root.lyrics-status;
+                                    color: Tokens.ink-200;
+                                    font-size: 11px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        if root.lyrics-offset != 0: Rectangle {
+                            height: 26px;
+                            border-radius: 13px;
+                            background: #ffffff10;
+                            HorizontalLayout {
+                                padding-left: 10px; padding-right: 10px;
+                                Text {
+                                    text: (root.lyrics-offset > 0 ? "+" : "") + root.lyrics-offset + " мс";
+                                    color: Tokens.brand-300;
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                    }
+                }
+            }
+
+        }
+
+        // Independent overlay: opening tools never changes player geometry.
+        tools-panel := Rectangle {
+            visible: root.player-tools && root.displayed-view == "lyrics" && root.dialog == "";
+            x: parent.width - self.width - 16px;
+            y: parent.height - self.height - 16px;
+            width: min(380px, parent.width - 32px);
+            height: min(304px, parent.height - 32px);
+            background: #19191d;
+            border-radius: 22px;
+            border-width: 1px;
+            border-color: #ffffff20;
+            clip: true;
+            TouchArea {} // Consume clicks on panel gaps.
+            VerticalLayout {
+                padding: 16px; spacing: 12px;
+                HorizontalLayout {
+                    height: 32px;
+                    Text { text: "Налаштування слів"; font-weight: 700; color: Tokens.ink-100; vertical-alignment: center; horizontal-stretch: 1; }
+                    Action { text: "×"; label: "Закрити"; clicked => {root.player-tools=false;} }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    ComboBox { horizontal-stretch: 1; model: root.providers; current-index <=> root.provider-index; selected(value) => {root.choose-provider(root.provider-index);} }
+                    Action { icon: @image-url("../assets/icons/RefreshCw.svg"); label: "Оновити слова"; outlined: true; clicked => {root.refresh-lyrics();} }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Action {text: "Вставити"; outlined: true; clicked => {root.player-tools=false;root.dialog="paste";} }
+                    Action {text: "Копіювати"; outlined: true; clicked => {root.copy-lyrics();} }
+                    Rectangle {horizontal-stretch:1;}
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Action {text:"Менше руху";selected:root.lyrics-reduced-motion;clicked=>{root.lyrics-reduced-motion=!root.lyrics-reduced-motion;root.lyric-mode-changed(root.lyrics-stage,root.lyrics-reduced-motion,root.lyrics-passive-scroll);} }
+                    Action {text:root.lyrics-stage ? "Прокручування" : "Сцена";clicked=>{root.lyrics-stage=!root.lyrics-stage;root.lyric-mode-changed(root.lyrics-stage,root.lyrics-reduced-motion,root.lyrics-passive-scroll);} }
+                    Rectangle {horizontal-stretch:1;}
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {text:"Зсув";color:Tokens.ink-300;vertical-alignment:center;horizontal-stretch:1;}
+                    Action {text:"− 100";outlined:true;clicked=>{root.adjust-offset(-100);} }
+                    Text {text:root.lyrics-offset+" мс";width:72px;color:Tokens.ink-100;horizontal-alignment:center;vertical-alignment:center;}
+                    Action {text:"+ 100";outlined:true;clicked=>{root.adjust-offset(100);} }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Action {text:"Радіо";outlined:true;clicked=>{root.radio();} }
+                    Action {text:"До списку";outlined:true;clicked=>{root.player-tools=false;root.dialog="add";} }
+                    Action {text:"YT теги";outlined:true;clicked=>{root.sync-tags();} }
+                    if !root.lyrics-timed: Action {text:"Авто";selected:root.lyrics-passive-scroll;clicked=>{root.lyrics-passive-scroll=!root.lyrics-passive-scroll;root.lyric-mode-changed(root.lyrics-stage,root.lyrics-reduced-motion,root.lyrics-passive-scroll);} }
+                    Rectangle {horizontal-stretch:1;}
+                }
+            }
+        }
+    }
+
+    // Compact Mobile Bottom Navigation Bar
+    if root.mobile && !root.immersive: Rectangle {
+        x: 8px;
+        y: root.height - 136px;
+        height: 56px;
+        width: root.width - 16px;
+        border-radius: 20px;
+        background: #0d0d10;
+
+        HorizontalLayout {
+            alignment: space-around;
+            padding-top: 10px; padding-bottom: 10px;
+            Action { icon: @image-url("../assets/icons/House.svg"); label: "Головна"; selected: root.displayed-view == "home"; clicked => { root.navigate("home"); } }
+            Action { icon: @image-url("../assets/icons/Compass.svg"); label: "Огляд"; selected: root.displayed-view == "explore"; clicked => { root.navigate("explore"); } }
+            Action { icon: @image-url("../assets/icons/Library.svg"); label: "Бібліотека"; selected: root.displayed-view == "library"; clicked => { root.navigate("library"); } }
+            Action { icon: @image-url("../assets/icons/Heart.svg"); label: "Сподобалось"; selected: root.displayed-view == "liked"; clicked => { root.navigate("liked"); } }
+            Action { icon: @image-url("../assets/icons/Settings.svg"); label: "Налаштування"; selected: root.displayed-view == "settings"; clicked => { root.navigate("settings"); } }
+        }
+    }
+
+    // Persistent Bottom Player Bar
+    Rectangle {
+        x: 8px;
+        y: root.height - 80px;
+        width: root.width - 16px;
+        height: 72px;
+        visible: !root.immersive;
+        background: #101014;
+        border-radius: 24px;
+        clip: true;
+        // Interactive Top Progress Track
+        Rectangle {
+            x: 24px; y: 0px;
+            height: prog-touch.has-hover ? 5px : 3px;
+            width: parent.width - 48px;
+            border-radius: 3px;
+            background: #ffffff22;
+            animate height { duration: 120ms; }
+            Rectangle {
+                x: 0px; y: 0px;
+                height: 100%;
+                width: root.duration > 0 ? parent.width * clamp(root.position / root.duration, 0, 1) : 0px;
+                background: Tokens.brand-500;
+                border-radius: 3px;
+            }
+            prog-touch := TouchArea {
+                mouse-cursor: pointer;
+                moved => {
+                    if self.pressed && root.duration > 0 {
+                        root.seek-to(round(clamp(self.mouse-x / self.width, 0, 1) * root.duration * 1000));
+                    }
+                }
+                clicked => {
+                    if root.duration > 0 {
+                        root.seek-to(round(clamp(self.mouse-x / self.width, 0, 1) * root.duration * 1000));
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            x: 0px; y: 3px; width: 100%; height: parent.height - 3px;
+            padding-left: root.mobile ? 10px : 20px;
+            padding-right: root.mobile ? 10px : 20px;
+            spacing: root.mobile ? 8px : 14px;
+            padding-top: 12px; padding-bottom: 12px;
+
+            if !root.mobile: Action { icon: @image-url("../assets/icons/SkipBack.svg"); label: "Попередня композиція"; clicked => { root.previous-track(); } }
+            Transport { playing: root.player-state == "playing"; brand: true; clicked => { root.play-toggle(); } }
+            Action { icon: @image-url("../assets/icons/SkipForward.svg"); label: "Наступна композиція"; clicked => { root.next-track(); } }
+            if !root.mobile: Text { text: root.time-label; color: Tokens.ink-200; font-size: 12px; font-weight: 500; width: 108px; vertical-alignment: center; }
+
+            if !root.mobile: Artwork { art: root.current-art; width: 44px; height: 44px; tone: 3; border-radius: 8px; }
+            Rectangle {
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    alignment: center; spacing: 3px;
+                    Text { text: root.current-title; color: Tokens.ink-100; font-size: 14px; font-weight: 700; overflow: elide; }
+                    Text { text: root.current-artist; color: Tokens.ink-300; font-size: 12px; overflow: elide; }
+                }
+                TouchArea { mouse-cursor: pointer; clicked => { root.player-tab = "lyrics"; root.navigate("lyrics"); root.request-lyrics(); } }
+            }
+
+            Action { icon: @image-url("../assets/icons/Heart.svg"); label: "Подобається"; selected: root.current-liked; clicked => { root.toggle-like(-1); } }
+            if !root.mobile: Action { icon: @image-url("../assets/icons/Captions.svg"); label: "Слова пісні"; selected: root.displayed-view == "lyrics"; clicked => { root.player-tab = "lyrics"; root.navigate("lyrics"); root.request-lyrics(); } }
+            if !root.mobile && root.width >= 1040px: Action { icon: @image-url("../assets/icons/ListMusic.svg"); label: "Черга відтворення"; selected: root.displayed-view == "queue"; clicked => { root.navigate("queue"); } }
+            if !root.mobile && root.width >= 1040px: Action { icon: @image-url("../assets/icons/Plus.svg"); label: "Додати до списку"; clicked => { root.dialog = "add"; } }
+            if !root.mobile: Action { icon: @image-url("../assets/icons/Volume2.svg"); label: "Гучність"; clicked => { root.volume = root.volume > 0 ? 0 : 1; root.volume-changed(root.volume); } }
+            if !root.mobile: Slider { width: root.width < 1040px ? 64px : 84px; minimum: 0; maximum: 1; value <=> root.volume; changed(value) => { root.volume-changed(value); } }
+            if !root.mobile && root.width >= 960px: Action { icon: @image-url("../assets/icons/Repeat.svg"); label: "Повтор"; selected: root.repeat-mode != "off"; clicked => { root.toggle-repeat(); } }
+            if !root.mobile && root.width >= 960px: Action { icon: @image-url("../assets/icons/Shuffle.svg"); label: "Перемішати"; selected: root.shuffle; clicked => { root.toggle-shuffle(); } }
+            Action {
+                icon: root.displayed-view == "lyrics" ? @image-url("../assets/icons/ChevronDown.svg") : @image-url("../assets/icons/ChevronUp.svg");
+                label: "Розгорнути програвач";
+                clicked => {
+                    if root.displayed-view == "lyrics" { root.navigate("home"); } else { root.player-tab = "lyrics"; root.navigate("lyrics"); root.request-lyrics(); }
+                }
+            }
+        }
+    }
+
+    // Modal Dialogs
+    if root.dialog != "": Rectangle {
+        width: 100%; height: 100%;
+        background: #06060ae6;
+        TouchArea { clicked => { root.dialog = ""; } }
+        Rectangle {
+            width: min(root.width - 32px, 520px);
+            height: root.dialog == "paste" ? 440px : root.dialog == "add" || root.dialog == "match" ? 360px : 210px;
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            background: #16161c;
+            border-radius: 20px;
+            border-width: 0px;
+            border-color: #ffffff24;
+            TouchArea { }
+            VerticalLayout {
+                padding: 24px; spacing: 16px;
+                Text {
+                    text: root.dialog == "auth" ? "Доступ до слів пісень" : root.dialog == "paste" ? "Вставити слова пісні" :
+                          root.dialog == "add" ? "Додати до списку" :
+                          root.dialog == "source" ? "Шлях до папки або файлу" :
+                          root.dialog == "match" ? "Перевірте збіг YouTube Music" : "Новий список відтворення";
+                    color: Tokens.ink-100;
+                    font-size: 20px;
+                    font-weight: 700;
+                }
+                if root.dialog == "create" || root.dialog == "source": LineEdit {
+                    text <=> root.new-name;
+                    placeholder-text: root.dialog == "source" ? "Вкажіть повний шлях" : "Назва списку відтворення";
+                    accepted => {
+                        if root.dialog == "source" { root.add-path(root.source-kind, root.new-name); } else { root.create-playlist(root.new-name); }
+                        root.new-name = "";
+                        root.dialog = "";
+                    }
+                }
+                if root.dialog == "auth": LineEdit {
+                    text <=> root.auth-token;
+                    input-type: password;
+                    placeholder-text: "JWT або Turnstile token";
+                }
+                if root.dialog == "paste": lyrics-edit-viewport := Rectangle {
+                    vertical-stretch: 1;
+                    min-height: 200px;
+                    out property <float> widget-x: self.absolute-position.x / 1px;
+                    out property <float> widget-y: self.absolute-position.y / 1px;
+                    changed widget-x => {root.lyrics-editor-x=self.widget-x;}
+                    changed widget-y => {root.lyrics-editor-y=self.widget-y;}
+                    changed width => {root.lyrics-editor-width=self.width / 1px;}
+                    changed height => {root.lyrics-editor-height=self.height / 1px;}
+                    Timer {
+                        interval: 50ms; running: true;
+                        triggered => {
+                            root.lyrics-editor-x=lyrics-edit-viewport.widget-x;
+                            root.lyrics-editor-y=lyrics-edit-viewport.widget-y;
+                            root.lyrics-editor-width=lyrics-edit-viewport.width / 1px;
+                            root.lyrics-editor-height=lyrics-edit-viewport.height / 1px;
+                        }
+                    }
+                    TextEdit { width:100%;height:100%;text <=> root.lyrics-paste;visible:root.dialog != "paste" || !root.lyrics-web-ready; }
+                }
+                if root.dialog == "match": VerticalLayout {
+                    spacing: 12px;
+                    LineEdit { text <=> root.match-title; }
+                    LineEdit { text <=> root.match-artist; }
+                    LineEdit { text <=> root.match-album; }
+                    Text { text: "Перед зміною буде створено резервну копію тегів"; color: Tokens.ink-300; wrap: word-wrap; }
+                }
+                if root.dialog == "add": ListView {
+                    for p in root.playlists: Action {
+                        text: p.name;
+                        outlined: true;
+                        clicked => { root.add-to-playlist(p.id); root.dialog = ""; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Rectangle { horizontal-stretch: 1; }
+                    Action { text: "Скасувати"; outlined: true; clicked => { root.dialog = ""; } }
+                    if root.dialog != "add": Action {
+                        text: "Зберегти";
+                        primary: true;
+                        clicked => {
+                            if root.dialog == "auth" { root.submit-auth(root.auth-token); root.auth-token = ""; }
+                            else if root.dialog == "match" { root.apply-tags(root.match-title, root.match-artist, root.match-album); }
+                            else if root.dialog == "source" { root.add-path(root.source-kind, root.new-name); root.new-name = ""; }
+                            else if root.dialog == "paste" { root.import-lyrics(root.lyrics-paste); }
+                            else { root.create-playlist(root.new-name); root.new-name = ""; }
+                            root.dialog = "";
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

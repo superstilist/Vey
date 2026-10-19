@@ -1,0 +1,450 @@
+[
+  {
+    "name": "ttml:51",
+    "source": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"en\">\n  <head><metadata></metadata></head>\n  <body dur=\"60s\">\n    <div>\n      <p begin=\"5s\" end=\"10s\" key=\"l1\">Hello world</p>\n      <p begin=\"10s\" end=\"15s\" key=\"l2\">Second line</p>\n    </div>\n  </body>\n</tt>",
+    "lines": [
+      {
+        "text": "Hello world",
+        "start": 5000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      },
+      {
+        "text": "Second line",
+        "start": 10000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:74",
+    "source": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"en\">\n  <head><metadata></metadata></head>\n  <body dur=\"30s\">\n    <div>\n      <p begin=\"5s\" end=\"10s\" key=\"l1\">\n        <span begin=\"5s\" end=\"7s\"><span>Hello </span></span>\n        <span begin=\"7s\" end=\"10s\"><span>world</span></span>\n      </p>\n    </div>\n  </body>\n</tt>",
+    "lines": [
+      {
+        "text": "Hello \n        world",
+        "start": 5000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:96",
+    "source": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"en\">\n  <head><metadata></metadata></head>\n  <body dur=\"30s\">\n    <div>\n      <p begin=\"5s\" end=\"10s\" key=\"l1\">It&rsquo;s caf&#233; &amp; more&#8230;</p>\n      <p begin=\"10s\" end=\"15s\" key=\"l2\"><span begin=\"10s\" end=\"12s\">don&#39;t</span><span begin=\"12s\" end=\"15s\">na&#xEF;ve</span></p>\n    </div>\n  </body>\n</tt>",
+    "lines": [
+      {
+        "text": "It’s café & more…",
+        "start": 5000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      },
+      {
+        "text": "don'tnaïve",
+        "start": 10000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:115",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"ja\">\n  <head><metadata></metadata></head>\n  <body dur=\"10s\">\n    <div><p begin=\"0s\" end=\"5s\" key=\"l1\">Test</p></div>\n  </body>\n</tt>",
+    "lines": [
+      {
+        "text": "Test",
+        "start": 0,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:127",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"en\">\n  <head><metadata></metadata></head>\n  <body dur=\"60s\">\n    <div>\n      <p begin=\"0s\" end=\"5s\" key=\"l1\">Line one</p>\n      <p begin=\"20s\" end=\"25s\" key=\"l2\">Line two</p>\n    </div>\n  </body>\n</tt>",
+    "lines": [
+      {
+        "text": "Line one",
+        "start": 0,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      },
+      {
+        "text": "Line two",
+        "start": 20000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:143",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"ja\"\n              xmlns:ttm=\"http://www.w3.org/ns/ttml#metadata\">\n  <head>\n    <metadata>\n      <translations lang=\"en\">\n        <translation for=\"l1\"><text>Hello world</text></translation>\n      </translations>\n    </metadata>\n  </head>\n  <body dur=\"10s\">\n    <div><p begin=\"0s\" end=\"5s\" key=\"l1\">Konnichiwa</p></div>\n  </body>\n</tt>",
+    "lines": [
+      {
+        "text": "Konnichiwa",
+        "start": 0,
+        "duration": 5000,
+        "agent": "",
+        "translations": {
+          "en": "Hello world"
+        },
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:163",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"ja\">\n  <head>\n    <metadata>\n      <transliterations>\n        <transliteration xml:lang=\"ja-Latn\">\n          <text for=\"l1\"><span begin=\"0s\" end=\"2s\">konnichi</span><span begin=\"2s\" end=\"5s\">wa</span></text>\n          <text for=\"l2\"><span begin=\"5s\" end=\"7s\">sayou</span><span begin=\"7s\" end=\"10s\">nara</span></text>\n        </transliteration>\n      </transliterations>\n    </metadata>\n  </head>\n  <body dur=\"10s\">\n    <div>\n      <p begin=\"0s\" end=\"5s\" key=\"l1\">こんにちは</p>\n      <p begin=\"5s\" end=\"10s\" key=\"l2\">さようなら</p>\n    </div>\n  </body>\n</tt>",
+    "lines": [
+      {
+        "text": "こんにちは",
+        "start": 0,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "konnichiwa",
+        "explicit": false
+      },
+      {
+        "text": "さようなら",
+        "start": 5000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "sayounara",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:195",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"ja\">\n  <head>\n    <metadata>\n      <transliterations>\n        <transliteration xml:lang=\"ja-Latn\">\n          <notext for=\"l1\"/>\n          <text for=\"l2\"><span begin=\"5s\" end=\"7s\">sayou</span><span begin=\"7s\" end=\"10s\">nara</span></text>\n        </transliteration>\n      </transliterations>\n    </metadata>\n  </head>\n  <body dur=\"10s\">\n    <div>\n      <p begin=\"0s\" end=\"5s\" key=\"l1\">こんにちは</p>\n      <p begin=\"5s\" end=\"10s\" key=\"l2\">さようなら</p>\n    </div>\n  </body>\n</tt>",
+    "lines": [
+      {
+        "text": "こんにちは",
+        "start": 0,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      },
+      {
+        "text": "さようなら",
+        "start": 5000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "sayounara",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:232",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"en\">\n  <head><metadata></metadata></head>\n  <body></body>\n</tt>",
+    "lines": []
+  },
+  {
+    "name": "ttml:247",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\"\n              xmlns:itunes=\"http://music.apple.com/lyric-ttml-internal\" xml:lang=\"en\">\n  <body><div>\n    <p begin=\"10s\" end=\"15s\" itunes:key=\"L1\">Late first line</p>\n    <p begin=\"30s\" end=\"35s\" itunes:key=\"L2\">After a solo</p>\n  </div></body>\n</tt>",
+    "lines": [
+      {
+        "text": "Late first line",
+        "start": 10000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      },
+      {
+        "text": "After a solo",
+        "start": 30000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:272",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"en\">\n  <body><div><p begin=\"0s\" end=\"5s\" itunes:key=\"L1\">Only line</p></div></body>\n</tt>",
+    "lines": [
+      {
+        "text": "Only line",
+        "start": 0,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:332",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"en\">\n  <head><metadata>\n    <translations lang=\"en\"><translation for=\"k\"/></translations>\n    <transliterations><transliteration><notext for=\"k\"/></transliteration></transliterations>\n  </metadata></head>\n  <body dur=\"10s\"><div><p begin=\"0s\" end=\"5s\" key=\"k\">Hi</p></div></body>\n</tt>",
+    "lines": [
+      {
+        "text": "Hi",
+        "start": 0,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:359",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\"\n              xmlns:ttm=\"http://www.w3.org/ns/ttml#metadata\"\n              xmlns:itunes=\"http://music.apple.com/lyric-ttml-internal\" xml:lang=\"en\">\n  <head><metadata>\n    <ttm:agent type=\"person\" xml:id=\"singer1\"><ttm:name type=\"full\">First</ttm:name></ttm:agent>\n    <ttm:agent type=\"person\" xml:id=\"singer2\"/>\n    <ttm:agent type=\"group\" xml:id=\"chorus\"/>\n  </metadata></head>\n  <body dur=\"20s\"><div>\n    <p begin=\"0s\" end=\"5s\" ttm:agent=\"singer1\" itunes:key=\"L1\">One</p>\n    <p begin=\"5s\" end=\"10s\" ttm:agent=\"singer2\" itunes:key=\"L2\">Two</p>\n    <p begin=\"10s\" end=\"15s\" ttm:agent=\"chorus\" itunes:key=\"L3\">Three</p>\n    <p begin=\"15s\" end=\"20s\" ttm:agent=\"singer1\" itunes:key=\"L4\">Four</p>\n  </div></body>\n</tt>",
+    "lines": [
+      {
+        "text": "One",
+        "start": 0,
+        "duration": 5000,
+        "agent": "v1",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      },
+      {
+        "text": "Two",
+        "start": 5000,
+        "duration": 5000,
+        "agent": "v2",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      },
+      {
+        "text": "Three",
+        "start": 10000,
+        "duration": 5000,
+        "agent": "v1000",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      },
+      {
+        "text": "Four",
+        "start": 15000,
+        "duration": 5000,
+        "agent": "v1",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "undeclared:386",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"en\">\n  <body dur=\"10s\"><div><p begin=\"0s\" end=\"5s\" ttm:agent=\"v7\" itunes:key=\"L1\">One</p></div></body>\n</tt>",
+    "lines": [
+      {
+        "text": "One",
+        "start": 0,
+        "duration": 5000,
+        "agent": "v7",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:396",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\"\n              xmlns:ttm=\"http://www.w3.org/ns/ttml#metadata\"\n              xmlns:itunes=\"http://music.apple.com/lyric-ttml-internal\" xml:lang=\"en\">\n  <body dur=\"10s\"><div><p begin=\"0s\" end=\"6s\" itunes:key=\"L1\"><span begin=\"0s\" end=\"2s\">Hello</span><span ttm:role=\"x-bg\"><span begin=\"2s\" end=\"4s\">(echo)</span><span begin=\"4s\" end=\"6s\">(echo)</span></span></p></div></body>\n</tt>",
+    "lines": [
+      {
+        "text": "Hello",
+        "start": 0,
+        "duration": 6000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:430",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\"\n              xmlns:itunes=\"http://music.apple.com/lyric-ttml-internal\" xml:lang=\"en\">\n  <body dur=\"30s\"><div>\n    <p begin=\"0s\" end=\"5s\" itunes:key=\"L1\">Chorus line</p>\n    <p begin=\"5s\" end=\"10s\" itunes:key=\"L2\">Verse line</p>\n    <p begin=\"10s\" end=\"15s\" itunes:key=\"L1\">Chorus line</p>\n  </div></body>\n</tt>",
+    "lines": [
+      {
+        "text": "Chorus line",
+        "start": 0,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      },
+      {
+        "text": "Verse line",
+        "start": 5000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      },
+      {
+        "text": "Chorus line",
+        "start": 10000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:447",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\"\n              xmlns:itunes=\"http://music.apple.com/lyric-ttml-internal\" xml:lang=\"en\">\n  <body dur=\"20s\">\n    <div begin=\"0s\" end=\"10s\" itunes:songPart=\"Verse\"><p begin=\"0s\" end=\"5s\" itunes:key=\"L1\">Verse line</p></div>\n    <div begin=\"10s\" end=\"20s\" itunes:songPart=\"Chorus\"><p begin=\"10s\" end=\"15s\" itunes:key=\"L2\">Chorus line</p></div>\n  </body>\n</tt>",
+    "lines": [
+      {
+        "text": "Verse line",
+        "start": 0,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      },
+      {
+        "text": "Chorus line",
+        "start": 10000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:463",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\" xml:lang=\"en\">\n  <body dur=\"10s\"><div><p begin=\"0s\" end=\"5s\" itunes:key=\"L1\" ttm:agent=\"v1\">Unbound</p></div></body>\n</tt>",
+    "lines": [
+      {
+        "text": "Unbound",
+        "start": 0,
+        "duration": 5000,
+        "agent": "v1",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:479",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\"\n              xmlns:itunes=\"http://music.apple.com/lyric-ttml-internal\" xml:lang=\"en\">\n  <body dur=\"5m\"><div><p begin=\"60000ms\" end=\"1.5m\" itunes:key=\"L1\"><span begin=\"60.5s\" end=\"61s\">Late</span></p></div></body>\n</tt>",
+    "lines": [
+      {
+        "text": "Late",
+        "start": 60000,
+        "duration": 30000,
+        "agent": "",
+        "translations": {},
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:499",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\"\n              xmlns:itunes=\"http://music.apple.com/lyric-ttml-internal\" xml:lang=\"ja\">\n  <head><metadata>\n    <translations>\n      <translation type=\"subtitle\" xml:lang=\"en\"><text for=\"L1\">Hello world</text></translation>\n      <translation type=\"subtitle\" xml:lang=\"fr\"><text for=\"L1\">Bonjour</text></translation>\n    </translations>\n  </metadata></head>\n  <body dur=\"10s\"><div><p begin=\"0s\" end=\"5s\" itunes:key=\"L1\">Konnichiwa</p></div></body>\n</tt>",
+    "lines": [
+      {
+        "text": "Konnichiwa",
+        "start": 0,
+        "duration": 5000,
+        "agent": "",
+        "translations": {
+          "en": "Hello world",
+          "fr": "Bonjour"
+        },
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:519",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\"\n              xmlns:itunes=\"http://music.apple.com/lyric-ttml-internal\" xml:lang=\"ja\">\n  <head><metadata>\n    <translations lang=\"en\">\n      <translation for=\"L1\"><text><span>Hello</span><span> world</span></text></translation>\n    </translations>\n  </metadata></head>\n  <body dur=\"10s\"><div><p begin=\"0s\" end=\"5s\" itunes:key=\"L1\">Konnichiwa</p></div></body>\n</tt>",
+    "lines": [
+      {
+        "text": "Konnichiwa",
+        "start": 0,
+        "duration": 5000,
+        "agent": "",
+        "translations": {
+          "en": "Hello world"
+        },
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  },
+  {
+    "name": "ttml:536",
+    "source": "<tt xmlns=\"http://www.w3.org/ns/ttml\"\n              xmlns:itunes=\"http://music.apple.com/lyric-ttml-internal\" xml:lang=\"ja\">\n  <head><metadata>\n    <translations>\n      <translation type=\"subtitle\" xml:lang=\"en\"><text for=\"L1\">Hello world</text></translation>\n    </translations>\n  </metadata></head>\n  <body dur=\"20s\"><div>\n    <p begin=\"0s\" end=\"5s\" itunes:key=\"L1\">Konnichiwa</p>\n    <p begin=\"5s\" end=\"10s\" itunes:key=\"L1\">Konnichiwa</p>\n  </div></body>\n</tt>",
+    "lines": [
+      {
+        "text": "Konnichiwa",
+        "start": 0,
+        "duration": 5000,
+        "agent": "",
+        "translations": {
+          "en": "Hello world"
+        },
+        "romanization": "",
+        "explicit": false
+      },
+      {
+        "text": "Konnichiwa",
+        "start": 5000,
+        "duration": 5000,
+        "agent": "",
+        "translations": {
+          "en": "Hello world"
+        },
+        "romanization": "",
+        "explicit": false
+      }
+    ]
+  }
+]

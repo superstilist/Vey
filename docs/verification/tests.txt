@@ -1,0 +1,138 @@
+warning: output filename collision at C:\Users\superstilist\3D Objects\playervf\target\debug\deps\playervf.pdb
+  |
+  = note: the bin target `playervf` in package `playervf v0.1.0 (C:\Users\superstilist\3D Objects\playervf)` has the same output filename as the lib target `playervf` in package `playervf v0.1.0 (C:\Users\superstilist\3D Objects\playervf)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+   Compiling playervf v0.1.0 (C:\Users\superstilist\3D Objects\playervf)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 43.48s
+     Running unittests src\lib.rs (target\debug\deps\playervf-536331010d0836f7.exe)
+
+running 92 tests
+test local_sync::tests::backup_ids_round_trip_through_filenames ... ok
+test local_sync::tests::tag_type_covers_common_library_containers ... ok
+test lyrics::tests::parses_qrc_syllable_timing ... ok
+test lyrics::tests::retains_background_vocal_parts_after_the_lead ... ok
+test lyrics::tests::malformed_timestamps_and_plain_text_are_skipped ... ok
+test lyrics::tests::parses_lrc_metadata_multiple_timestamps_and_offsets ... ok
+test lyrics::tests::parses_enhanced_lrc_word_markers ... ok
+test lyrics_service::tests::jwt_renewal_boundary_and_malformed ... ok
+test local_sync::tests::apply_skips_empty_fields_but_overwrites_the_rest ... ok
+test lyrics::tests::parses_ttml_word_timing_and_background_role ... ok
+test lyrics::tests::parses_provider_sse_into_timed_alternatives ... ok
+test lyrics_service::tests::parses_plain_and_timed_paste ... ok
+test native::tests::audio_pick_prefers_higher_bitrate_within_container ... ok
+test native::tests::builds_transliterated_query_variant ... ok
+test native::tests::client_snapshots_are_pinned ... ok
+test native::tests::classifies_localized_shelf_titles ... ok
+test native::tests::clip_is_empty_when_only_square_crops_exist ... ok
+test native::tests::detects_kind_from_browse_id_prefix ... ok
+test native::tests::collect_renderers_survives_multibyte_split_at_window_edge ... ok
+test native::tests::duration_fit_respects_tolerance ... ok
+test native::tests::distinguishes_real_video_from_audio_only ... ok
+test native::tests::extracts_caption_tracks_and_prefers_manual_english ... ok
+test native::tests::drops_greyed_out_unplayable_rows ... ok
+test native::tests::fallback_rejects_too_short_titles ... ok
+test native::tests::fallback_accepts_matching_video_only ... ok
+test native::tests::live_browse_command_yields_items ... ignored, live network test
+test native::tests::live_browse_shape ... ignored, live network test
+test native::tests::live_find_clip_for_single_track ... ignored, live network test
+test native::tests::live_search_finds_and_pairs_clips ... ignored, live network test
+test native::tests::live_search_suggestions ... ignored, live network test
+test native::tests::live_video_stream_for_clip ... ignored, live network test
+test native::tests::falls_back_to_title_match_when_no_length_fits ... ok
+test native::tests::falls_back_to_adaptive_video_only_stream ... ok
+test native::tests::leaves_song_without_clip_when_no_video_matches ... ok
+test native::tests::matches_words_modulo_endings ... ok
+test native::tests::matches_transliterated_tags_against_native_titles ... ok
+test native::tests::metered_source_tracks_loudness_with_attack_and_release ... ok
+test native::tests::normalizes_titles_for_clip_pairing ... ok
+test native::tests::marks_audio_only_songs_as_having_no_video ... ok
+test native::tests::never_pairs_a_song_with_itself ... ok
+test native::tests::no_video_stream_for_audio_only_player_response ... ok
+test native::tests::keeps_system_music_first_when_caller_omits_or_duplicates_it ... ok
+test native::tests::only_refreshes_expired_audio_urls ... ok
+test native::tests::overlaps_reworded_titles ... ok
+test native::tests::parses_content_range_total ... ok
+test native::tests::parses_json3_caption_events ... ok
+test native::tests::parses_next_radio_recommendations ... ok
+test native::tests::parses_browse_response_items ... ok
+test native::tests::parses_search_suggestions_with_bold_prefix ... ok
+test native::tests::parses_audio_song_row_as_having_no_video ... ok
+test native::tests::parses_youtubei_results_skipping_non_videos ... ok
+test native::tests::parses_youtube_length_text ... ok
+test native::tests::pairs_audio_only_song_with_matching_music_video ... ok
+test native::tests::decodes_playable_wav_files_before_replacing_the_sink ... ok
+test native::tests::parses_youtubei_cyrillic_results ... ok
+test native::tests::parses_ytm_card_and_shelf ... ok
+test native::tests::parses_rows_from_section_list_continuation ... ok
+test native::tests::pick_best_audio_tolerates_missing_streaming_data ... ok
+test native::tests::player_clients_try_remix_before_android ... ok
+test native::tests::deduplicates_canonical_paths_from_overlapping_sources ... ok
+test native::tests::parses_ytm_video_tiles_and_card_contents ... ok
+test native::tests::prefers_decodable_audio_containers ... ok
+test native::tests::pick_best_audio_ignores_cipher_only_responses ... ok
+test native::tests::pick_best_audio_prefers_decodable_container ... ok
+test native::tests::sanitizes_filenames ... ok
+test native::tests::prefers_duration_matching_upload_over_earlier_mismatch ... ok
+test native::tests::ranks_duration_fits_first_then_page_order_deduped ... ok
+test native::tests::parses_ytm_songs_with_details ... ok
+test native::tests::search_labels_rows_per_shelf_across_tabs ... ok
+test native::tests::search_parses_continuation_pages ... ok
+test native::tests::song_rows_without_videotype_are_not_videos ... ok
+test native::tests::audio_download_rejects_forbidden ... ok
+test native::tests::strips_video_decorations_from_titles ... ok
+test native::tests::transliterates_cyrillic_for_cross_script_matching ... ok
+test native::tests::suggestions_tolerate_empty_and_malformed_responses ... ok
+test native::tests::upgrades_any_sizing_suffix_to_original_bytes ... ok
+test services::tests::history_and_playlists_deduplicate ... ok
+test services::tests::migration_never_copies_credentials_and_only_runs_once ... ok
+test services::tests::queue_repeat_and_end ... ok
+test services::tests::source_roots_and_dedup ... ok
+test native::tests::splits_cover_and_clip_from_one_thumbnail_list ... ok
+test native::tests::prefers_progressive_mp4_for_the_clip_preview ... ok
+test native::tests::scans_folder_sources_recursively ... ok
+test native::tests::unavailable_source_does_not_block_available_sources ... ok
+test renderer::tests::escapes_lyrics_markup ... ok
+test native::tests::scans_individual_file_sources ... ok
+test themes::tests::converts_and_reports_css ... ok
+test native::tests::reports_invalid_media_without_panicking ... ok
+test local_sync::tests::backup_files_round_trip_and_latest_wins ... ok
+test native::tests::scans_supported_files_when_metadata_is_unreadable ... ok
+test native::tests::scans_and_decodes_opus_files_with_unicode_names ... ok
+test native::tests::downloads_audio_in_ranged_chunks ... ok
+
+test result: ok. 86 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src\main.rs (target\debug\deps\playervf-4473185aac9320be.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\lyrics_fixtures.rs (target\debug\deps\lyrics_fixtures-6bbac4889b71bba7.exe)
+
+running 6 tests
+test enhanced_and_background_fixture ... ok
+test translations_fixture ... ok
+test lrc_export_roundtrip_keeps_words_background_and_translation ... ok
+test malformed_provider_does_not_hide_fallback ... ok
+test nested_ttml_does_not_duplicate_background ... ok
+test nested_json_ttml_provider ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\native_services.rs (target\debug\deps\native_services-c592a0a07b76baf0.exe)
+
+running 3 tests
+test native_audio_play_pause_seek_rate_volume_and_failed_load ... ignored, requires a native output device; plays silent fixture audio
+test backup_roundtrip_keeps_local_state_and_lyrics ... ok
+test turnstile_exchange_rejects_missing_jwt_and_http_errors ... ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests playervf
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

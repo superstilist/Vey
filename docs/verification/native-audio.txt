@@ -1,0 +1,16 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+warning: output filename collision at C:\Users\superstilist\3D Objects\playervf\target\debug\deps\playervf.pdb
+  |
+  = note: the bin target `playervf` in package `playervf v0.1.0 (C:\Users\superstilist\3D Objects\playervf)` has the same output filename as the lib target `playervf` in package `playervf v0.1.0 (C:\Users\superstilist\3D Objects\playervf)`
+  = note: this may become a hard error in the future; see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique or compiling them separately
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.85s
+     Running tests\native_services.rs (target\debug\deps\native_services-c592a0a07b76baf0.exe)
+
+running 1 test
+test native_audio_play_pause_seek_rate_volume_and_failed_load ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.76s
+

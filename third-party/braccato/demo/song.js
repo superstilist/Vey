@@ -1,0 +1,957 @@
+// The demo's built-in songs, written once and derived twice: the browser builds the `Lyric[]` the
+// element renders, and `tooling/generate-demo-audio.ts` builds the notes you hear from the same
+// rows. A syllable and the note it is sung on cannot drift apart, because neither is written down
+// twice.
+//
+// Nothing in @braccato/core parses a lyrics format, so producing the array is the consumer's job.
+// This is what that looks like when the consumer owns the source material. When the source material
+// is a file instead, `demo/parsers.js` is the other half of the answer.
+
+// -- Time --------------------------------------------
+
+const BEATS_PER_BAR = 4;
+
+// -- Pitches --------------------------------------------
+
+const Bb1 = 34;
+const D2 = 38;
+const E2 = 40;
+const F2 = 41;
+const G2 = 43;
+const A2 = 45;
+const C3 = 48;
+const F3 = 53;
+const G3 = 55;
+const A3 = 57;
+const Bb3 = 58;
+const B3 = 59;
+const C4 = 60;
+const D4 = 62;
+const E4 = 64;
+const F4 = 65;
+const Fs4 = 66;
+const G4 = 67;
+const A4 = 69;
+const B4 = 71;
+const C5 = 72;
+const D5 = 74;
+const E5 = 76;
+
+// Only the audio reads these. Every melody below stays inside the minor pentatonic of its key, which
+// is consonant over each chord here, so the tune holds together without the generator knowing any
+// harmony.
+export const CHORD_VOICINGS = {
+  Am: { bass: A2, pad: [A3, C4, E4] },
+  Bb: { bass: Bb1, pad: [F3, Bb3, D4] },
+  C: { bass: C3, pad: [G3, C4, E4] },
+  D: { bass: D2, pad: [A3, D4, Fs4] },
+  Dm: { bass: D2, pad: [A3, D4, F4] },
+  Em: { bass: E2, pad: [G3, B3, E4] },
+  F: { bass: F2, pad: [A3, C4, F4] },
+  G: { bass: G2, pad: [G3, B3, D4] },
+};
+
+// -- The scores --------------------------------------------
+
+// One bar per row, four beats each. A syllable is [text, pitch, beats], and the text carries its own
+// spacing: the renderer joins parts verbatim, so two syllables with no space between them are
+// grouped into one animated word and a trailing space ends it.
+//
+// `echo` is a background vocal. Its beat offset is measured from the start of the bar, so it can
+// overlap the line it answers the way a real one does.
+//
+// `agent` is who sings the bar, in the vocabulary TTML uses and the renderer passes through to
+// `data-agent` on the line: `v1` and `v2` are people, `v1000` is everybody. A bar that names none
+// inherits from its neighbours. Kettle is a duet so that a theme has something to align against,
+// which is the honest place for that decision: who is singing is a property of the song, not of the
+// stylesheet.
+//
+// A fourth entry on a syllable is its romanization, spaced the same way, which makes the line's
+// romanization synced. `translation` rides along beside it.
+
+const KETTLE = [
+  { chord: "Am", instrumental: true },
+  {
+    chord: "Am",
+    agent: "v1",
+    syllables: [
+      ["The ", A3, 0.5],
+      ["ket", C4, 0.5],
+      ["tle ", D4, 0.5],
+      ["starts ", E4, 0.5],
+      ["at ", D4, 0.5],
+      ["six", C4, 1.5],
+    ],
+  },
+  {
+    chord: "F",
+    agent: "v1",
+    syllables: [
+      ["and ", C4, 0.5],
+      ["the ", D4, 0.5],
+      ["floor", E4, 0.5],
+      ["boards ", E4, 0.5],
+      ["take ", D4, 0.5],
+      ["the ", C4, 0.5],
+      ["cold", A3, 1],
+    ],
+  },
+  {
+    chord: "C",
+    agent: "v2",
+    syllables: [
+      ["I ", E4, 0.5],
+      ["count ", G4, 0.5],
+      ["the ", A4, 0.5],
+      ["bus ", G4, 0.5],
+      ["stops ", E4, 0.5],
+      ["back", D4, 1.5],
+    ],
+  },
+  {
+    chord: "G",
+    agent: "v2",
+    syllables: [
+      ["to ", D4, 0.5],
+      ["a ", E4, 0.5],
+      ["house ", G4, 0.75],
+      ["I ", E4, 0.25],
+      ["used ", D4, 0.5],
+      ["to ", C4, 0.5],
+      ["know", A3, 1],
+    ],
+  },
+  {
+    chord: "Am",
+    agent: "v1000",
+    syllables: [
+      ["So ", A4, 0.5],
+      ["play ", C5, 1],
+      ["it ", A4, 0.5],
+      ["slow", G4, 0.5],
+      ["er", A4, 1],
+    ],
+  },
+  {
+    chord: "F",
+    agent: "v1000",
+    syllables: [
+      ["let ", G4, 0.5],
+      ["the ", A4, 0.5],
+      ["whole ", C5, 0.75],
+      ["thing ", A4, 0.25],
+      ["land", G4, 1.5],
+    ],
+    echo: {
+      at: 2,
+      syllables: [
+        ["(let ", E5, 0.5],
+        ["it ", D5, 0.5],
+        ["land)", C5, 1],
+      ],
+    },
+  },
+  {
+    chord: "C",
+    agent: "v1",
+    syllables: [
+      ["I’ve ", C5, 0.5],
+      ["got ", A4, 0.5],
+      ["all ", G4, 0.5],
+      ["night", A4, 2],
+    ],
+  },
+  {
+    chord: "G",
+    agent: "v1",
+    syllables: [
+      ["and ", G4, 0.5],
+      ["the ", E4, 0.5],
+      ["ra", D4, 0.5],
+      ["di", E4, 0.25],
+      ["o ", D4, 0.25],
+      ["on", C4, 1.5],
+    ],
+  },
+  { chord: "Am", instrumental: true },
+  {
+    chord: "Am",
+    agent: "v1",
+    syllables: [
+      ["The ", A3, 0.5],
+      ["tape ", C4, 0.5],
+      ["deck ", D4, 0.5],
+      ["eats ", E4, 0.5],
+      ["a ", D4, 0.5],
+      ["song", C4, 1.5],
+    ],
+  },
+  {
+    chord: "F",
+    agent: "v1",
+    syllables: [
+      ["and ", C4, 0.25],
+      ["I ", D4, 0.25],
+      ["wind ", E4, 0.5],
+      ["it ", E4, 0.5],
+      ["back ", D4, 0.5],
+      ["with ", C4, 0.25],
+      ["a ", C4, 0.25],
+      ["pen", A3, 1.5],
+    ],
+  },
+  {
+    chord: "C",
+    agent: "v2",
+    syllables: [
+      ["There’s ", E4, 0.5],
+      ["dust ", G4, 0.5],
+      ["a", A4, 0.25],
+      ["cross ", A4, 0.25],
+      ["the ", G4, 0.5],
+      ["nee", E4, 0.5],
+      ["dle", D4, 1.5],
+    ],
+  },
+  {
+    chord: "G",
+    agent: "v2",
+    syllables: [
+      ["but ", D4, 0.5],
+      ["it ", E4, 0.5],
+      ["finds ", G4, 0.5],
+      ["the ", E4, 0.5],
+      ["groove ", D4, 0.5],
+      ["a", C4, 0.25],
+      ["gain", A3, 1.25],
+    ],
+  },
+  { chord: "Am", instrumental: true },
+];
+
+const RING_ROAD = [
+  { chord: "Em", instrumental: true },
+  {
+    chord: "Em",
+    syllables: [
+      ["The ", B3, 0.5],
+      ["wi", E4, 0.5],
+      ["pers ", G4, 0.5],
+      ["keep ", E4, 0.5],
+      ["the ", D4, 0.5],
+      ["time", E4, 1.5],
+    ],
+  },
+  {
+    chord: "C",
+    syllables: [
+      ["on ", G4, 0.5],
+      ["the ", A4, 0.5],
+      ["ring ", B4, 0.5],
+      ["road ", A4, 0.5],
+      ["out ", G4, 0.5],
+      ["of ", E4, 0.5],
+      ["town", G4, 1],
+    ],
+  },
+  {
+    chord: "G",
+    syllables: [
+      ["Ev", B4, 0.5],
+      ["ery ", A4, 0.5],
+      ["win", G4, 0.5],
+      ["dow ", A4, 0.5],
+      ["in ", B4, 0.5],
+      ["the ", A4, 0.5],
+      ["row", G4, 1],
+    ],
+  },
+  {
+    chord: "D",
+    syllables: [
+      ["has ", A4, 0.5],
+      ["the ", B4, 0.5],
+      ["same ", A4, 0.5],
+      ["blue ", G4, 0.5],
+      ["light ", E4, 0.5],
+      ["on", D4, 1.5],
+    ],
+  },
+  { chord: "Em", instrumental: true },
+  {
+    chord: "Em",
+    syllables: [
+      ["I ", E4, 0.5],
+      ["know ", G4, 0.5],
+      ["the ", A4, 0.25],
+      ["cor", B4, 0.5],
+      ["ner ", A4, 0.25],
+      ["by ", G4, 0.5],
+      ["the ", E4, 0.5],
+      ["sound", G4, 1],
+    ],
+  },
+  {
+    chord: "C",
+    syllables: [
+      ["the ", G4, 0.5],
+      ["tyres ", A4, 0.75],
+      ["make ", G4, 0.25],
+      ["on ", E4, 0.5],
+      ["the ", D4, 0.5],
+      ["grate", E4, 1.5],
+    ],
+  },
+  {
+    chord: "G",
+    syllables: [
+      ["and ", D4, 0.5],
+      ["I ", E4, 0.5],
+      ["am ", G4, 0.25],
+      ["not ", A4, 0.25],
+      ["in ", B4, 0.5],
+      ["a ", A4, 0.25],
+      ["hur", G4, 0.5],
+      ["ry", E4, 1.25],
+    ],
+  },
+  {
+    chord: "D",
+    syllables: [
+      ["and ", D4, 0.5],
+      ["I ", E4, 0.5],
+      ["am ", G4, 0.25],
+      ["not ", A4, 0.25],
+      ["run", B4, 0.5],
+      ["ning ", A4, 0.5],
+      ["late", G4, 1.5],
+    ],
+    echo: {
+      at: 2,
+      syllables: [
+        ["(not ", D5, 0.5],
+        ["run", E5, 0.5],
+        ["ning ", D5, 0.5],
+        ["late)", B4, 0.5],
+      ],
+    },
+  },
+  { chord: "Em", instrumental: true },
+  {
+    chord: "Em",
+    syllables: [
+      ["The ", B3, 0.5],
+      ["pet", E4, 0.5],
+      ["rol ", G4, 0.5],
+      ["sta", A4, 0.5],
+      ["tion ", G4, 0.5],
+      ["sign", E4, 1.5],
+    ],
+  },
+  {
+    chord: "C",
+    syllables: [
+      ["is ", G4, 0.5],
+      ["the ", A4, 0.5],
+      ["last ", B4, 0.5],
+      ["thing ", A4, 0.5],
+      ["lit ", G4, 0.5],
+      ["for ", E4, 0.5],
+      ["miles", G4, 1],
+    ],
+  },
+  {
+    chord: "G",
+    syllables: [
+      ["I ", B4, 0.5],
+      ["will ", A4, 0.5],
+      ["drive ", G4, 0.5],
+      ["the ", A4, 0.5],
+      ["long ", B4, 0.5],
+      ["way ", A4, 0.5],
+      ["back", G4, 1],
+    ],
+  },
+  {
+    chord: "D",
+    syllables: [
+      ["and ", A4, 0.5],
+      ["get ", G4, 0.5],
+      ["in ", E4, 0.5],
+      ["af", D4, 0.5],
+      ["ter ", E4, 0.5],
+      ["two", D4, 1.5],
+    ],
+  },
+  { chord: "Em", instrumental: true },
+];
+
+const THE_STEPS = [
+  { chord: "Dm", instrumental: true },
+  {
+    chord: "Dm",
+    syllables: [
+      ["It ", D4, 0.25],
+      ["takes ", F4, 0.5],
+      ["a ", G4, 0.25],
+      ["long ", A4, 0.5],
+      ["way ", G4, 0.5],
+      ["down", F4, 2],
+    ],
+  },
+  {
+    chord: "Bb",
+    syllables: [
+      ["to ", F4, 0.5],
+      ["the ", G4, 0.25],
+      ["wa", A4, 0.5],
+      ["ter ", G4, 0.25],
+      ["from ", F4, 0.5],
+      ["the ", D4, 0.5],
+      ["road", F4, 1.5],
+    ],
+  },
+  { chord: "F", instrumental: true },
+  {
+    chord: "F",
+    syllables: [
+      ["The ", A4, 0.25],
+      ["steps ", C5, 0.75],
+      ["are ", A4, 0.5],
+      ["wet ", G4, 0.5],
+      ["and ", A4, 0.25],
+      ["grey", G4, 1.75],
+    ],
+  },
+  {
+    chord: "C",
+    syllables: [
+      ["and ", G4, 0.5],
+      ["the ", A4, 0.25],
+      ["hand", C5, 0.75],
+      ["rail ", A4, 0.5],
+      ["is ", G4, 0.25],
+      ["cold", F4, 1.75],
+    ],
+  },
+  {
+    chord: "Dm",
+    syllables: [
+      ["There ", D5, 0.5],
+      ["is ", C5, 0.25],
+      ["no", A4, 0.5],
+      ["thing ", G4, 0.25],
+      ["at ", F4, 0.5],
+      ["the ", G4, 0.25],
+      ["bot", A4, 0.5],
+      ["tom", F4, 1.25],
+    ],
+  },
+  {
+    chord: "Bb",
+    syllables: [
+      ["but ", F4, 0.5],
+      ["the ", G4, 0.25],
+      ["tide ", A4, 0.75],
+      ["com", G4, 0.5],
+      ["ing ", F4, 0.5],
+      ["in", D4, 1.5],
+    ],
+    echo: {
+      at: 2.25,
+      syllables: [
+        ["(com", D5, 0.5],
+        ["ing ", C5, 0.5],
+        ["in)", A4, 0.75],
+      ],
+    },
+  },
+  {
+    chord: "F",
+    syllables: [
+      ["I ", C5, 0.5],
+      ["will ", A4, 0.25],
+      ["go ", G4, 0.5],
+      ["down ", F4, 0.75],
+      ["a", G4, 0.5],
+      ["ny", A4, 0.5],
+      ["way", F4, 1],
+    ],
+  },
+  { chord: "Dm", instrumental: true },
+];
+
+// Background lines long enough to wrap two or three times, for checking the spacing of wrapped background words.
+const THE_CHOIR = [
+  { chord: "Am", instrumental: true },
+  {
+    chord: "Am",
+    agent: "v1",
+    syllables: [
+      ["I ", A3, 0.5],
+      ["sing ", C4, 0.5],
+      ["one ", D4, 0.5],
+      ["line", E4, 1.5],
+    ],
+    echo: {
+      at: 0,
+      syllables: [
+        ["(and ", C5, 0.2],
+        ["it ", D5, 0.2],
+        ["all ", E5, 0.2],
+        ["comes ", D5, 0.2],
+        ["back ", C5, 0.2],
+        ["a", A4, 0.2],
+        ["round ", G4, 0.2],
+        ["to ", A4, 0.2],
+        ["the ", C5, 0.2],
+        ["ve", D5, 0.2],
+        ["ry ", E5, 0.2],
+        ["same ", D5, 0.2],
+        ["line ", C5, 0.2],
+        ["that ", A4, 0.2],
+        ["we ", G4, 0.2],
+        ["on", A4, 0.2],
+        ["ly ", C5, 0.2],
+        ["just ", D5, 0.2],
+        ["now ", E5, 0.2],
+        ["sang)", D5, 0.2],
+      ],
+    },
+  },
+  {
+    chord: "F",
+    agent: "v2",
+    syllables: [
+      ["you ", C4, 0.5],
+      ["ans", D4, 0.5],
+      ["wer ", E4, 0.5],
+      ["me", D4, 1],
+    ],
+    echo: {
+      at: 0,
+      syllables: [
+        ["(each ", C5, 0.2],
+        ["small ", D5, 0.2],
+        ["voice ", E5, 0.2],
+        ["held ", D5, 0.2],
+        ["down ", C5, 0.2],
+        ["low ", A4, 0.2],
+        ["be", G4, 0.2],
+        ["neath ", A4, 0.2],
+        ["the ", C5, 0.2],
+        ["tune ", D5, 0.2],
+        ["we ", E5, 0.2],
+        ["lost ", D5, 0.2],
+        ["the ", C5, 0.2],
+        ["words ", A4, 0.2],
+        ["but ", G4, 0.2],
+        ["hummed ", A4, 0.2],
+        ["it ", C5, 0.2],
+        ["all ", D5, 0.2],
+        ["the ", E5, 0.2],
+        ["way)", D5, 0.2],
+      ],
+    },
+  },
+  {
+    chord: "C",
+    agent: "v1",
+    syllables: [
+      ["and ", E4, 0.5],
+      ["we ", G4, 0.5],
+      ["go ", A4, 0.5],
+      ["on", G4, 1.5],
+    ],
+    echo: {
+      at: 0,
+      syllables: [
+        ["(car", C5, 0.2],
+        ["ried ", D5, 0.2],
+        ["up ", E5, 0.2],
+        ["by ", D5, 0.2],
+        ["the ", C5, 0.2],
+        ["ones ", A4, 0.2],
+        ["who ", G4, 0.2],
+        ["nev", A4, 0.2],
+        ["er ", C5, 0.2],
+        ["step ", D5, 0.2],
+        ["to ", E5, 0.2],
+        ["the ", D5, 0.2],
+        ["front ", C5, 0.2],
+        ["but ", A4, 0.2],
+        ["hold ", G4, 0.2],
+        ["the ", A4, 0.2],
+        ["whole ", C5, 0.2],
+        ["of ", D5, 0.2],
+        ["it ", E5, 0.2],
+        ["here)", D5, 0.2],
+      ],
+    },
+  },
+  {
+    chord: "G",
+    agent: "v2",
+    syllables: [
+      ["un", D4, 0.5],
+      ["til ", E4, 0.5],
+      ["the ", G4, 0.5],
+      ["end", A4, 1.5],
+    ],
+    echo: {
+      at: 0,
+      syllables: [
+        ["(and ", C5, 0.2],
+        ["it ", D5, 0.2],
+        ["keeps ", E5, 0.2],
+        ["on ", D5, 0.2],
+        ["go", C5, 0.2],
+        ["ing ", A4, 0.2],
+        ["soft ", G4, 0.2],
+        ["and ", A4, 0.2],
+        ["low ", C5, 0.2],
+        ["un", D5, 0.2],
+        ["til ", E5, 0.2],
+        ["there ", D5, 0.2],
+        ["is ", C5, 0.2],
+        ["not ", A4, 0.2],
+        ["one ", G4, 0.2],
+        ["word ", A4, 0.2],
+        ["of ", C5, 0.2],
+        ["it ", D5, 0.2],
+        ["left ", E5, 0.2],
+        ["say)", D5, 0.2],
+      ],
+    },
+  },
+  { chord: "Am", instrumental: true },
+];
+
+const STRETCH = [
+  { chord: "Am", instrumental: true },
+  {
+    chord: "Am",
+    syllables: [
+      ["Sud", A4, 1],
+      ["den", C5, 1],
+      ["ly ", A4, 1],
+      ["I", G4, 1],
+    ],
+  },
+  {
+    chord: "F",
+    syllables: [
+      ["re", G4, 0.5],
+      ["mem", A4, 2],
+      ["ber", G4, 1.5],
+    ],
+  },
+  {
+    chord: "C",
+    syllables: [
+      ["ev", E4, 1],
+      ["er", G4, 1],
+      ["y", A4, 2],
+    ],
+  },
+  {
+    chord: "G",
+    syllables: [
+      ["beau", D5, 2.5],
+      ["ti", C5, 0.5],
+      ["ful", A4, 1],
+    ],
+  },
+  {
+    chord: "Am",
+    syllables: [
+      ["so ", E4, 0.5],
+      ["slow", G4, 3.5],
+    ],
+  },
+  {
+    chord: "F",
+    syllables: [
+      ["won", C5, 0.25],
+      ["der", D5, 0.25],
+      ["ful", E5, 3.5],
+    ],
+  },
+  {
+    chord: "C",
+    syllables: [
+      ["un", A4, 1],
+      ["for", C5, 1],
+      ["get", D5, 1],
+      ["ta", C5, 0.5],
+      ["ble", A4, 0.5],
+    ],
+  },
+  { chord: "Am", instrumental: true },
+];
+
+const YOAKE = [
+  { chord: "Am", instrumental: true },
+  {
+    chord: "Am",
+    agent: "v1",
+    translation: "until the night gives way to dawn",
+    syllables: [
+      ["夜", A4, 0.5, "yoru "],
+      ["が ", C5, 0.5, "ga "],
+      ["明", D5, 0.5, "a"],
+      ["け", C5, 0.25, "ke"],
+      ["る ", A4, 0.25, "ru "],
+      ["ま", G4, 0.5, "ma"],
+      ["で", A4, 1.5, "de"],
+    ],
+  },
+  {
+    chord: "F",
+    agent: "v1",
+    translation: "I was listening to your voice",
+    syllables: [
+      ["君", C5, 0.5, "kimi "],
+      ["の ", D5, 0.5, "no "],
+      ["声", E5, 0.5, "koe "],
+      ["を ", D5, 0.5, "wo "],
+      ["聴", C5, 0.5, "ki"],
+      ["い", A4, 0.25, "i"],
+      ["て", G4, 0.25, "te"],
+      ["い", A4, 0.5, "i"],
+      ["た", A4, 0.5, "ta"],
+    ],
+  },
+  {
+    chord: "C",
+    agent: "v2",
+    translation: "a star shining in the distant sky",
+    syllables: [
+      ["遠", E5, 0.5, "too"],
+      ["い ", D5, 0.25, "i "],
+      ["空", C5, 0.5, "sora "],
+      ["に ", A4, 0.25, "ni "],
+      ["光", C5, 0.5, "hika"],
+      ["る ", D5, 0.5, "ru "],
+      ["星", E5, 1.5, "hoshi"],
+    ],
+    echo: {
+      at: 2,
+      syllables: [
+        ["（ひ", E5, 0.5, "(hi"],
+        ["か", D5, 0.5, "ka"],
+        ["る）", C5, 1, "ru)"],
+      ],
+    },
+  },
+  {
+    chord: "G",
+    agent: "v2",
+    translation: "I wished that it would never fade",
+    syllables: [
+      ["消", D5, 0.5, "ki"],
+      ["え", C5, 0.25, "e"],
+      ["な", A4, 0.25, "na"],
+      ["い", C5, 0.5, "i "],
+      ["よ", D5, 0.25, "yo"],
+      ["う", C5, 0.25, "u "],
+      ["に", A4, 0.5, "ni "],
+      ["願", G4, 0.5, "nega"],
+      ["っ", A4, 0.25, "t"],
+      ["た", A4, 0.75, "ta"],
+    ],
+  },
+  {
+    chord: "Am",
+    agent: "v1000",
+    translation: "we sing together",
+    syllables: [
+      ["我", A4, 0.5, "wǒ"],
+      ["们 ", C5, 0.5, "men "],
+      ["一", D5, 0.5, "yì"],
+      ["起 ", E5, 0.5, "qǐ "],
+      ["唱", D5, 2, "chàng"],
+    ],
+    echo: {
+      at: 2,
+      syllables: [
+        ["（一", E5, 0.5, "(yì"],
+        ["起", D5, 0.5, "qǐ "],
+        ["唱）", C5, 1, "chàng)"],
+      ],
+    },
+  },
+  {
+    chord: "F",
+    agent: "v1000",
+    translation: "until the sky grows light",
+    syllables: [
+      ["直", C5, 0.5, "zhí"],
+      ["到", D5, 0.5, "dào "],
+      ["天", E5, 0.5, "tiān"],
+      ["亮", D5, 0.5, "liàng "],
+      ["为", C5, 0.5, "wéi"],
+      ["止", A4, 1.5, "zhǐ"],
+    ],
+  },
+  { chord: "Am", instrumental: true },
+];
+
+/**
+ * What the picker shows and what the audio generator walks. `beatMs` is the only tempo there is: a
+ * bar is four beats, and every syllable duration below is measured in them.
+ */
+export const SONGS = [
+  {
+    id: "kettle",
+    title: "Kettle",
+    summary: "Syllable timing, two singers taking turns, and a background vocal.",
+    kind: "duet",
+    beatMs: 750,
+    bars: KETTLE,
+    songwriters: ["Mara Quill", "Jonah Pike"],
+  },
+  {
+    id: "ring-road",
+    title: "Ring Road",
+    summary: "Faster, with more syllables per line.",
+    kind: "tempo",
+    beatMs: 500,
+    bars: RING_ROAD,
+    songwriters: ["Ada Stone"],
+  },
+  {
+    id: "the-steps",
+    title: "The Steps",
+    summary: "Slow, with long held words that glow.",
+    kind: "held",
+    beatMs: 1000,
+    bars: THE_STEPS,
+    songwriters: ["Theo Marsh", "Ines Vale", "Rui Okafor"],
+  },
+  {
+    id: "the-choir",
+    title: "The Choir",
+    summary: "Long background lines that wrap two or three times.",
+    kind: "background",
+    beatMs: 600,
+    bars: THE_CHOIR,
+    songwriters: ["June Harrow", "Sol Ferrante"],
+  },
+  {
+    id: "stretch",
+    title: "Stretch",
+    summary: "Words drawn out over whole beats, so the swipe crosses each syllable slowly.",
+    kind: "stretch",
+    beatMs: 1000,
+    bars: STRETCH,
+    songwriters: ["Wren Adler"],
+  },
+  {
+    id: "yoake",
+    title: "Yoake",
+    summary: "Japanese and Chinese, one character per syllable, with two singers and a background vocal.",
+    kind: "language",
+    beatMs: 750,
+    bars: YOAKE,
+    songwriters: ["Aoi Mori"],
+  },
+];
+
+// -- Derivation --------------------------------------------
+
+function layParts(syllables, startMs, beatMs, isBackground, textIndex = 0) {
+  const parts = [];
+  let cursorMs = startMs;
+
+  for (const syllable of syllables) {
+    const words = syllable[textIndex];
+    const beats = syllable[2];
+    const durationMs = Math.round(beats * beatMs);
+    parts.push({ startTimeMs: cursorMs, words, durationMs, isBackground });
+    cursorMs += durationMs;
+  }
+
+  return parts;
+}
+
+function layNotes(syllables, startMs, beatMs, voice) {
+  const notes = [];
+  let cursorMs = startMs;
+
+  for (const [, pitch, beats] of syllables) {
+    const durationMs = Math.round(beats * beatMs);
+    notes.push({ startMs: cursorMs, durationMs, pitch, voice });
+    cursorMs += durationMs;
+  }
+
+  return notes;
+}
+
+/**
+ * One song in the two shapes its two readers need. Walked once so the timeline behind both is
+ * literally the same arithmetic rather than the same intent expressed twice.
+ */
+export function buildScore(songId) {
+  const song = SONGS.find(candidate => candidate.id === songId);
+  if (song === undefined) throw new Error(`No built-in song called "${songId}"`);
+
+  const barMs = BEATS_PER_BAR * song.beatMs;
+  const lyrics = [];
+  const notes = [];
+  const bars = [];
+  let barStartMs = 0;
+
+  for (const bar of song.bars) {
+    bars.push({ startMs: barStartMs, durationMs: barMs, chord: bar.chord });
+
+    if (bar.instrumental) {
+      lyrics.push({ startTimeMs: barStartMs, durationMs: barMs, words: "", isInstrumental: true });
+      barStartMs += barMs;
+      continue;
+    }
+
+    const parts = layParts(bar.syllables, barStartMs, song.beatMs, false);
+    notes.push(...layNotes(bar.syllables, barStartMs, song.beatMs, "lead"));
+
+    const echoStartMs = bar.echo ? barStartMs + bar.echo.at * song.beatMs : 0;
+    if (bar.echo) {
+      parts.push(...layParts(bar.echo.syllables, echoStartMs, song.beatMs, true));
+      notes.push(...layNotes(bar.echo.syllables, echoStartMs, song.beatMs, "echo"));
+    }
+
+    const endMs = Math.max(...parts.map(part => part.startTimeMs + part.durationMs));
+    const timedRomanization = bar.syllables.every(syllable => syllable[3] !== undefined)
+      ? [
+          ...layParts(bar.syllables, barStartMs, song.beatMs, false, 3),
+          ...(bar.echo ? layParts(bar.echo.syllables, echoStartMs, song.beatMs, true, 3) : []),
+        ]
+      : null;
+    lyrics.push({
+      startTimeMs: barStartMs,
+      durationMs: endMs - barStartMs,
+      words: bar.syllables
+        .map(([words]) => words)
+        .join("")
+        .trimEnd(),
+      parts,
+      // Left off a bar that does not name one, rather than defaulted, because the renderer fills a
+      // line's agent in from its neighbours and a default here would overwrite that.
+      ...(bar.agent === undefined ? {} : { agent: bar.agent }),
+      ...(timedRomanization === null
+        ? {}
+        : {
+            romanization: bar.syllables
+              .map(syllable => syllable[3])
+              .join("")
+              .trimEnd(),
+            timedRomanization,
+          }),
+      ...(bar.translation === undefined ? {} : { translations: { en: bar.translation } }),
+    });
+
+    barStartMs += barMs;
+  }
+
+  return { lyrics, notes, bars, durationMs: barStartMs };
+}

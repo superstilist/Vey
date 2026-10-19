@@ -1,0 +1,630 @@
+import { describe, expect, it } from "vitest";
+import { TTMLParser, parseTTMLContent, parseTTMLTime } from "../ttml.js";
+
+describe("parseTTMLTime", () => {
+	it("parses offset-time with seconds", () => {
+		expect(parseTTMLTime("5.5s")).toBe(5500);
+	});
+
+	it("parses offset-time with milliseconds", () => {
+		expect(parseTTMLTime("1234ms")).toBe(1234);
+	});
+
+	it("parses offset-time with minutes", () => {
+		expect(parseTTMLTime("2m")).toBe(120000);
+	});
+
+	it("parses offset-time with hours", () => {
+		expect(parseTTMLTime("1h")).toBe(3600000);
+	});
+
+	it("parses clock-time hh:mm:ss.mmm", () => {
+		expect(parseTTMLTime("00:01:30.500")).toBe(90500);
+	});
+
+	it("parses mm:ss.mmm", () => {
+		expect(parseTTMLTime("01:30.500")).toBe(90500);
+	});
+
+	it("handles undefined", () => {
+		expect(parseTTMLTime(undefined)).toBe(0);
+	});
+
+	it("handles numeric input", () => {
+		expect(parseTTMLTime(5000)).toBe(5000);
+	});
+});
+
+describe("TTMLParser", () => {
+	describe("detect", () => {
+		it("detects TTML content", () => {
+			expect(TTMLParser.detect('<tt xmlns="http://www.w3.org/ns/ttml"></tt>')).toBe(true);
+		});
+
+		it("rejects non-TTML", () => {
+			expect(TTMLParser.detect("[00:12.50]Hello")).toBe(false);
+		});
+	});
+
+	describe("parse", () => {
+		it("parses line-synced TTML", () => {
+			const ttml = `<?xml version="1.0" encoding="UTF-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en">
+  <head><metadata></metadata></head>
+  <body dur="60s">
+    <div>
+      <p begin="5s" end="10s" key="l1">Hello world</p>
+      <p begin="10s" end="15s" key="l2">Second line</p>
+    </div>
+  </body>
+</tt>`;
+
+			const result = TTMLParser.parse(ttml);
+
+			expect(result.length).toBeGreaterThanOrEqual(2);
+			const nonInstrumental = result.filter((l) => !l.isInstrumental);
+			expect(nonInstrumental).toHaveLength(2);
+			expect(nonInstrumental[0].startTimeMs).toBe(5000);
+			expect(nonInstrumental[0].words).toBe("Hello world");
+			expect(nonInstrumental[0].durationMs).toBe(5000);
+			expect(nonInstrumental[1].startTimeMs).toBe(10000);
+		});
+
+		it("parses word-synced TTML", () => {
+			const ttml = `<?xml version="1.0" encoding="UTF-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en">
+  <head><metadata></metadata></head>
+  <body dur="30s">
+    <div>
+      <p begin="5s" end="10s" key="l1">
+        <span begin="5s" end="7s"><span>Hello </span></span>
+        <span begin="7s" end="10s"><span>world</span></span>
+      </p>
+    </div>
+  </body>
+</tt>`;
+
+			const result = TTMLParser.parse(ttml);
+			const nonInstrumental = result.filter((l) => !l.isInstrumental);
+
+			expect(nonInstrumental).toHaveLength(1);
+			expect(nonInstrumental[0].parts).toBeDefined();
+			expect(nonInstrumental[0].parts!.length).toBeGreaterThanOrEqual(2);
+		});
+
+		it("decodes HTML and XML entities in line and word text", () => {
+			const ttml = `<?xml version="1.0" encoding="UTF-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en">
+  <head><metadata></metadata></head>
+  <body dur="30s">
+    <div>
+      <p begin="5s" end="10s" key="l1">It&rsquo;s caf&#233; &amp; more&#8230;</p>
+      <p begin="10s" end="15s" key="l2"><span begin="10s" end="12s">don&#39;t</span><span begin="12s" end="15s">na&#xEF;ve</span></p>
+    </div>
+  </body>
+</tt>`;
+
+			const result = TTMLParser.parse(ttml);
+			const nonInstrumental = result.filter((l) => !l.isInstrumental);
+
+			expect(nonInstrumental[0].words).toBe("It’s café & more…");
+			expect(nonInstrumental[1].parts!.map((p) => p.words)).toEqual(["don't", "naïve"]);
+		});
+
+		it("detects language", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="ja">
+  <head><metadata></metadata></head>
+  <body dur="10s">
+    <div><p begin="0s" end="5s" key="l1">Test</p></div>
+  </body>
+</tt>`;
+
+			const result = parseTTMLContent(ttml);
+			expect(result.language).toBe("ja");
+		});
+
+		it("inserts instrumental breaks for large gaps", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en">
+  <head><metadata></metadata></head>
+  <body dur="60s">
+    <div>
+      <p begin="0s" end="5s" key="l1">Line one</p>
+      <p begin="20s" end="25s" key="l2">Line two</p>
+    </div>
+  </body>
+</tt>`;
+
+			const result = TTMLParser.parse(ttml);
+			const instrumentals = result.filter((l) => l.isInstrumental);
+			expect(instrumentals.length).toBeGreaterThan(0);
+		});
+
+		it("handles translations", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="ja"
+              xmlns:ttm="http://www.w3.org/ns/ttml#metadata">
+  <head>
+    <metadata>
+      <translations lang="en">
+        <translation for="l1"><text>Hello world</text></translation>
+      </translations>
+    </metadata>
+  </head>
+  <body dur="10s">
+    <div><p begin="0s" end="5s" key="l1">Konnichiwa</p></div>
+  </body>
+</tt>`;
+
+			const result = parseTTMLContent(ttml);
+			const nonInstrumental = result.lyrics.filter((l) => !l.isInstrumental);
+			expect(nonInstrumental[0].translation).toEqual({ text: "Hello world", lang: "en" });
+		});
+
+		it("extracts transliterations attached to inner <text> elements", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="ja">
+  <head>
+    <metadata>
+      <transliterations>
+        <transliteration xml:lang="ja-Latn">
+          <text for="l1"><span begin="0s" end="2s">konnichi</span><span begin="2s" end="5s">wa</span></text>
+          <text for="l2"><span begin="5s" end="7s">sayou</span><span begin="7s" end="10s">nara</span></text>
+        </transliteration>
+      </transliterations>
+    </metadata>
+  </head>
+  <body dur="10s">
+    <div>
+      <p begin="0s" end="5s" key="l1">こんにちは</p>
+      <p begin="5s" end="10s" key="l2">さようなら</p>
+    </div>
+  </body>
+</tt>`;
+
+			const result = parseTTMLContent(ttml);
+			const lines = result.lyrics.filter((l) => !l.isInstrumental);
+			expect(lines).toHaveLength(2);
+			expect(lines[0].romanization).toBe("konnichiwa");
+			expect(lines[0].timedRomanization).toHaveLength(2);
+			expect(lines[1].romanization).toBe("sayounara");
+			expect(lines[1].timedRomanization).toHaveLength(2);
+		});
+
+		it("skips a transliteration item that carries no text", () => {
+			// A <transliteration> child that is not a <text> still carries a `for`, so the item is
+			// reached and its text is absent. Reading it as a paragraph used to throw a TypeError, and
+			// one such child took the whole document with it.
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="ja">
+  <head>
+    <metadata>
+      <transliterations>
+        <transliteration xml:lang="ja-Latn">
+          <notext for="l1"/>
+          <text for="l2"><span begin="5s" end="7s">sayou</span><span begin="7s" end="10s">nara</span></text>
+        </transliteration>
+      </transliterations>
+    </metadata>
+  </head>
+  <body dur="10s">
+    <div>
+      <p begin="0s" end="5s" key="l1">こんにちは</p>
+      <p begin="5s" end="10s" key="l2">さようなら</p>
+    </div>
+  </body>
+</tt>`;
+
+			const lines = parseTTMLContent(ttml).lyrics.filter((l) => !l.isInstrumental);
+
+			expect(lines).toHaveLength(2);
+			expect(lines[0].romanization).toBeUndefined();
+			expect(lines[1].romanization).toBe("sayounara");
+		});
+
+		it("returns an empty result for a document the XML parser rejects", () => {
+			// fast-xml-parser caps how deep a document may nest and throws past it. The throw used to
+			// escape, which every caller reads as "this parser does not throw" would not survive.
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="0s" end="5s">${"<span>".repeat(600)}Deep${"</span>".repeat(600)}</p></div></body></tt>`;
+
+			expect(() => parseTTMLContent(ttml)).not.toThrow();
+			expect(parseTTMLContent(ttml)).toEqual({ lyrics: [], isWordSynced: false });
+			expect(TTMLParser.parse(ttml)).toEqual([]);
+		});
+
+		it("handles empty body", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en">
+  <head><metadata></metadata></head>
+  <body></body>
+</tt>`;
+
+			const result = TTMLParser.parse(ttml);
+			expect(result).toEqual([]);
+		});
+
+		it("inserts an intro instrumental even when the body carries no dur", () => {
+			// Intentional. Instrumental insertion is not conditional on <body dur>, which is what the
+			// implementation this was ported from does, and it is a change from 0.1.x, where a document
+			// with no dur got no breaks at all. It matters because `@braccato/provider-blyrics` calls
+			// `TTMLParser.parse(ttml)` with no duration, so a bLyrics document whose first line starts
+			// late gains a leading instrumental line it did not have before.
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"
+              xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xml:lang="en">
+  <body><div>
+    <p begin="10s" end="15s" itunes:key="L1">Late first line</p>
+    <p begin="30s" end="35s" itunes:key="L2">After a solo</p>
+  </div></body>
+</tt>`;
+
+			const result = TTMLParser.parse(ttml);
+
+			expect(result.map((l) => [l.startTimeMs, l.durationMs, l.isInstrumental ?? false])).toEqual([
+				[0, 10000, true],
+				[10000, 5000, false],
+				[15000, 15000, true],
+				[30000, 5000, false],
+			]);
+			// The outro is the one break a document with no dur still cannot have: nothing states where
+			// the song ends.
+			expect(result.at(-1)!.isInstrumental).toBeUndefined();
+		});
+
+		it("ignores the duration argument", () => {
+			// `@braccato/provider-blyrics` calls `TTMLParser.parse(ttml)` with no second argument, so a
+			// version that started honouring the parameter would silently hand that call site a 0 and
+			// change its instrumental breaks. The song duration travels through `parseTTMLContent`.
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en">
+  <body><div><p begin="0s" end="5s" itunes:key="L1">Only line</p></div></body>
+</tt>`;
+
+			expect(TTMLParser.parse(ttml, 600000)).toEqual(TTMLParser.parse(ttml));
+			expect(TTMLParser.parse(ttml, 600000).filter((l) => l.isInstrumental)).toHaveLength(0);
+
+			const viaOption = parseTTMLContent(ttml, { songDurationMs: 600000 });
+			expect(viaOption.lyrics.filter((l) => l.isInstrumental)).toHaveLength(1);
+		});
+	});
+
+	// A file a reader drops onto a page can be anything at all, so the contract for anything the
+	// parser cannot use is that nothing comes out of it and nothing is thrown. Pinned rather than
+	// assumed: two of the cases below used to throw.
+	describe("malformed input", () => {
+		const deeplyNested = `<tt><body><div><p begin="0s" end="5s">${"<span>".repeat(600)}x${"</span>".repeat(600)}</p></div></body></tt>`;
+
+		const unreadable = [
+			{ label: "an empty string", input: "" },
+			{ label: "whitespace only", input: "   \n\t  " },
+			{ label: "text that is not TTML", input: "just some prose, nothing timed about it" },
+			{ label: "another lyrics format entirely", input: "[00:12.50]Hello world" },
+			{ label: "a mismatched closing tag", input: "<tt><body></head></tt>" },
+			{ label: "tags nested deeper than the reader accepts", input: deeplyNested },
+			{ label: "a document with no body", input: "<tt></tt>" },
+			{ label: "a body with no lines", input: "<tt><body></body></tt>" },
+			{ label: "lines with no timing attributes", input: "<tt><body><div><p>Hi</p></div></body></tt>" },
+			{
+				label: "timing attributes that are present but empty",
+				input: '<tt xml:lang=""><body dur=""><div><p begin="" end="" key="">Hi</p></div></body></tt>',
+			},
+		];
+
+		it.each(unreadable)("returns nothing for $label", ({ input }) => {
+			expect(() => TTMLParser.parse(input)).not.toThrow();
+			expect(TTMLParser.parse(input)).toEqual([]);
+			expect(parseTTMLContent(input).lyrics).toEqual([]);
+		});
+
+		it("keeps no words from a document that stops mid line", () => {
+			const truncated = '<tt><body><div><p begin="0s" end="5s">Hello';
+
+			const result = TTMLParser.parse(truncated);
+
+			expect(result.every((l) => l.words === "")).toBe(true);
+		});
+
+		it("still reads a document whose tags are left open at the end", () => {
+			// Leniency, not junk: everything the document states is there, only the closing tags are
+			// missing, and a reader that dropped the line would be throwing away a readable file.
+			const result = TTMLParser.parse('<tt><body><div><p begin="0s" end="5s" key="k">Hi</p></div></body>');
+
+			expect(result.filter((l) => !l.isInstrumental).map((l) => l.words)).toEqual(["Hi"]);
+		});
+
+		it("reads the lines of a document whose metadata is malformed", () => {
+			// Well formed XML that is not the shape the reader expects: a translation with no text and a
+			// transliteration child that is not a <text>. None of it reaches the lines, and none of it
+			// stops them being read. The second one used to throw and take the document with it.
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en">
+  <head><metadata>
+    <translations lang="en"><translation for="k"/></translations>
+    <transliterations><transliteration><notext for="k"/></transliteration></transliterations>
+  </metadata></head>
+  <body dur="10s"><div><p begin="0s" end="5s" key="k">Hi</p></div></body>
+</tt>`;
+
+			expect(() => TTMLParser.parse(ttml)).not.toThrow();
+
+			const lines = TTMLParser.parse(ttml).filter((l) => !l.isInstrumental);
+			expect(lines.map((l) => l.words)).toEqual(["Hi"]);
+			expect(lines[0].translation).toBeUndefined();
+			expect(lines[0].romanization).toBeUndefined();
+		});
+
+		it("does not throw on timing attributes that are not times", () => {
+			// The line survives carrying times that are not numbers rather than being dropped. Pinned as
+			// it stands, since this is inherited behaviour and tightening it is the owner's call.
+			const ttml = '<tt><body dur="banana"><div><p begin="banana" end="pear" key="k">Hi</p></div></body></tt>';
+
+			expect(() => TTMLParser.parse(ttml)).not.toThrow();
+			expect(TTMLParser.parse(ttml).map((l) => Number.isNaN(l.startTimeMs))).toEqual([true]);
+		});
+	});
+
+	describe("agents", () => {
+		const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"
+              xmlns:ttm="http://www.w3.org/ns/ttml#metadata"
+              xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xml:lang="en">
+  <head><metadata>
+    <ttm:agent type="person" xml:id="singer1"><ttm:name type="full">First</ttm:name></ttm:agent>
+    <ttm:agent type="person" xml:id="singer2"/>
+    <ttm:agent type="group" xml:id="chorus"/>
+  </metadata></head>
+  <body dur="20s"><div>
+    <p begin="0s" end="5s" ttm:agent="singer1" itunes:key="L1">One</p>
+    <p begin="5s" end="10s" ttm:agent="singer2" itunes:key="L2">Two</p>
+    <p begin="10s" end="15s" ttm:agent="chorus" itunes:key="L3">Three</p>
+    <p begin="15s" end="20s" ttm:agent="singer1" itunes:key="L4">Four</p>
+  </div></body>
+</tt>`;
+
+		it("maps each person agent to a stable vocalist slot", () => {
+			const lines = parseTTMLContent(ttml).lyrics.filter((l) => !l.isInstrumental);
+			expect(lines.map((l) => l.agent)).toEqual(["v1", "v2", "v1000", "v1"]);
+		});
+
+		it("buckets a non-person agent into the group slot", () => {
+			const lines = parseTTMLContent(ttml).lyrics.filter((l) => !l.isInstrumental);
+			expect(lines[2].agent).toBe("v1000");
+		});
+
+		it("passes an agent through untouched when no metadata declares it", () => {
+			const undeclared = `<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en">
+  <body dur="10s"><div><p begin="0s" end="5s" ttm:agent="v7" itunes:key="L1">One</p></div></body>
+</tt>`;
+			const lines = parseTTMLContent(undeclared).lyrics.filter((l) => !l.isInstrumental);
+			expect(lines[0].agent).toBe("v7");
+		});
+	});
+
+	describe("background vocals", () => {
+		it("marks the parts inside a ttm:role=x-bg span as background", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"
+              xmlns:ttm="http://www.w3.org/ns/ttml#metadata"
+              xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xml:lang="en">
+  <body dur="10s"><div><p begin="0s" end="6s" itunes:key="L1"><span begin="0s" end="2s">Hello</span><span ttm:role="x-bg"><span begin="2s" end="4s">(echo)</span><span begin="4s" end="6s">(echo)</span></span></p></div></body>
+</tt>`;
+
+			const lines = parseTTMLContent(ttml).lyrics.filter((l) => !l.isInstrumental);
+
+			expect(lines[0].parts).toHaveLength(3);
+			expect(lines[0].parts!.map((p) => p.isBackground)).toEqual([false, true, true]);
+			expect(lines[0].words).toBe("Hello(echo)(echo)");
+		});
+	});
+
+	describe("explicit content", () => {
+		const build = (attr: string) => `<tt xmlns="http://www.w3.org/ns/ttml"
+              xmlns:itunes="http://music.apple.com/lyric-ttml-internal"
+              xmlns:amll="http://www.example.com/ns/amll" xml:lang="en">
+  <body dur="10s"><div><p begin="0s" end="4s" itunes:key="L1"><span begin="0s" end="2s" ${attr}>Damn</span><span begin="2s" end="4s">it</span></p></div></body>
+</tt>`;
+
+		it("reads explicit=true", () => {
+			const lines = parseTTMLContent(build('explicit="true"')).lyrics.filter((l) => !l.isInstrumental);
+			expect(lines[0].parts!.map((p) => p.explicit)).toEqual([true, false]);
+		});
+
+		it("reads AMLL's obscene=true", () => {
+			const lines = parseTTMLContent(build('amll:obscene="true"')).lyrics.filter((l) => !l.isInstrumental);
+			expect(lines[0].parts!.map((p) => p.explicit)).toEqual([true, false]);
+		});
+	});
+
+	describe("itunes metadata", () => {
+		it("keeps every line that repeats an itunes:key", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"
+              xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xml:lang="en">
+  <body dur="30s"><div>
+    <p begin="0s" end="5s" itunes:key="L1">Chorus line</p>
+    <p begin="5s" end="10s" itunes:key="L2">Verse line</p>
+    <p begin="10s" end="15s" itunes:key="L1">Chorus line</p>
+  </div></body>
+</tt>`;
+
+			const lines = parseTTMLContent(ttml).lyrics.filter((l) => !l.isInstrumental);
+
+			expect(lines).toHaveLength(3);
+			expect(lines.map((l) => l.startTimeMs)).toEqual([0, 5000, 10000]);
+			expect(lines.map((l) => l.key)).toEqual(["L1", "L2", "L1"]);
+		});
+
+		it("tolerates itunes:songPart on the div", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"
+              xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xml:lang="en">
+  <body dur="20s">
+    <div begin="0s" end="10s" itunes:songPart="Verse"><p begin="0s" end="5s" itunes:key="L1">Verse line</p></div>
+    <div begin="10s" end="20s" itunes:songPart="Chorus"><p begin="10s" end="15s" itunes:key="L2">Chorus line</p></div>
+  </body>
+</tt>`;
+
+			const lines = parseTTMLContent(ttml).lyrics.filter((l) => !l.isInstrumental);
+
+			expect(lines.map((l) => l.words)).toEqual(["Verse line", "Chorus line"]);
+		});
+	});
+
+	describe("namespaces", () => {
+		it("parses a document whose prefixes are never declared", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="en">
+  <body dur="10s"><div><p begin="0s" end="5s" itunes:key="L1" ttm:agent="v1">Unbound</p></div></body>
+</tt>`;
+
+			const result = parseTTMLContent(ttml);
+			const lines = result.lyrics.filter((l) => !l.isInstrumental);
+
+			expect(lines).toHaveLength(1);
+			expect(lines[0].words).toBe("Unbound");
+			expect(lines[0].key).toBe("L1");
+			expect(lines[0].agent).toBe("v1");
+		});
+	});
+
+	describe("offset times", () => {
+		it("reads begin and end given in offset-time units", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"
+              xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xml:lang="en">
+  <body dur="5m"><div><p begin="60000ms" end="1.5m" itunes:key="L1"><span begin="60.5s" end="61s">Late</span></p></div></body>
+</tt>`;
+
+			const result = parseTTMLContent(ttml);
+			const lines = result.lyrics.filter((l) => !l.isInstrumental);
+
+			expect(lines[0].startTimeMs).toBe(60000);
+			expect(lines[0].durationMs).toBe(30000);
+			expect(lines[0].parts![0].startTimeMs).toBe(60500);
+			expect(lines[0].parts![0].durationMs).toBe(500);
+			// dur="5m" is the only source of the outro, so it has to have been read as 300000
+			const outro = result.lyrics.filter((l) => l.isInstrumental).at(-1)!;
+			expect(outro.startTimeMs + outro.durationMs).toBe(300000);
+		});
+	});
+
+	describe("Apple dialect translations", () => {
+		it("reads a translation attached to an inner text element", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"
+              xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xml:lang="ja">
+  <head><metadata>
+    <translations>
+      <translation type="subtitle" xml:lang="en"><text for="L1">Hello world</text></translation>
+      <translation type="subtitle" xml:lang="fr"><text for="L1">Bonjour</text></translation>
+    </translations>
+  </metadata></head>
+  <body dur="10s"><div><p begin="0s" end="5s" itunes:key="L1">Konnichiwa</p></div></body>
+</tt>`;
+
+			const lines = parseTTMLContent(ttml).lyrics.filter((l) => !l.isInstrumental);
+
+			expect(lines[0].translations).toEqual({ en: "Hello world", fr: "Bonjour" });
+			expect(lines[0].translation).toEqual({ text: "Hello world", lang: "en" });
+		});
+
+		it("reads a translation whose text is wrapped in further elements", () => {
+			// 0.1.x read the translation with textContent, which gathered the whole subtree. Reading only
+			// the first child, and only when it was a text node, lost a wrapped one entirely.
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"
+              xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xml:lang="ja">
+  <head><metadata>
+    <translations lang="en">
+      <translation for="L1"><text><span>Hello</span><span> world</span></text></translation>
+    </translations>
+  </metadata></head>
+  <body dur="10s"><div><p begin="0s" end="5s" itunes:key="L1">Konnichiwa</p></div></body>
+</tt>`;
+
+			const lines = parseTTMLContent(ttml).lyrics.filter((l) => !l.isInstrumental);
+
+			expect(lines[0].translation).toEqual({ text: "Hello world", lang: "en" });
+			expect(lines[0].translations).toEqual({ en: "Hello world" });
+		});
+
+		it("carries a translation onto every line sharing an itunes:key", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"
+              xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xml:lang="ja">
+  <head><metadata>
+    <translations>
+      <translation type="subtitle" xml:lang="en"><text for="L1">Hello world</text></translation>
+    </translations>
+  </metadata></head>
+  <body dur="20s"><div>
+    <p begin="0s" end="5s" itunes:key="L1">Konnichiwa</p>
+    <p begin="5s" end="10s" itunes:key="L1">Konnichiwa</p>
+  </div></body>
+</tt>`;
+
+			const lines = parseTTMLContent(ttml).lyrics.filter((l) => !l.isInstrumental);
+
+			expect(lines).toHaveLength(2);
+			expect(lines.map((l) => l.translations?.en)).toEqual(["Hello world", "Hello world"]);
+		});
+	});
+});
+
+describe("TTMLParser.metadata", () => {
+	const body = `<body dur="10s"><div><p begin="0s" end="5s">Line</p></div></body>`;
+
+	it("reads Apple's iTunesMetadata songwriters", () => {
+		const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xml:lang="en"><head><metadata><ttm:agent type="person" xml:id="v1"/><iTunesMetadata xmlns="http://music.apple.com/lyric-ttml-internal"><translations/><songwriters><songwriter>Abel Tesfaye</songwriter><songwriter>Max Martin</songwriter></songwriters><audio lyricOffset="0.046" role="spatial"/></iTunesMetadata></metadata></head>${body}</tt>`;
+
+		expect(TTMLParser.metadata(ttml)).toEqual({ songwriters: ["Abel Tesfaye", "Max Martin"] });
+	});
+
+	it("reads lrc.red's sourceMetadata songwriters", () => {
+		const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:lrc="http://lrc.red/lyric-ttml-internal"><head><metadata><sourceMetadata xmlns="http://lrc.red/lyric-ttml-internal" leadingSilence="0"><translations/><songwriters><songwriter>Oscar Thomas Holter</songwriter></songwriters></sourceMetadata></metadata></head>${body}</tt>`;
+
+		expect(TTMLParser.metadata(ttml).songwriters).toEqual(["Oscar Thomas Holter"]);
+	});
+
+	it("reads Composer's meta pairs under either key", () => {
+		const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:composer="https://composer.boidu.dev/ns"><head><metadata><composer:meta key="artists" value="Someone"/><composer:meta key="songwriter" value="A"/><composer:meta key="songwriters" value="B"/></metadata></head>${body}</tt>`;
+
+		expect(TTMLParser.metadata(ttml).songwriters).toEqual(["A", "B"]);
+	});
+
+	describe("edge cases", () => {
+		it("reads a pretty-printed head", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml">
+  <head>
+    <metadata>
+      <iTunesMetadata xmlns="http://music.apple.com/lyric-ttml-internal">
+        <songwriters>
+          <songwriter>Chester Bennington</songwriter>
+          <songwriter>Mike Shinoda</songwriter>
+        </songwriters>
+      </iTunesMetadata>
+    </metadata>
+  </head>
+  ${body}
+</tt>`;
+
+			expect(TTMLParser.metadata(ttml).songwriters).toEqual(["Chester Bennington", "Mike Shinoda"]);
+		});
+
+		it("decodes entities and keeps a name with a comma whole", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"><head><metadata><iTunesMetadata><songwriters><songwriter>Tom &amp; Jerry</songwriter><songwriter>Smith, John</songwriter></songwriters></iTunesMetadata></metadata></head>${body}</tt>`;
+
+			expect(TTMLParser.metadata(ttml).songwriters).toEqual(["Tom & Jerry", "Smith, John"]);
+		});
+
+		it("names a person once when two sources credit them", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:composer="https://composer.boidu.dev/ns"><head><metadata><composer:meta key="songwriter" value="A"/><iTunesMetadata><songwriters><songwriter>A</songwriter><songwriter> </songwriter></songwriters></iTunesMetadata></metadata></head>${body}</tt>`;
+
+			expect(TTMLParser.metadata(ttml).songwriters).toEqual(["A"]);
+		});
+
+		it("reads nothing from a document without a head, with an empty list, or that is not XML", () => {
+			expect(TTMLParser.metadata(`<tt xmlns="http://www.w3.org/ns/ttml">${body}</tt>`).songwriters).toEqual([]);
+			expect(
+				TTMLParser.metadata(
+					`<tt xmlns="http://www.w3.org/ns/ttml"><head><metadata><iTunesMetadata><songwriters/></iTunesMetadata></metadata></head>${body}</tt>`,
+				).songwriters,
+			).toEqual([]);
+			expect(TTMLParser.metadata("").songwriters).toEqual([]);
+			expect(TTMLParser.metadata("<tt><body>").songwriters).toEqual([]);
+		});
+	});
+
+	describe("invariants", () => {
+		it("leaves the parsed lyrics and their result shape alone", () => {
+			const ttml = `<tt xmlns="http://www.w3.org/ns/ttml"><head><metadata><iTunesMetadata><songwriters><songwriter>A</songwriter></songwriters></iTunesMetadata></metadata></head>${body}</tt>`;
+
+			const parsed = parseTTMLContent(ttml);
+			expect(Object.keys(parsed).sort()).toEqual(["isWordSynced", "language", "lyrics"]);
+			expect(parsed.lyrics.filter((l) => !l.isInstrumental).map((l) => l.words)).toEqual(["Line"]);
+		});
+	});
+});

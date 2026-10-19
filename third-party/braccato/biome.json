@@ -1,0 +1,79 @@
+{
+	"$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+	"files": {
+		"ignore": [".turbo/**", "**/dist/**", ".claude/**", "demo/public/generated/**"]
+	},
+	"organizeImports": {
+		"enabled": true
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"complexity": {
+				"noForEach": "off"
+			},
+			"style": {
+				"noNonNullAssertion": "off",
+				"useConst": "warn"
+			},
+			"suspicious": {
+				"noExplicitAny": "off"
+			}
+		}
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"lineWidth": 120
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double",
+			"semicolons": "always"
+		}
+	},
+	"overrides": [
+		{
+			"include": ["packages/core/**", "demo/**", "tooling/**"],
+			"organizeImports": {
+				"enabled": false
+			},
+			"linter": {
+				"rules": {
+					"recommended": false,
+					"correctness": {
+						"noUnusedVariables": "error"
+					},
+					"style": {
+						"useConst": "off"
+					}
+				}
+			},
+			"formatter": {
+				"indentStyle": "space",
+				"indentWidth": 2
+			},
+			"javascript": {
+				"formatter": {
+					"trailingCommas": "es5",
+					"arrowParentheses": "asNeeded"
+				}
+			}
+		},
+		{
+			"include": ["packages/core/**/*.css", "demo/**/*.css"],
+			"formatter": {
+				"enabled": false
+			}
+		},
+		{
+			"include": ["tooling/tsconfig.package.json"],
+			"json": {
+				"parser": {
+					"allowComments": true
+				}
+			}
+		}
+	]
+}

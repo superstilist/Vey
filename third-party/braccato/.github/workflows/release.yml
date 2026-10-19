@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Generate harmonizer bot token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token || github.token }}
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build:packages
+
+      - name: Set committer identity
+        run: |
+          if [ -n "${{ steps.app-token.outputs.app-slug }}" ]; then
+            git config user.name "${{ steps.app-token.outputs.app-slug }}[bot]"
+            git config user.email "248079304+${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          fi
+
+      - name: Version and publish
+        id: version
+        run: |
+          if find .changeset -name '*.md' ! -name README.md | grep -q .; then
+            pnpm changeset version
+            pnpm install --lockfile-only
+          fi
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "chore: version packages [skip ci]"
+            git push origin HEAD:master
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          fi
+          pnpm changeset publish --no-git-tag
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+
+      - name: Rebuild docs
+        if: steps.version.outputs.released == 'true'
+        run: curl -fsS -X POST "$DOCS_DEPLOY_HOOK_URL"
+        env:
+          DOCS_DEPLOY_HOOK_URL: ${{ secrets.DOCS_DEPLOY_HOOK_URL }}

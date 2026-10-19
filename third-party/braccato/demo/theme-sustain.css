@@ -1,0 +1,189 @@
+/* The theme brings its own font. An @import has to come before every other rule. */
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap");
+
+/* Taken from the Sustain theme for Better Lyrics, minus the parts that style YouTube Music itself. */
+
+/* blyrics-target-scroll-pos-ratio = 0.5; */
+
+.blyrics-container {
+  /* DM Sans is already tight, so skip the page's extra letter spacing. */
+  --demo-lyric-tracking: 0;
+  --blyrics-font-family: "DM Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --blyrics-font-size: clamp(1.8rem, 4.4vw, 3rem);
+  --blyrics-font-weight: 600;
+  --blyrics-wobble-duration: 1s;
+  --blyrics-glow-color: color(display-p3 1 1 1 / 0.0001);
+  --blyrics-word-wobble-transform-from: translateY(0);
+  --blyrics-word-wobble-transform-peak: translateY(0);
+  --blyrics-word-wobble-transform-settle: translateY(0);
+  --blyrics-word-wobble-transform-to: translateY(0);
+  --blyrics-letter-wave-transform: translateY(-0.07em);
+  --blyrics-letter-wave-settle: translateY(-0.028em);
+  --blyrics-letter-wave-duration: 0.9s;
+}
+
+/* Lines blur and fade the further they are from the one being sung. `.blyrics--active` follows the
+   scroll and ends a little before the line does, `.blyrics--animating` follows the audio, so
+   matching either keeps the effect steady. */
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) {
+  opacity: 0.88;
+  filter: blur(1.125px);
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line {
+  opacity: 0.72;
+  filter: blur(2.5px);
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line {
+  opacity: 0.52;
+  filter: blur(4.125px);
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0.28;
+  filter: blur(6px);
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line:is(.blyrics--active, .blyrics--animating) + .blyrics--line:not(:is(.blyrics--active, .blyrics--animating)) + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line + .blyrics--line {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.blyrics--line.blyrics--active {
+  transition: filter 0.1s 0s,
+		opacity 0.4s 0.166s,
+		transform 0.166s var(--blyrics-anim-delay, 0s) !important;
+}
+
+/* When the reader scrolls away, drop the blur so every line is readable. */
+
+.blyrics-user-scrolling .blyrics--line {
+  filter: none !important;
+  transition: none !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+.blyrics-background-lyric {
+  font-size: 0.9em;
+}
+
+.blyrics-container > div {
+  transition: filter calc(var(--blyrics-duration) / 3) 0.4s,
+		opacity calc(var(--blyrics-duration) / 2) 0.166s,
+		transform 0.166s var(--blyrics-anim-delay, 0s) !important;
+  padding: 5px 0;
+}
+
+.blyrics-container > div.blyrics--active, .blyrics-container > :is(.blyrics--active, .blyrics--animating) {
+  opacity: 1 !important;
+  filter: blur(0px);
+}
+
+.blyrics-container > div:hover {
+  opacity: 1 !important;
+  filter: blur(0px) !important;
+  transform: scale(1.01);
+  transition: all 0.3s ease;
+}
+
+/* Only words held longer than blyrics-long-word-threshold glow. */
+
+.blyrics-word-highlight {
+  --blyrics-glow-color: color(display-p3 1 1 1 / 0.0001);
+}
+
+.blyrics-word-highlight[data-long-word] {
+  --blyrics-glow-color: color(display-p3 1 1 1 / 1);
+}
+
+/* Lines sit on the side of whoever sings them. The renderer sets `data-agent` on every line, and
+   instrumentals copy it from their neighbours. The lead stays left, a second singer goes right, and
+   a group sits in the middle. */
+
+.blyrics--line[data-agent="v2"] {
+  text-align: right;
+  transform-origin: right center;
+}
+
+.blyrics--line[data-agent="v1000"] {
+  text-align: center;
+  transform-origin: center center;
+}

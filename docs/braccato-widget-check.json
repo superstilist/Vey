@@ -1,0 +1,83 @@
+{
+  "passed": true,
+  "initial": {
+    "revision": "1e6b6954b1c18136274681a9bf4985efb2332b01",
+    "status": "rendering",
+    "currentTime": 4.3,
+    "syncType": "richsync",
+    "lineCount": 4,
+    "layout": "scroll",
+    "letters": 116,
+    "animations": 119,
+    "themeCompiles": 1,
+    "builds": 1,
+    "ticks": 1,
+    "tickOptionsUpdates": 1,
+    "scrollTop": 0,
+    "visible": true,
+    "packages": [
+      "core",
+      "element",
+      "constants",
+      "text",
+      "themeSettings",
+      "util",
+      "parsers",
+      "format",
+      "highlight",
+      "providers"
+    ],
+    "mode": "lyrics"
+  },
+  "final": {
+    "revision": "1e6b6954b1c18136274681a9bf4985efb2332b01",
+    "status": "rendering",
+    "currentTime": 4.3,
+    "syncType": "richsync",
+    "lineCount": 4,
+    "layout": "scroll",
+    "letters": 116,
+    "animations": 127,
+    "themeCompiles": 3,
+    "builds": 3,
+    "ticks": 7,
+    "tickOptionsUpdates": 4,
+    "scrollTop": 0,
+    "visible": true,
+    "packages": [
+      "core",
+      "element",
+      "constants",
+      "text",
+      "themeSettings",
+      "util",
+      "parsers",
+      "format",
+      "highlight",
+      "providers"
+    ],
+    "mode": "lyrics"
+  },
+  "optimization": {
+    "stationarySamples": 200,
+    "additionalTicks": 0,
+    "additionalOptionWrites": 0
+  },
+  "checks": [
+    "standard Braccato colors and glow",
+    "upstream packages",
+    "letter waves",
+    "Web Animations",
+    "duet stage",
+    "instrumental SVG",
+    "seek bridge",
+    "no per-tick rebuilds",
+    "no duplicate paused ticks",
+    "hidden animations pause",
+    "custom themes ignored",
+    "reduced motion",
+    "highlighted editing",
+    "mobile resize",
+    "no external asset requests"
+  ]
+}
