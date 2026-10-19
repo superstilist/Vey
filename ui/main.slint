@@ -743,6 +743,9 @@ export component MainWindow inherits Window {
                 if page-layer.route != "settings": VerticalLayout {
                     spacing: 18px;
                     if (page-layer.route == "home" || page-layer.route == "explore") && page-layer.page-tracks.length > 0: ScrollView {
+                        horizontal-scrollbar-policy: always-off;
+                        vertical-scrollbar-policy: always-off;
+                        mouse-drag-pan-enabled: true;
                         height: root.mobile ? 218px : (content.width < 900px ? 236px : 284px);
                         content-width: max(self.width, min(page-layer.page-tracks.length, 8) * ((root.mobile ? 148px : max(156px, min(204px, (content.width - 152px) / 5))) + 20px));
                         content-height: self.height;

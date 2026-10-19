@@ -89,3 +89,14 @@ lines and a 256-pixel ambient frame. The ZIP checksum was verified. Screenshots
 35–44 and 45–51 show the refreshed browser UI; native screenshots were refreshed
 by the isolated smoke run. These fixture checks do not cover physical phones
 or live online-service parity. Rust logic is unchanged in this UI-only update.
+
+## Vey 0.1.4 album shelf scrollbar
+
+The line beneath the Home/Explore album shelves was the horizontal scrollbar.
+Its visual bar is now hidden, with mouse-drag panning enabled. Horizontal wheel
+scrolling and album-click playback were exercised against an overflowing shelf;
+screenshots 52–53 show the clean row and its changed position after panning.
+The existing phone settings/import/overlay check passed. The Rust/WASM build
+and optimized Windows build succeeded. Native --widget-smoke exited 0 with
+seven lyric lines and a 256-pixel ambient frame; ZIP SHA-256 was verified.
+The outer page scrollbar and playback seek bar retain their existing behavior.

@@ -1,9 +1,13 @@
-# Vey 0.1.3 — Windows x64
+# Vey 0.1.4 — Windows x64
 
 Extract this archive and run `vey.exe`. Keep the bundled notices with it.
 The UI, fonts, Braccato and Kawarp assets are embedded in the executable.
 The app uses the installed Microsoft Edge WebView2 and Microsoft Visual C++
 x64 runtimes. This package does not bundle their installers.
+
+The horizontal scrollbar line beneath the Home and Explore album shelves is
+hidden. Shelves remain scrollable with touch, a trackpad/horizontal wheel and
+mouse dragging; the page scrollbar and playback seek bar are unchanged.
 
 This release removes the panels behind player cover art on desktop and mobile,
 unnecessary icon-button fills, repeated home/sidebar captions and the routine
