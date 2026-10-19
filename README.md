@@ -7,6 +7,7 @@ existing library data and settings remain compatible.
 
 The interface pairs a compact bento home with soft, organic shapes and
 Material You inspired tonal colors that adapt to the current cover.
+Player artwork sits directly on the surface, without a backing card.
 On phones, the player opens as an overlay over the current page. Settings has
 focused subpages and large touch controls.
 See [the tonal interface notes](docs/MATERIAL-STYLE.md) and

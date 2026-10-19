@@ -19,7 +19,7 @@ export component Action inherits Rectangle {
     height: comfortable ? 44px : chip ? 32px : 36px;
     border-width: 0px;
     border-color: Tokens.neutral-300;
-    background: primary ? (touch.has-hover ? Tokens.brand-300 : Tokens.brand-500) : selected ? Tokens.primary-container : touch.has-hover ? Tokens.neutral-200 : chip || outlined ? Tokens.neutral-150 : transparent;
+    background: primary ? (touch.has-hover ? Tokens.brand-300 : Tokens.brand-500) : selected ? Tokens.primary-container : touch.has-hover ? Tokens.neutral-200 : chip || (outlined && text != "") ? Tokens.neutral-150 : transparent;
     border-radius: Tokens.radius-pill;
     animate background { duration: 110ms; }
     animate border-color { duration: 110ms; }
@@ -105,8 +105,8 @@ export component Artwork inherits Rectangle {
     clip: true;
     border-width: 0px;
     border-color: #ffffff14;
-    background: Math.mod(tone, 3) == 0 ? Tokens.primary-container : Math.mod(tone, 3) == 1 ? Tokens.secondary-container : Tokens.tertiary-container;
-    Image {
+    background: art.width > 0 ? transparent : Math.mod(tone, 3) == 0 ? Tokens.primary-container : Math.mod(tone, 3) == 1 ? Tokens.secondary-container : Tokens.tertiary-container;
+    if root.art.width == 0: Image {
         source: @image-url("../assets/icons/Music2.svg");
         width: root.width * 0.32;
         height: root.height * 0.32;

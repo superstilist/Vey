@@ -72,3 +72,20 @@ transparent edit of the supplied logo; LOGO.md records the asset and edit prompt
 
 The optimized 0.1.2 Windows build also passed --widget-smoke (exit 0, seven
 lyric lines, 256-pixel ambient frame). Its release checksum was verified.
+
+## Vey 0.1.3 visual cleanup and release
+
+Player cover/metadata panels are transparent on desktop and mobile. Loaded
+artwork no longer has a colored fallback or music-note icon underneath; missing
+artwork retains its placeholder. Player covers use consistent rounded corners.
+Secondary icon actions lose their idle fills, while primary and selected states
+remain emphasized. Repeated sidebar/home captions and the normal lyric-provider
+footer are removed; renderer errors and nonzero offsets remain available.
+
+This release passed the Rust/WASM build, desktop/mobile lyric integration,
+Material palette and audio controls, and phone settings/import/overlay checks.
+The optimized Windows executable passed --widget-smoke with exit 0, seven lyric
+lines and a 256-pixel ambient frame. The ZIP checksum was verified. Screenshots
+35–44 and 45–51 show the refreshed browser UI; native screenshots were refreshed
+by the isolated smoke run. These fixture checks do not cover physical phones
+or live online-service parity. Rust logic is unchanged in this UI-only update.

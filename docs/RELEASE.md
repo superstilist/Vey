@@ -1,13 +1,14 @@
-# Vey 0.1.2 — Windows x64
+# Vey 0.1.3 — Windows x64
 
 Extract this archive and run `vey.exe`. Keep the bundled notices with it.
 The UI, fonts, Braccato and Kawarp assets are embedded in the executable.
 The app uses the installed Microsoft Edge WebView2 and Microsoft Visual C++
 x64 runtimes. This package does not bundle their installers.
 
-This build improves phone navigation, adds focused settings subpages and
-uses a smaller, transparent logo with rounded corners. Page travel is quicker,
-settings panels fade between sections, and player tools open smoothly.
+This release removes the panels behind player cover art on desktop and mobile,
+unnecessary icon-button fills, repeated home/sidebar captions and the routine
+provider footer. Covers use a consistent rounded shape. Loaded artwork has no
+colored backing or placeholder icon underneath, including transparent images.
 
 On mobile, the player opens as an overlay over the current page; closing it
 returns to the same page and scroll position. Desktop keeps its page motion.

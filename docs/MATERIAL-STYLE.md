@@ -2,12 +2,14 @@
 
 The design is Material You inspired: a compact bento home, tonal surfaces,
 soft rounded controls and a small number of organic artwork silhouettes.
-The supplied Vey logo stays unchanged. The dark palette starts from a muted
+The Vey plate logo uses a transparent background and rounded edges. See LOGO.md.
+The dark palette starts from a muted
 lime seed and follows the current cover when artwork becomes available.
 
 The home has one main listening tile and two desktop shortcuts. Mobile keeps
 one main tile and the existing navigation. Lyrics retain their open surface;
-the cover and metadata form one softly rounded tile. Selected tabs use filled
+the cover and metadata sit directly on the player surface, without a backing
+card. Loaded images have no colored placeholder below them. Selected tabs use filled
 pills, and playback buttons change between circular and rounded-square shapes.
 
 `src/material.rs` samples a bounded number of pixels on artwork changes,
@@ -28,3 +30,7 @@ and keyboard input, and captures desktop/mobile views.
 
 Native renderer startup retry feedback stays on the lyric surface instead of
 leaving implementation diagnostics in a persistent home-page banner.
+
+Version 0.1.3 keeps primary/selected emphasis while secondary icon actions use
+transparent backgrounds. Redundant sidebar/home captions and the routine lyric
+provider footer are removed. Missing-art placeholders and errors remain visible.

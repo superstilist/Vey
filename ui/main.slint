@@ -468,7 +468,6 @@ export component MainWindow inherits Window {
                         spacing: 2px;
                         alignment: center;
                         Text { text: item.name; color: Tokens.ink-100; font-size: 13px; font-weight: 600; overflow: elide; }
-                        Text { text: item.detail; color: Tokens.ink-300; font-size: 11px; overflow: elide; }
                     }
                     pl-touch := TouchArea { mouse-cursor: pointer; clicked => { root.open-playlist(item.id); } }
                 }
@@ -571,7 +570,6 @@ export component MainWindow inherits Window {
                             padding: root.mobile ? 22px : 28px; spacing: 20px;
                             VerticalLayout {
                                 alignment: center; spacing: 10px;
-                                Text { text: "ВАШ МОМЕНТ"; color: Tokens.brand-300; font-size: 10px; font-weight: 600; letter-spacing: 1.4px; }
                                 Text { text: root.duration > 0 ? root.current-title : "Знайдіть свій ритм"; color: Tokens.ink-100; font-size: root.mobile ? 26px : 34px; font-weight: 600; overflow: elide; }
                                 Text { text: root.duration > 0 ? root.current-artist : "Музика, до якої хочеться повернутись."; color: Tokens.ink-150; font-size: 13px; overflow: elide; }
                                 HorizontalLayout {
@@ -591,7 +589,6 @@ export component MainWindow inherits Window {
                                 Image { source: @image-url("../assets/icons/Heart.svg"); width: 26px; height: 26px; colorize: Tokens.brand-300; }
                                 VerticalLayout { alignment: center; spacing: 6px;
                                     Text { text: "Улюблене"; color: Tokens.ink-100; font-size: 16px; font-weight: 600; }
-                                    Text { text: "Завжди поруч"; color: Tokens.ink-200; font-size: 12px; }
                                 }
                             }
                             TouchArea { mouse-cursor: pointer; clicked => { root.navigate("liked"); } }
@@ -604,7 +601,6 @@ export component MainWindow inherits Window {
                                 Image { source: @image-url("../assets/icons/Compass.svg"); width: 26px; height: 26px; colorize: Tokens.ink-150; }
                                 VerticalLayout { alignment: center; spacing: 6px;
                                     Text { text: "Відкривайте"; color: Tokens.ink-100; font-size: 16px; font-weight: 600; }
-                                    Text { text: "Новий настрій"; color: Tokens.ink-200; font-size: 12px; }
                                 }
                             }
                             TouchArea { mouse-cursor: pointer; clicked => { root.navigate("explore"); } }
@@ -957,7 +953,7 @@ export component MainWindow inherits Window {
                 // Left Column: Album Art Showcase + Track Metadata + Full Studio Transport Deck
                 if !root.mobile: Rectangle {
                     width: min(content.width * (root.immersive ? 0.40 : 0.38), root.immersive ? 500px : 430px);
-                    background: Tokens.neutral-100;
+                    background: transparent;
                     border-radius: 32px;
                     border-width: 0px;
                     border-color: transparent;
@@ -967,7 +963,7 @@ export component MainWindow inherits Window {
                         spacing: root.immersive ? 20px : 18px;
                         alignment: center;
 
-                        // Framed Square Album Artwork with Soft Shadow
+                        // Unframed cover artwork
                         HorizontalLayout {
                             alignment: center;
                             Rectangle {
@@ -979,9 +975,7 @@ export component MainWindow inherits Window {
                                     art: root.current-art;
                                     width: 100%; height: 100%;
                                     tone: 0;
-                                    border-radius: 36px;
-                                    border-top-right-radius: 76px;
-                                    border-bottom-left-radius: 56px;
+                                    border-radius: 24px;
                                 }
                             }
                         }
@@ -1127,7 +1121,7 @@ export component MainWindow inherits Window {
                     if root.mobile: Rectangle {
                         height: 158px;
                         border-radius: 28px;
-                        background: Tokens.neutral-100;
+                        background: transparent;
                         border-width: 0px;
                         border-color: #ffffff1c;
                         VerticalLayout {
@@ -1326,7 +1320,7 @@ export component MainWindow inherits Window {
                         seek-to(position) => { root.seek-to(position); }
                     }
 
-                    // Subtle Status & Sync Offset Footer Pill
+                    // Keep errors and nonzero offsets; omit routine provider/status captions.
                     HorizontalLayout {
                         height: 28px;
                         spacing: 10px;
@@ -1339,7 +1333,7 @@ export component MainWindow inherits Window {
                             HorizontalLayout {
                                 padding-left: 12px; padding-right: 12px; spacing: 8px;
                                 Text {
-                                    text: root.lyrics-status;
+                                    text: root.lyrics-renderer-error;
                                     color: Tokens.ink-200;
                                     font-size: 11px;
                                     font-weight: 600;
