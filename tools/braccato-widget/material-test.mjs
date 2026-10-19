@@ -87,7 +87,7 @@ try {
   assert.deepEqual(await pixel(),blue,'navigation preserves the cover palette');
   await page.setViewportSize({width:390,height:844});await page.waitForTimeout(500);
   await shot('43-material-mobile-home');
-  await page.mouse.click(180,800);await page.waitForTimeout(700);
+  await page.mouse.click(180,728);await page.waitForTimeout(700);
   await shot('44-material-mobile-player');
   assert.deepEqual(errors,[]);
   const report={passed:true,checks:['warm/cool cover-derived surfaces','no loading palette flash','palette retained across navigation','volume slider input and keyboard','desktop/mobile screenshots','no browser errors'],red,loading,blue};

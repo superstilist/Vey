@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "checks": [
+    "labeled bottom tabs",
+    "audio rate and volume controls",
+    "browser back/forward",
+    "settings back button",
+    "local file import",
+    "reduced motion persistence",
+    "320/360/390/430px layouts",
+    "mobile player overlay preserves page and scroll",
+    "overlay Back dismissal",
+    "rapid navigation",
+    "cached Explore and explicit refresh",
+    "no browser errors"
+  ],
+  "browseCalls": 2
+}

@@ -8,6 +8,7 @@ use slint::{ComponentHandle, Model, ModelRc};
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Message {
     Ready,
+    Navigation { view: String, section: String },
     Ambient { pixels: String },
     Seek { seconds: f64 },
     Error { message: String },
@@ -169,6 +170,8 @@ impl Bridge {
                 serde_json::json!({"x":w.get_tools_x(),"y":w.get_tools_y(),"width":w.get_tools_width(),"height":w.get_tools_height()})
             } else {serde_json::Value::Null}
         });
+        state["navigation"] = serde_json::json!({"view":w.get_active_view().to_string(),
+            "section":if w.get_active_view() == "settings" { w.get_settings_section().to_string() } else { String::new() }});
         let now = web_time::Instant::now();
         if !editing && w.get_camera_travelling() {
             state["camera"] = serde_json::json!({
@@ -277,6 +280,13 @@ impl Bridge {
 
 fn handle(w: &MainWindow, message: Message) {
     match message {
+        Message::Navigation { view, section }
+            if matches!(view.as_str(), "home"|"explore"|"library"|"liked"|"playlist"|"queue"|"search"|"settings"|"lyrics")
+                && matches!(section.as_str(), ""|"audio"|"library"|"lyrics"|"data") => {
+            if !w.get_dialog().is_empty() { w.set_dialog("".into()); }
+            if w.get_active_view().as_str() != view { w.invoke_navigate(view.clone().into()); }
+            if view == "settings" { w.invoke_open_settings(section.into()); }
+        }
         Message::Ambient { pixels } if pixels.len() == 256 * 144 * 4 / 3 * 4 => {
             use base64::Engine;
             if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(pixels) {

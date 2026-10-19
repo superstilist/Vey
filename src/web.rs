@@ -20,9 +20,12 @@ extern "C" {
     #[wasm_bindgen(js_name=fileUrl)]
     fn file_url(path: &str) -> String;
     fn challenge() -> js_sys::Promise;
+    #[wasm_bindgen(js_name=viewportInsets)]
+    fn viewport_insets() -> String;
 }
 struct WebApp {
     store: Store,
+    page_results: HashMap<String, Vec<Track>>,
     library: Vec<Track>,
     visible: Vec<Track>,
     queue: Queue,
@@ -34,6 +37,14 @@ struct WebApp {
     artwork_pending: HashSet<String>,
     generation: u64,
     ended: bool,
+}
+fn apply_viewport_insets(w: &MainWindow) {
+    if let Ok([top, bottom, left, right]) = serde_json::from_str::<[f32; 4]>(&viewport_insets()) {
+        w.set_safe_top(top);
+        w.set_safe_bottom(bottom);
+        w.set_safe_left(left);
+        w.set_safe_right(right);
+    }
 }
 fn api(path: &str) -> String {
     format!(
@@ -87,6 +98,10 @@ fn refresh(w: &MainWindow, a: &mut WebApp) {
             .unwrap_or_default(),
         _ => a.visible.clone(),
     };
+    if matches!(w.get_active_view().as_str(), "search" | "explore") {
+        a.page_results
+            .insert(w.get_active_view().to_string(), a.visible.clone());
+    }
     w.set_tracks(model(
         a.visible
             .iter()
@@ -360,6 +375,7 @@ pub fn run() -> Result<(), JsValue> {
     crate::material::install(&w);
     crate::renderer::install(&w);
     let _lyrics_widget = crate::lyrics_widget::install(&w);
+    apply_viewport_insets(&w);
     if let Some(browser) = web_sys::window() {
         let width = browser.inner_width()?.as_f64().unwrap_or(1024.);
         let height = browser.inner_height()?.as_f64().unwrap_or(768.);
@@ -375,6 +391,7 @@ pub fn run() -> Result<(), JsValue> {
         .unwrap_or_default();
     let a = Rc::new(RefCell::new(WebApp {
         store,
+        page_results: HashMap::new(),
         library: vec![],
         visible: vec![],
         queue: Queue::default(),
@@ -404,12 +421,20 @@ pub fn run() -> Result<(), JsValue> {
     }
     macro_rules! bind{($method:ident,|$ui:ident,$state:ident $(,$arg:ident)*|$body:block)=>{{let weak=w.as_weak();let shared=a.clone();w.$method(move|$($arg),*|{if let Some($ui)=weak.upgrade(){let $state=&shared;$body}});}};}
     bind!(on_navigate, |ui, state, view| {
+        state.borrow_mut().generation += 1;
+        let cached = state.borrow().page_results.get(view.as_str()).cloned();
+        if matches!(view.as_str(), "search" | "explore") {
+            state.borrow_mut().visible = cached.clone().unwrap_or_default();
+        }
         ui.set_active_view(view.clone());
-        if view == "explore" {
+        if view == "explore" && cached.is_none() {
             search(&ui, state, None, false);
         } else {
             refresh(&ui, &mut state.borrow_mut());
         }
+    });
+    bind!(on_refresh_explore, |ui, state| {
+        search(&ui, state, None, false);
     });
     bind!(on_search, |ui, state, q| {
         ui.set_active_view("search".into());
@@ -812,6 +837,7 @@ pub fn run() -> Result<(), JsValue> {
                         w.window()
                             .set_size(slint::LogicalSize::new(width as f32, height as f32));
                         w.set_mobile(width < 800.);
+                        apply_viewport_insets(&w);
                     }
                 }
 

@@ -1,11 +1,18 @@
-# Vey 0.1.1 — Windows x64
+# Vey 0.1.2 — Windows x64
 
 Extract this archive and run `vey.exe`. Keep the bundled notices with it.
 The UI, fonts, Braccato and Kawarp assets are embedded in the executable.
 The app uses the installed Microsoft Edge WebView2 and Microsoft Visual C++
 x64 runtimes. This package does not bundle their installers.
 
-This build adds a restrained Material You inspired interface: a bento home,
+This build improves phone navigation, adds focused settings subpages and
+uses a smaller, transparent logo with rounded corners. Page travel is quicker,
+settings panels fade between sections, and player tools open smoothly.
+
+On mobile, the player opens as an overlay over the current page; closing it
+returns to the same page and scroll position. Desktop keeps its page motion.
+
+It keeps the restrained Material You inspired interface: a bento home,
 organic artwork shapes, rounded controls and cover-derived tonal colors.
 The previous palette stays visible while the next cover loads.
 

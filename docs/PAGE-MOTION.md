@@ -12,8 +12,8 @@ Returning follows the reverse vector.
 | Southwest | South | Southeast |
 
 Pages occupy fixed cells in a viewport-sized world grid. A shared camera
-travels to the destination coordinates over 230–520ms according to the
-remaining distance (380ms for a neighboring cell); every visible layer uses
+travels to the destination coordinates over 180–460ms according to the
+remaining distance (320ms for a neighboring cell); every visible layer uses
 the same world-position-minus-camera transform. Diagonals move on both axes,
 and opposite destinations span two cells. Retargeting starts from the current
 camera position rather than restarting a canned entrance animation.
@@ -57,3 +57,9 @@ navigation, shared backgrounds, and stable player bounds in the WASM app.
 The test also records headless-browser animation-frame timing samples in
 `docs/navigation-performance.json`; these are environment-specific timings,
 not a native-device frame-rate guarantee.
+
+On mobile, the player uses a separate overlay sheet rather than the world-grid
+camera. Its retained page keeps the normal viewport size and window position,
+including settings-section scroll offsets. The sheet fades and moves 48 pixels
+over 220 ms; close and browser Back reveal the same page. Desktop keeps the
+player's northeast route. Reduced motion removes the sheet animation too.

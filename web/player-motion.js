@@ -11,7 +11,7 @@ export class CameraPresentation {
       this.cancel();
       return false;
     }
-    const duration = Number.isFinite(camera.duration) ? Math.min(520,Math.max(1,camera.duration)) : 460;
+    const duration = Number.isFinite(camera.duration) ? Math.min(520,Math.max(1,camera.duration)) : 320;
     const values = [camera.epoch,camera.fromX,camera.fromY,camera.toX,camera.toY,camera.width,camera.height,duration];
     if (!values.every(Number.isFinite) || camera.width <= 0 || camera.height <= 0) {
       this.cancel();

@@ -1,7 +1,7 @@
 # Vey validation — 19 October 2026
 
 Vey keeps the existing standalone Rust/Slint architecture and PlayerVF data
-locations. The shipped binary is now `vey.exe`. The supplied, unmodified PNG
+locations. The shipped binary is now `vey.exe`. The supplied PNG (original in 0.1.0/0.1.1)
 is embedded as the window/header logo and provided as the browser favicon.
 The native and source design tokens use its lime accent.
 
@@ -63,3 +63,12 @@ See `material-check.json` and screenshots 41–44 for the current run.
 The 0.1.1 optimized Windows executable also completed `--widget-smoke` with
 exit code zero, seven rendered lyric lines, and a 256-pixel ambient frame.
 The archive checksum was verified before publication.
+
+## Vey 0.1.2 phone and settings update
+
+See PHONE-VERIFICATION.md and phone-check.json for responsive layouts, real
+settings actions, file import and Back/Forward checks. The app now embeds a
+transparent edit of the supplied logo; LOGO.md records the asset and edit prompt.
+
+The optimized 0.1.2 Windows build also passed --widget-smoke (exit 0, seven
+lyric lines, 256-pixel ambient frame). Its release checksum was verified.

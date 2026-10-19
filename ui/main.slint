@@ -6,7 +6,7 @@ import { BraccatoLyrics } from "braccato-lyrics.slint";
 import { Tokens } from "tokens.slint";
 export { Tokens } from "tokens.slint";
 import { StageNavigator } from "stage-navigator.slint";
-import { Action, NavItem, Artwork, Transport, SeekBar, TonalSlider } from "controls.slint";
+import { Action, NavItem, Artwork, Transport, SeekBar, TonalSlider, MobileNavItem, SettingsTile } from "controls.slint";
 
 export struct TrackRow { title: string, artist: string, album: string, duration: string, path: string, art: image, liked: bool }
 export struct PlaylistRow { id: string, name: string, detail: string }
@@ -15,11 +15,11 @@ export struct PlaylistRow { id: string, name: string, detail: string }
 export component MainWindow inherits Window {
     title: "Vey";
     init => { Palette.color-scheme = ColorScheme.dark; }
-    icon: @image-url("../assets/vey-logo.png");
+    icon: @image-url("../assets/vey-logo-transparent.png");
     preferred-width: 1440px;
     preferred-height: 900px;
-    min-width: 360px;
-    min-height: 560px;
+    min-width: 320px;
+    min-height: root.mobile ? 360px : 560px;
     background: Tokens.neutral-0;
     default-font-family: "Roboto";
     default-font-size: 14px;
@@ -38,17 +38,17 @@ export component MainWindow inherits Window {
     out property <float> camera-start-y: 0;
     out property <float> camera-end-x: root.camera-target-x;
     out property <float> camera-end-y: root.camera-target-y;
-    out property <int> camera-duration: 380;
+    out property <int> camera-duration: 320;
     out property <bool> camera-travelling: root.page-phase == 2;
     out property <float> stage-width: content.width / 1px;
     out property <float> stage-height: content.height / 1px;
     out property <float> stage-x: content.x / 1px;
     out property <float> stage-y: content.y / 1px;
-    animate camera-x { duration: root.lyrics-reduced-motion ? 0ms : root.camera-duration * 1ms; easing: cubic-bezier(0.42, 0, 0.58, 1); }
-    animate camera-y { duration: root.lyrics-reduced-motion ? 0ms : root.camera-duration * 1ms; easing: cubic-bezier(0.42, 0, 0.58, 1); }
-    out property <float> player-motion-x: (1 - root.camera-x) * content.width / 1px;
-    out property <float> player-motion-y: (-1 - root.camera-y) * content.height / 1px;
-    out property <bool> page-moving: root.page-phase != 1;
+    animate camera-x { duration: root.lyrics-reduced-motion || root.mobile-sheet ? 0ms : root.camera-duration * 1ms; easing: cubic-bezier(0.42, 0, 0.58, 1); }
+    animate camera-y { duration: root.lyrics-reduced-motion || root.mobile-sheet ? 0ms : root.camera-duration * 1ms; easing: cubic-bezier(0.42, 0, 0.58, 1); }
+    out property <float> player-motion-x: root.mobile ? 0 : (1 - root.camera-x) * content.width / 1px;
+    out property <float> player-motion-y: root.mobile ? (1 - root.mobile-player-progress) * 48 : (-1 - root.camera-y) * content.height / 1px;
+    out property <bool> page-moving: root.page-phase != 1 || (root.mobile && root.mobile-player-progress > 0.001 && root.mobile-player-progress < 0.999);
     in-out property <[TrackRow]> home-page-tracks;
     in-out property <[TrackRow]> explore-page-tracks;
     in-out property <[TrackRow]> library-page-tracks;
@@ -59,7 +59,7 @@ export component MainWindow inherits Window {
     in-out property <[TrackRow]> settings-page-tracks;
     in-out property <bool> pages-seeded: false;
     private property <int> warm-page: 1;
-    out property <bool> player-on-stage: abs(1 - root.camera-x) < 1 && abs(-1 - root.camera-y) < 1;
+    out property <bool> player-on-stage: root.mobile ? root.mobile-sheet : abs(1 - root.camera-x) < 1 && abs(-1 - root.camera-y) < 1;
     function stage-navigate(column: int, row: int) {
         let route = row < 0 ? (column < 0 ? "search" : column > 0 ? "lyrics" : "settings") : row > 0 ? (column < 0 ? "playlist" : column > 0 ? "library" : "liked") : (column < 0 ? "queue" : column > 0 ? "explore" : "home");
         if route == "playlist" && root.playlists.length > 2 { root.open-playlist(root.playlists[2].id); }
@@ -84,7 +84,7 @@ export component MainWindow inherits Window {
     function start-travel() {
         root.camera-start-x = root.camera-x;
         root.camera-start-y = root.camera-y;
-        root.camera-duration = round(clamp(230 + max(abs(root.page-column(root.active-view) - root.camera-start-x), abs(root.page-row(root.active-view) - root.camera-start-y)) * 150, 230, 520));
+        root.camera-duration = round(clamp(180 + max(abs(root.page-column(root.active-view) - root.camera-start-x), abs(root.page-row(root.active-view) - root.camera-start-y)) * 140, 180, 460));
         root.camera-target-x = root.page-column(root.active-view);
         root.camera-target-y = root.page-row(root.active-view);
         root.camera-epoch += 1;
@@ -104,11 +104,22 @@ export component MainWindow inherits Window {
     }
     changed active-view => {
         root.player-tools = false;
-        root.page-phase = 3;
-        if root.lyrics-reduced-motion { root.start-travel(); }
+        if root.mobile && root.active-view == "lyrics" {
+            root.camera-target-x = root.page-column(root.mobile-underlay);
+            root.camera-target-y = root.page-row(root.mobile-underlay);
+            root.displayed-view = "lyrics";
+            root.page-phase = 1;
+        } else if root.mobile && root.mobile-sheet && root.active-view == root.mobile-underlay {
+            root.displayed-view = root.active-view;
+            root.page-phase = 1;
+        } else {
+            if root.active-view != "lyrics" { root.mobile-underlay = root.active-view; }
+            root.page-phase = 3;
+            if root.lyrics-reduced-motion { root.start-travel(); }
+        }
     }
     Timer {
-        interval: 32ms;
+        interval: 16ms;
         running: root.page-phase == 3;
         triggered => { root.start-travel(); }
     }
@@ -119,7 +130,34 @@ export component MainWindow inherits Window {
     }
     changed lyrics-reduced-motion => {
         if root.lyrics-reduced-motion && root.page-phase != 1 { root.start-travel(); }
+        if root.lyrics-reduced-motion && root.settings-phase != 0 { root.commit-settings(); }
     }
+    in-out property <string> settings-section;
+    private property <string> settings-next;
+    private property <int> settings-phase: 0;
+    private property <float> settings-progress: 1;
+    private property <int> settings-direction: 1;
+    animate settings-progress { duration: root.lyrics-reduced-motion ? 0ms : 140ms; easing: cubic-bezier(0.2, 0, 0, 1); }
+    pure function settings-name(section: string) -> string {
+        return section == "audio" ? "Відтворення" : section == "library" ? "Бібліотека" : section == "lyrics" ? "Слова пісень" : section == "data" ? "Дані та вхід" : "Налаштування";
+    }
+    function commit-settings() {
+        root.settings-section = root.settings-next;
+        root.settings-progress = 1;
+        root.settings-phase = 0;
+    }
+    public function open-settings(section: string) {
+        if section == root.settings-section && root.settings-phase == 0 { return; }
+        root.settings-next = section;
+        root.settings-direction = section == "" ? -1 : 1;
+        if root.lyrics-reduced-motion { root.commit-settings(); }
+        else { root.settings-progress = 0; root.settings-phase = 1; }
+    }
+    function navigate-settings() {
+        if root.active-view == "settings" { root.open-settings(""); }
+        else { root.navigate("settings"); }
+    }
+    Timer { interval: 140ms; running: root.settings-phase == 1; triggered => { root.commit-settings(); } }
     in-out property <string> search-query;
     in-out property <string> current-title: "Нічого не грає";
     in-out property <string> current-artist: "Виберіть пісню";
@@ -202,18 +240,36 @@ export component MainWindow inherits Window {
     in-out property <string> jwt-status: "Потрібна перевірка";
     in-out property <bool> sidebar-collapsed;
     in-out property <bool> focus-player: false;
-    out property <float> player-reveal: 1;
+    out property <string> mobile-underlay: "home";
+    private property <float> mobile-player-progress: root.mobile && root.active-view == "lyrics" ? 1 : 0;
+    private property <bool> mobile-sheet: root.mobile && (root.active-view == "lyrics" || root.mobile-player-progress > 0.001);
+    animate mobile-player-progress { duration: root.lyrics-reduced-motion ? 0ms : 220ms; easing: cubic-bezier(0.2, 0, 0, 1); }
+    out property <float> player-reveal: root.mobile ? root.mobile-player-progress : 1;
+    function close-player() { root.navigate(root.mobile ? root.mobile-underlay : "home"); }
 
     in-out property <bool> player-tools: false;
     in-out property <string> player-tab: "lyrics";
-    private property <bool> immersive: root.displayed-view == "lyrics" && (root.focus-player || root.mobile);
+    private property <bool> immersive: root.mobile ? root.mobile-sheet : root.displayed-view == "lyrics" && root.focus-player;
 
     pure function clock(seconds: float) -> string {
         return floor(max(0, seconds) / 60) + ":" + (Math.mod(floor(max(0, seconds)), 60) < 10 ? "0" : "") + Math.mod(floor(max(0, seconds)), 60);
     }
 
     in-out property <bool> mobile: false;
+    in-out property <float> safe-top: 0;
+    in-out property <float> safe-bottom: 0;
+    in-out property <float> safe-left: 0;
+    in-out property <float> safe-right: 0;
     changed width => { root.mobile = root.width < 800px; }
+    changed mobile => {
+        if root.active-view == "lyrics" {
+            if root.mobile {
+                root.camera-target-x = root.page-column(root.mobile-underlay);
+                root.camera-target-y = root.page-row(root.mobile-underlay);
+                root.page-phase = 1;
+            } else { root.start-travel(); }
+        }
+    }
 
     in-out property <string> dialog;
     in-out property <string> source-kind: "folder";
@@ -235,6 +291,7 @@ export component MainWindow inherits Window {
     callback change-art-mode();
     callback add-path(string, string);
     callback scan();
+    callback refresh-explore();
     callback add-source(string);
     callback remove-source(int);
     callback create-playlist(string);
@@ -269,7 +326,7 @@ export component MainWindow inherits Window {
 
     // Top Navigation Bar
     Rectangle {
-        x: 0px; y: 0px; height: 64px; width: 100%;
+        x: root.safe-left * 1px; y: root.safe-top * 1px; height: 64px; width: root.width - (root.safe-left + root.safe-right) * 1px;
         visible: !root.immersive;
         background: Tokens.neutral-0;
 
@@ -277,7 +334,7 @@ export component MainWindow inherits Window {
             x: 0px; y: 0px; width: 100%; height: 100%;
             padding-left: 16px; padding-right: 16px; padding-top: 10px; padding-bottom: 10px;
             spacing: 12px;
-            Action {
+            if !root.mobile: Action {
                 icon: @image-url("../assets/icons/Menu.svg");
                 label: "Меню";
                 clicked => { root.sidebar-collapsed = !root.sidebar-collapsed; }
@@ -288,12 +345,12 @@ export component MainWindow inherits Window {
                 width: root.mobile ? 32px : (root.sidebar-collapsed ? 110px : 184px);
                 VerticalLayout {
                     alignment: center;
-                    Image {
-                        source: @image-url("../assets/vey-logo.png");
-                        width: 38px; height: 38px;
-                        image-fit: contain;
-
-                        accessible-label: "Vey";
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 8px; clip: true;
+                        Image { source: @image-url("../assets/vey-logo-transparent.png"); width: 100%; height: 100%; image-fit: contain; }
+                        TouchArea { mouse-cursor: pointer; clicked => { root.navigate("home"); } }
+                        accessible-role: button; accessible-label: "Vey · Головна";
+                        accessible-action-default => { root.navigate("home"); }
                     }
                 }
                 if !root.mobile: Text {
@@ -352,12 +409,7 @@ export component MainWindow inherits Window {
                     }
                 }
             }
-            if root.mobile: StageNavigator {
-                width: 48px; height: 48px;
-                stage-column: root.page-column(root.active-view); stage-row: root.page-row(root.active-view);
-                reduced: root.lyrics-reduced-motion;
-                navigate(column,row) => { root.stage-navigate(column,row); }
-            }
+
             if !root.mobile: Rectangle { horizontal-stretch: 1; }
             if !root.mobile: Action {
                 icon: @image-url("../assets/icons/Radio.svg");
@@ -388,7 +440,7 @@ export component MainWindow inherits Window {
             NavItem { text: "Огляд"; icon: @image-url("../assets/icons/Compass.svg"); selected: root.displayed-view == "explore"; collapsed: root.sidebar-collapsed; clicked => { root.navigate("explore"); } }
             NavItem { text: "Бібліотека"; icon: @image-url("../assets/icons/Library.svg"); selected: root.displayed-view == "library"; collapsed: root.sidebar-collapsed; clicked => { root.navigate("library"); } }
             NavItem { text: "Сподобалось"; icon: @image-url("../assets/icons/Heart.svg"); selected: root.displayed-view == "liked"; collapsed: root.sidebar-collapsed; clicked => { root.navigate("liked"); } }
-            NavItem { text: "Налаштування"; icon: @image-url("../assets/icons/Settings.svg"); selected: root.displayed-view == "settings"; collapsed: root.sidebar-collapsed; clicked => { root.navigate("settings"); } }
+            NavItem { text: "Налаштування"; icon: @image-url("../assets/icons/Settings.svg"); selected: root.displayed-view == "settings"; collapsed: root.sidebar-collapsed; clicked => { root.navigate-settings(); } }
             Rectangle { height: 8px; }
             if !root.sidebar-collapsed: Action {
                 text: "Новий список";
@@ -433,10 +485,10 @@ export component MainWindow inherits Window {
 
     // Main Content Canvas
     content := Rectangle {
-        x: 8px + (root.immersive || root.mobile ? 0px : root.sidebar-collapsed ? 72px : 240px);
-        y: root.immersive ? 8px : 64px;
-        width: root.width - self.x - 8px;
-        height: root.immersive ? root.height - 16px : root.height - 152px - (root.mobile ? 56px : 0px);
+        x: 8px + root.safe-left * 1px + (root.immersive || root.mobile ? 0px : root.sidebar-collapsed ? 72px : 240px);
+        y: root.safe-top * 1px + (root.immersive ? 8px : 64px);
+        width: root.width - self.x - 8px - root.safe-right * 1px;
+        height: (root.immersive ? root.height - 16px : root.height - 152px - (root.mobile ? 72px : 0px)) - (root.safe-top + root.safe-bottom) * 1px;
         border-radius: root.mobile ? 20px : 28px;
         clip: true;
         background: Tokens.neutral-0;
@@ -455,26 +507,37 @@ export component MainWindow inherits Window {
         for page-name[index] in ["home", "explore", "library", "liked", "playlist", "queue", "search", "settings"]: page-layer := Rectangle {
             property <string> route: page-name;
             property <[TrackRow]> page-tracks: self.route == "home" ? root.home-page-tracks : self.route == "explore" ? root.explore-page-tracks : self.route == "library" ? root.library-page-tracks : self.route == "liked" ? root.liked-page-tracks : self.route == "playlist" ? root.playlist-page-tracks : self.route == "queue" ? root.queue-page-tracks : self.route == "search" ? root.search-page-tracks : root.settings-page-tracks;
-            property <bool> warming: (root.warm-page == index && root.page-phase == 1 && self.route != root.displayed-view) || (root.page-phase == 3 && self.route == root.active-view);
+            property <bool> warming: !root.mobile-sheet && ((root.warm-page == index && root.page-phase == 1 && self.route != root.displayed-view) || (root.page-phase == 3 && self.route == root.active-view));
             visible: true;
             // A clipped edge strip warms the cached surface without covering
             // the active page's controls or intercepting its normal gestures.
             x: self.warming ? content.width - 1px : (root.page-column(self.route) - root.camera-x) * content.width;
-            y: self.warming ? 0px : (root.page-row(self.route) - root.camera-y) * content.height;
+            y: (root.mobile-sheet ? 56px : 0px) + (self.warming ? 0px : (root.page-row(self.route) - root.camera-y) * self.height);
             opacity: self.warming ? 0.003922 : 1;
             clip: true;
-            width: 100%; height: 100%;
+            width: 100%; height: root.mobile ? root.height - 224px - (root.safe-top + root.safe-bottom) * 1px : content.height;
             cache-rendering-hint: true;
+            if page-layer.route == "settings": Rectangle {
+                x: root.mobile ? 16px : 40px; y: root.mobile ? 12px : 24px;
+                width: parent.width - (root.mobile ? 32px : 80px); height: 44px;
+                HorizontalLayout { spacing: 10px;
+                    if root.settings-section != "": Action { icon: @image-url("../assets/icons/ChevronLeft.svg"); label: "Назад до налаштувань"; comfortable: true; clicked => { root.open-settings(""); } }
+                    Text { text: root.settings-name(root.settings-section); color: Tokens.ink-100; font-size: root.mobile ? 24px : 30px; font-weight: 700; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                }
+            }
             ScrollView {
             private property <string> page: page-layer.route;
+            private property <string> settings-location: root.settings-section;
+            changed settings-location => { if self.page == "settings" { self.content-y = 0px; } }
             changed page => { self.content-y = 0px; }
-            width: 100%; height: 100%;
+            y: page-layer.route == "settings" ? (root.mobile ? 72px : 84px) : 0px;
+            width: 100%; height: parent.height - self.y;
             content-width: self.width;
-            content-height: (page-layer.route == "home" && !root.mobile) || page-layer.route == "settings" ? max(self.height, page-layout.preferred-height) : self.height;
+            content-height: page-layer.route == "home" || page-layer.route == "settings" ? max(self.height, page-layout.preferred-height) : self.height;
             page-layout := VerticalLayout {
                 padding-left: root.mobile ? 16px : max(40px, (content.width - 1440px) / 2);
                 padding-right: root.mobile ? 16px : max(40px, (content.width - 1440px) / 2);
-                padding-top: root.mobile ? 20px : 32px;
+                padding-top: page-layer.route == "settings" ? 0px : root.mobile ? 20px : 32px;
                 padding-bottom: 24px;
                 spacing: page-layer.route == "home" ? 22px : 16px;
 
@@ -550,15 +613,19 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                HorizontalLayout {
+                if page-layer.route != "settings": HorizontalLayout {
                     height: page-layer.route == "home" && !root.mobile ? 48px : 44px;
                     spacing: 10px;
+                    if page-layer.route == "settings" && root.settings-section != "": Action {
+                        icon: @image-url("../assets/icons/ChevronLeft.svg"); label: "Назад до налаштувань"; comfortable: true;
+                        clicked => { root.open-settings(""); }
+                    }
                     Text {
                         text: page-layer.route == "home" ? "Послухати ще раз" :
                               page-layer.route == "explore" ? "Відкривайте нову музику" :
                               page-layer.route == "library" ? "Бібліотека" :
                               page-layer.route == "liked" ? "Музика, яка сподобалась" :
-                              page-layer.route == "settings" ? "Налаштування" :
+                              page-layer.route == "settings" ? root.settings-name(root.settings-section) :
                               page-layer.route == "playlist" ? root.playlist-title :
                               page-layer.route == "queue" ? "Черга відтворення" : "Результати пошуку";
                         color: Tokens.ink-100;
@@ -572,7 +639,7 @@ export component MainWindow inherits Window {
                         text: "Оновити";
                         icon: @image-url("../assets/icons/RefreshCw.svg");
                         outlined: true;
-                        clicked => { root.navigate("explore"); }
+                        clicked => { root.refresh-explore(); }
                     }
                     if page-layer.route == "library": Action {
                         text: root.mobile ? "" : "Додати папку";
@@ -602,96 +669,84 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                if page-layer.route == "settings": VerticalLayout {
-                    spacing: 18px; padding-bottom: 24px;
-                        Rectangle {
-                            background: Tokens.neutral-100; border-radius: 28px; border-width: 0px; border-color: #ffffff14;
-                            VerticalLayout {
-                                padding: 20px; spacing: 14px;
-                                Text { text: "Відтворення та аудіо"; color: Tokens.ink-100; font-size: 18px; font-weight: 700; }
-                                HorizontalLayout {
-                                    spacing: 16px;
-                                    Text { text: "Швидкість відтворення"; color: Tokens.ink-200; width: 180px; vertical-alignment: center; }
+                if page-layer.route == "settings": Rectangle {
+                    height: settings-content.preferred-height;
+                    opacity: root.settings-progress;
+                    settings-content := VerticalLayout {
+                        x: (1 - root.settings-progress) * root.settings-direction * 16px;
+                        width: parent.width; height: self.preferred-height;
+                        spacing: 14px; padding-bottom: 20px;
+                        if root.settings-section == "": SettingsTile { text: "Відтворення"; detail: "Гучність і швидкість"; icon: @image-url("../assets/icons/Volume2.svg"); clicked => { root.open-settings("audio"); } }
+                        if root.settings-section == "": SettingsTile { text: "Бібліотека"; detail: "Файли та джерела музики"; icon: @image-url("../assets/icons/Library.svg"); clicked => { root.open-settings("library"); } }
+                        if root.settings-section == "": SettingsTile { text: "Слова пісень"; detail: "Провайдер і рух тексту"; icon: @image-url("../assets/icons/Captions.svg"); clicked => { root.open-settings("lyrics"); } }
+                        if root.settings-section == "": SettingsTile { text: "Дані та вхід"; detail: "Резервні копії та підключення"; icon: @image-url("../assets/icons/Settings.svg"); clicked => { root.open-settings("data"); } }
+                        if root.settings-section == "audio": Rectangle {
+                            background: Tokens.neutral-100; border-radius: 24px;
+                            VerticalLayout { padding: root.mobile ? 16px : 24px; spacing: 16px;
+                                Text { text: "Швидкість відтворення"; color: Tokens.ink-100; font-size: 16px; font-weight: 600; }
+                                HorizontalLayout { height: 44px; spacing: 14px;
                                     TonalSlider { label: "Швидкість відтворення"; minimum: 0.5; maximum: 2; value <=> root.rate; changed(value) => { root.rate-changed(value); } }
-                                    Text { text: round(root.rate * 100) / 100 + "×"; color: Tokens.brand-300; font-weight: 700; width: 48px; vertical-alignment: center; }
+                                    Text { text: round(root.rate * 100) / 100 + "×"; color: Tokens.brand-300; width: 48px; vertical-alignment: center; horizontal-alignment: right; }
                                 }
+                                Action { text: "Звичайна швидкість"; comfortable: true; wide: true; outlined: true; clicked => { root.rate = 1; root.rate-changed(1); } }
+                                Text { text: "Гучність"; color: Tokens.ink-100; font-size: 16px; font-weight: 600; }
+                                TonalSlider { height: 44px; label: "Гучність"; value <=> root.volume; changed(value) => { root.volume-changed(value); } }
                             }
                         }
-                        Rectangle {
-                            background: Tokens.neutral-100; border-radius: 28px; border-width: 0px; border-color: #ffffff14;
-                            VerticalLayout {
-                                padding: 20px; spacing: 12px;
-                                Text { text: "Джерела музики"; color: Tokens.ink-100; font-size: 18px; font-weight: 700; }
-                                Text { text: "Системна папка «Музика» сканується автоматично разом із вибраними папками."; color: Tokens.ink-300; font-size: 13px; wrap: word-wrap; }
+                        if root.settings-section == "library": Rectangle {
+                            background: Tokens.neutral-100; border-radius: 24px;
+                            VerticalLayout { padding: root.mobile ? 16px : 24px; spacing: 14px;
+                                Text { text: "Джерела музики"; color: Tokens.ink-100; font-size: 18px; font-weight: 600; }
+                                Text { text: "Додайте файли або вкажіть папку з музикою."; color: Tokens.ink-200; wrap: word-wrap; }
                                 for source[index] in root.sources: Rectangle {
-                                    height: 42px; border-radius: 8px; background: Tokens.neutral-100;
-                                    HorizontalLayout {
-                                        padding-left: 12px; padding-right: 8px; spacing: 8px;
-                                        Text { text: source; color: Tokens.ink-150; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
-                                        Action { text: "Видалити"; clicked => { root.remove-source(index); } }
+                                    height: 56px; border-radius: 16px; background: Tokens.neutral-150;
+                                    HorizontalLayout { padding-left: 12px; padding-right: 6px; spacing: 8px;
+                                        Text { text: source; color: Tokens.ink-150; font-size: 12px; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                                        Action { icon: @image-url("../assets/icons/X.svg"); label: "Видалити джерело"; comfortable: true; clicked => { root.remove-source(index); } }
                                     }
                                 }
-                                HorizontalLayout {
-                                    spacing: 10px;
-                                    Action { text: "Додати папку"; icon: @image-url("../assets/icons/FolderPlus.svg"); outlined: true; clicked => { root.add-source("folder"); } }
-                                    Action { text: "Додати шлях"; outlined: true; clicked => { root.dialog = "source"; root.new-name = ""; } }
-                                    Action { text: "Додати файли"; outlined: true; clicked => { root.add-source("file"); } }
-                                    Rectangle { horizontal-stretch: 1; }
-                                }
+                                Action { text: "Додати файли"; icon: @image-url("../assets/icons/Plus.svg"); comfortable: true; wide: true; primary: true; clicked => { root.add-source("file"); } }
+                                if !root.mobile: Action { text: "Додати папку"; icon: @image-url("../assets/icons/FolderPlus.svg"); comfortable: true; wide: true; outlined: true; clicked => { root.add-source("folder"); } }
+                                Action { text: "Вказати шлях"; comfortable: true; wide: true; outlined: true; clicked => { root.dialog = "source"; root.new-name = ""; } }
+                                Action { text: "Оновити бібліотеку"; comfortable: true; wide: true; outlined: true; clicked => { root.scan(); } }
                             }
                         }
-                        Rectangle {
-                            background: Tokens.neutral-100; border-radius: 28px; border-width: 0px; border-color: #ffffff14;
-                            VerticalLayout {
-                                padding: 20px; spacing: 14px;
-                                Text { text: "Слова пісень (Better Lyrics)"; color: Tokens.ink-100; font-size: 18px; font-weight: 700; }
-                                HorizontalLayout {
-                                    spacing: 16px;
-                                    Text { text: "Провайдер слів"; color: Tokens.ink-200; width: 140px; vertical-alignment: center; }
-                                    ComboBox { model: ["auto", "dacubeking", "unison", "lrclib", "youtube"]; current-value <=> root.lyrics-provider; selected(value) => { root.provider-changed(value); } }
-                                    Rectangle { horizontal-stretch: 1; }
-                                }
-                                HorizontalLayout {
-                                    spacing: 16px;
-                                    Text { text: "Тема оформлення"; color: Tokens.ink-200; width: 140px; vertical-alignment: center; }
-                                    Text { text: "Braccato"; color: Tokens.ink-100; vertical-alignment: center; }
-                                    Rectangle { horizontal-stretch: 1; }
-                                }
-                                HorizontalLayout {
-                                    spacing: 12px;
-                                    Action { text: "Перевірка Turnstile"; outlined: true; clicked => { root.open-challenge(); } }
-                                    Action { text: "Вставити JWT"; clicked => { root.dialog = "auth"; } }
-                                    Text { text: root.jwt-status; color: Tokens.ink-300; vertical-alignment: center; }
-                                    Rectangle { horizontal-stretch: 1; }
-                                }
+                        if root.settings-section == "lyrics": Rectangle {
+                            background: Tokens.neutral-100; border-radius: 24px;
+                            VerticalLayout { padding: root.mobile ? 16px : 24px; spacing: 14px;
+                                Text { text: "Провайдер слів"; color: Tokens.ink-100; font-size: 18px; font-weight: 600; }
+                                ComboBox { height: 44px; model: ["auto", "dacubeking", "unison", "lrclib", "youtube"]; current-value <=> root.lyrics-provider; selected(value) => { root.provider-changed(value); } }
+                                Text { text: "Braccato · синхронізовані слова"; color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
+                                Action { text: "Менше руху"; comfortable: true; wide: true; selected: root.lyrics-reduced-motion; outlined: true; clicked => { root.lyrics-reduced-motion = !root.lyrics-reduced-motion; root.lyric-mode-changed(root.lyrics-stage,root.lyrics-reduced-motion,root.lyrics-passive-scroll); } }
+                                Action { text: "Сцена для дуетів"; comfortable: true; wide: true; selected: root.lyrics-stage; outlined: true; clicked => { root.lyrics-stage = !root.lyrics-stage; root.lyric-mode-changed(root.lyrics-stage,root.lyrics-reduced-motion,root.lyrics-passive-scroll); } }
+                                Action { text: "Автопрокручування"; comfortable: true; wide: true; selected: root.lyrics-passive-scroll; outlined: true; clicked => { root.lyrics-passive-scroll = !root.lyrics-passive-scroll; root.lyric-mode-changed(root.lyrics-stage,root.lyrics-reduced-motion,root.lyrics-passive-scroll); } }
                             }
                         }
-                        Rectangle {
-                            background: Tokens.neutral-100; border-radius: 28px; border-width: 0px; border-color: #ffffff14;
-                            VerticalLayout {
-                                padding: 20px; spacing: 14px;
-                                Text { text: "Дані, синхронізація та YouTube Music"; color: Tokens.ink-100; font-size: 18px; font-weight: 700; }
-                                HorizontalLayout {
-                                    spacing: 10px;
-                                    Action { text: "Перенести дані"; outlined: true; clicked => { root.migrate(); } }
-                                    Action { text: "Експорт"; outlined: true; clicked => { root.backup(); } }
-                                    Action { text: "Імпорт"; outlined: true; clicked => { root.restore(); } }
-                                    Action { text: "Очистити історію"; outlined: true; clicked => { root.clear-history(); } }
-                                    Action { text: "Відновити теги"; outlined: true; clicked => { root.restore-tags(); } }
-                                    Rectangle { horizontal-stretch: 1; }
+                        if root.settings-section == "data": Rectangle {
+                            background: Tokens.neutral-100; border-radius: 24px;
+                            VerticalLayout { padding: root.mobile ? 16px : 24px; spacing: 14px;
+                                Text { text: "Підключення"; color: Tokens.ink-100; font-size: 18px; font-weight: 600; }
+                                Action { text: "Відкрити YouTube Music"; comfortable: true; wide: true; primary: true; clicked => { root.open-login(); } }
+                                Text { text: root.jwt-status; color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
+                                Action { text: "Оновити доступ до слів"; comfortable: true; wide: true; outlined: true; clicked => { root.open-challenge(); } }
+                                Action { text: "Вставити токен"; comfortable: true; wide: true; outlined: true; clicked => { root.dialog = "auth"; } }
+                                Text { text: "Ваші дані"; color: Tokens.ink-100; font-size: 18px; font-weight: 600; }
+                                HorizontalLayout { spacing: 10px;
+                                    Action { text: "Експорт"; comfortable: true; wide: true; outlined: true; clicked => { root.backup(); } }
+                                    Action { text: "Імпорт"; comfortable: true; wide: true; outlined: true; clicked => { root.restore(); } }
                                 }
-                                Text { text: "Вхід відкривається в системному браузері. Уподобання та списки відтворення зберігаються локально."; color: Tokens.ink-300; font-size: 13px; wrap: word-wrap; }
-                                HorizontalLayout {
-                                    Action { text: "Відкрити YouTube Music"; outlined: true; clicked => { root.open-login(); } }
-                                    Rectangle { horizontal-stretch: 1; }
-                                }
+                                Action { text: "Перенести дані"; comfortable: true; wide: true; outlined: true; clicked => { root.migrate(); } }
+                                Action { text: "Очистити історію"; comfortable: true; wide: true; outlined: true; clicked => { root.clear-history(); } }
+                                Action { text: "Відновити теги"; comfortable: true; wide: true; outlined: true; clicked => { root.restore-tags(); } }
                             }
                         }
+                    }
+                    if root.settings-phase == 1: TouchArea { width: 100%; height: 100%; }
                 }
 
                 if page-layer.route != "settings": VerticalLayout {
                     spacing: 18px;
-                    if page-layer.route == "home" || page-layer.route == "explore": ScrollView {
+                    if (page-layer.route == "home" || page-layer.route == "explore") && page-layer.page-tracks.length > 0: ScrollView {
                         height: root.mobile ? 218px : (content.width < 900px ? 236px : 284px);
                         content-width: max(self.width, min(page-layer.page-tracks.length, 8) * ((root.mobile ? 148px : max(156px, min(204px, (content.width - 152px) / 5))) + 20px));
                         content-height: self.height;
@@ -725,7 +780,7 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    HorizontalLayout {
+                    if page-layer.page-tracks.length > 0: HorizontalLayout {
                         height: root.mobile ? 40px : 52px;
                         spacing: 10px;
                         Text {
@@ -745,7 +800,8 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             alignment: center; spacing: 12px; padding: 24px;
                             Text { text: page-layer.route == "search" ? "Нічого не знайдено" : "Тут з’явиться ваша музика"; color: Tokens.ink-100; font-size: 20px; font-weight: 700; horizontal-alignment: center; }
-                            Text { text: "Додайте папку з музикою або скористайтеся пошуком YouTube Music"; color: Tokens.ink-300; horizontal-alignment: center; wrap: word-wrap; }
+                            Text { text: "Додайте файли або скористайтеся пошуком музики"; color: Tokens.ink-300; horizontal-alignment: center; wrap: word-wrap; }
+                            Action { text: "Додати файли"; icon: @image-url("../assets/icons/Plus.svg"); comfortable: true; primary: true; clicked => { root.add-source("file"); } }
                         }
                     }
 
@@ -775,6 +831,7 @@ export component MainWindow inherits Window {
                     }
 
                     if page-layer.route != "home" || root.mobile: ListView {
+                        min-height: root.mobile && page-layer.route == "home" && page-layer.page-tracks.length > 0 ? 320px : 0px;
                         for track[index] in page-layer.page-tracks: Rectangle {
                             height: 64px;
                             border-radius: 10px;
@@ -813,6 +870,9 @@ export component MainWindow inherits Window {
             x: self.warming ? content.width - 1px : root.player-motion-x * 1px; y: self.warming ? 0px : root.player-motion-y * 1px; width: 100%; height: 100%;
             opacity: self.warming ? 0.003922 : root.player-reveal;
             cache-rendering-hint: true;
+            background: root.mobile ? Tokens.neutral-50 : transparent;
+            border-radius: root.mobile ? 28px : 0px;
+            if root.mobile: TouchArea {} // The sheet consumes input above the retained page.
             VerticalLayout {
             width: 100%; height: 100%;
             padding-left: root.mobile ? 16px : (root.immersive ? max(44px, (content.width - 1560px) / 2) : max(40px, (content.width - 1480px) / 2));
@@ -829,7 +889,7 @@ export component MainWindow inherits Window {
                     icon: @image-url("../assets/icons/ChevronDown.svg");
                     label: "Згорнути програвач";
                     outlined: true;
-                    clicked => { root.navigate("home"); }
+                    clicked => { root.close-player(); }
                 }
                 VerticalLayout {
                     alignment: center;
@@ -1078,7 +1138,7 @@ export component MainWindow inherits Window {
                                 VerticalLayout {
                                     alignment: center; horizontal-stretch: 1; spacing: 3px;
                                     Text { text: root.current-title; color: Tokens.ink-100; font-size: 16px; font-weight: 700; overflow: elide; }
-                                    Text { text: root.current-artist; color: Tokens.ink-200; font-size: 13px; overflow: elide; }
+                                    Text { text: root.width < 380px ? root.clock(root.position) + " / " + root.clock(root.duration) : root.current-artist; color: Tokens.ink-200; font-size: 13px; overflow: elide; }
                                 }
                                 VerticalLayout {
                                     alignment: center;
@@ -1093,7 +1153,7 @@ export component MainWindow inherits Window {
                             }
                             HorizontalLayout {
                                 height: 42px; alignment: space-between;
-                                Text { text: root.clock(root.position); color: Tokens.ink-300; font-size: 11px; vertical-alignment: center; width: 38px; }
+                                if root.width >= 380px: Text { text: root.clock(root.position); color: Tokens.ink-300; font-size: 11px; vertical-alignment: center; width: 38px; }
                                 HorizontalLayout {
                                     spacing: 10px; alignment: center;
                                     Action { icon: @image-url("../assets/icons/Shuffle.svg"); selected: root.shuffle; clicked => { root.toggle-shuffle(); } }
@@ -1102,7 +1162,7 @@ export component MainWindow inherits Window {
                                     Action { icon: @image-url("../assets/icons/SkipForward.svg"); clicked => { root.next-track(); } }
                                     Action { icon: @image-url("../assets/icons/Repeat.svg"); selected: root.repeat-mode != "off"; clicked => { root.toggle-repeat(); } }
                                 }
-                                Text { text: root.clock(root.duration); color: Tokens.ink-300; font-size: 11px; vertical-alignment: center; horizontal-alignment: right; width: 38px; }
+                                if root.width >= 380px: Text { text: root.clock(root.duration); color: Tokens.ink-300; font-size: 11px; vertical-alignment: center; horizontal-alignment: right; width: 38px; }
                             }
                         }
                     }
@@ -1124,7 +1184,7 @@ export component MainWindow inherits Window {
                                     border-radius: 17px;
                                     background: root.player-tab == "lyrics" ? Tokens.primary-container : transparent;
                                     Text {
-                                        text: "ТЕКСТ ПІСНІ";
+                                        text: root.mobile ? "СЛОВА" : "ТЕКСТ ПІСНІ";
                                         color: root.player-tab == "lyrics" ? Tokens.ink-100 : Tokens.ink-300;
                                         font-size: 12px; font-weight: 700; letter-spacing: 0.8px;
                                         width: 100%; height: 100%;
@@ -1139,7 +1199,7 @@ export component MainWindow inherits Window {
                                     border-radius: 17px;
                                     background: root.player-tab == "queue" ? Tokens.primary-container : transparent;
                                     Text {
-                                        text: "ДАЛІ В ЧЕРЗІ";
+                                        text: root.mobile ? "ЧЕРГА" : "ДАЛІ В ЧЕРЗІ";
                                         color: root.player-tab == "queue" ? Tokens.ink-100 : Tokens.ink-300;
                                         font-size: 12px; font-weight: 700; letter-spacing: 0.8px;
                                         width: 100%; height: 100%;
@@ -1207,7 +1267,7 @@ export component MainWindow inherits Window {
                         border-width: 0px;
                         border-color: #ffffff12;
                         VerticalLayout {
-                            alignment: center; spacing: 14px; padding: 32px;
+                            alignment: center; spacing: 14px; padding: root.mobile ? 12px : 32px;
                             HorizontalLayout {
                                 alignment: center;
                                 Rectangle {
@@ -1314,11 +1374,12 @@ export component MainWindow inherits Window {
 
         // Independent overlay: opening tools never changes player geometry.
         tools-panel := Rectangle {
-            visible: root.player-tools && root.displayed-view == "lyrics" && root.dialog == "";
+            visible: (root.player-tools || root.tools-progress > 0.001) && root.displayed-view == "lyrics" && root.dialog == "";
+            opacity: root.tools-progress;
             x: parent.width - self.width - 16px;
-            y: parent.height - self.height - 16px;
+            y: parent.height - self.height - 16px + (1 - root.tools-progress) * 12px;
             width: min(380px, parent.width - 32px);
-            height: min(304px, parent.height - 32px);
+            height: min(root.mobile ? 352px : 304px, parent.height - 32px);
             background: Tokens.neutral-100;
             border-radius: 22px;
             border-width: 0px;
@@ -1352,47 +1413,41 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     spacing: 8px;
                     Text {text:"Зсув";color:Tokens.ink-300;vertical-alignment:center;horizontal-stretch:1;}
-                    Action {text:"− 100";outlined:true;clicked=>{root.adjust-offset(-100);} }
-                    Text {text:root.lyrics-offset+" мс";width:72px;color:Tokens.ink-100;horizontal-alignment:center;vertical-alignment:center;}
-                    Action {text:"+ 100";outlined:true;clicked=>{root.adjust-offset(100);} }
+                    Action {text:"−";min-width:56px;max-width:56px;outlined:true;clicked=>{root.adjust-offset(-100);} }
+                    Text {text:root.lyrics-offset+" мс";width:root.mobile ? 48px : 72px;color:Tokens.ink-100;horizontal-alignment:center;vertical-alignment:center;}
+                    Action {text:"+";min-width:56px;max-width:56px;outlined:true;clicked=>{root.adjust-offset(100);} }
                 }
                 HorizontalLayout {
                     spacing: 8px;
                     Action {text:"Радіо";outlined:true;clicked=>{root.radio();} }
                     Action {text:"До списку";outlined:true;clicked=>{root.player-tools=false;root.dialog="add";} }
                     Action {text:"YT теги";outlined:true;clicked=>{root.sync-tags();} }
-                    if !root.lyrics-timed: Action {text:"Авто";selected:root.lyrics-passive-scroll;clicked=>{root.lyrics-passive-scroll=!root.lyrics-passive-scroll;root.lyric-mode-changed(root.lyrics-stage,root.lyrics-reduced-motion,root.lyrics-passive-scroll);} }
+                    if !root.lyrics-timed && !root.mobile: Action {text:"Авто";selected:root.lyrics-passive-scroll;clicked=>{root.lyrics-passive-scroll=!root.lyrics-passive-scroll;root.lyric-mode-changed(root.lyrics-stage,root.lyrics-reduced-motion,root.lyrics-passive-scroll);} }
                     Rectangle {horizontal-stretch:1;}
                 }
+                if root.mobile && !root.lyrics-timed: Action { text:"Автопрокручування"; wide:true; outlined:true; selected:root.lyrics-passive-scroll; clicked=>{ root.lyrics-passive-scroll=!root.lyrics-passive-scroll;root.lyric-mode-changed(root.lyrics-stage,root.lyrics-reduced-motion,root.lyrics-passive-scroll); } }
             }
         }
     }
 
-    // Compact Mobile Bottom Navigation Bar
+    // Reachable bottom tabs, with a separate mini-player above them.
     if root.mobile && !root.immersive: Rectangle {
-        x: 8px;
-        y: root.height - 136px;
-        height: 56px;
-        width: root.width - 16px;
-        border-radius: 20px;
-        background: Tokens.neutral-100;
-
-        HorizontalLayout {
-            alignment: space-around;
-            padding-top: 10px; padding-bottom: 10px;
-            Action { icon: @image-url("../assets/icons/House.svg"); label: "Головна"; selected: root.displayed-view == "home"; clicked => { root.navigate("home"); } }
-            Action { icon: @image-url("../assets/icons/Compass.svg"); label: "Огляд"; selected: root.displayed-view == "explore"; clicked => { root.navigate("explore"); } }
-            Action { icon: @image-url("../assets/icons/Library.svg"); label: "Бібліотека"; selected: root.displayed-view == "library"; clicked => { root.navigate("library"); } }
-            Action { icon: @image-url("../assets/icons/Heart.svg"); label: "Сподобалось"; selected: root.displayed-view == "liked"; clicked => { root.navigate("liked"); } }
-            Action { icon: @image-url("../assets/icons/Settings.svg"); label: "Налаштування"; selected: root.displayed-view == "settings"; clicked => { root.navigate("settings"); } }
+        x: 8px + root.safe-left * 1px; y: root.height - 72px - root.safe-bottom * 1px; height: 64px; width: root.width - 16px - (root.safe-left + root.safe-right) * 1px;
+        border-radius: 24px; background: Tokens.neutral-100;
+        HorizontalLayout { padding-left: 4px; padding-right: 4px; spacing: 0px;
+            MobileNavItem { text: "Головна"; icon: @image-url("../assets/icons/House.svg"); selected: root.active-view == "home"; clicked => { root.navigate("home"); } }
+            MobileNavItem { text: "Огляд"; icon: @image-url("../assets/icons/Compass.svg"); selected: root.active-view == "explore"; clicked => { root.navigate("explore"); } }
+            MobileNavItem { text: "Бібліотека"; icon: @image-url("../assets/icons/Library.svg"); selected: root.active-view == "library"; clicked => { root.navigate("library"); } }
+            MobileNavItem { text: "Улюблене"; icon: @image-url("../assets/icons/Heart.svg"); selected: root.active-view == "liked"; clicked => { root.navigate("liked"); } }
+            MobileNavItem { text: "Параметри"; icon: @image-url("../assets/icons/Settings.svg"); selected: root.active-view == "settings"; clicked => { root.navigate-settings(); } }
         }
     }
 
     // Persistent Bottom Player Bar
     Rectangle {
-        x: 8px;
-        y: root.height - 80px;
-        width: root.width - 16px;
+        x: 8px + root.safe-left * 1px;
+        y: root.height - (root.mobile ? 152px : 80px) - root.safe-bottom * 1px;
+        width: root.width - 16px - (root.safe-left + root.safe-right) * 1px;
         height: 72px;
         visible: !root.immersive;
         background: Tokens.neutral-100;
@@ -1462,11 +1517,14 @@ export component MainWindow inherits Window {
                 icon: root.displayed-view == "lyrics" ? @image-url("../assets/icons/ChevronDown.svg") : @image-url("../assets/icons/ChevronUp.svg");
                 label: "Розгорнути програвач";
                 clicked => {
-                    if root.displayed-view == "lyrics" { root.navigate("home"); } else { root.player-tab = "lyrics"; root.navigate("lyrics"); root.request-lyrics(); }
+                    if root.displayed-view == "lyrics" { root.close-player(); } else { root.player-tab = "lyrics"; root.navigate("lyrics"); root.request-lyrics(); }
                 }
             }
         }
     }
+
+    private property <float> tools-progress: root.player-tools ? 1 : 0;
+    animate tools-progress { duration: root.lyrics-reduced-motion ? 0ms : 180ms; easing: cubic-bezier(0.2, 0, 0, 1); }
 
     // Modal Dialogs
     if root.dialog != "": Rectangle {
@@ -1475,7 +1533,7 @@ export component MainWindow inherits Window {
         TouchArea { clicked => { root.dialog = ""; } }
         Rectangle {
             width: min(root.width - 32px, 520px);
-            height: root.dialog == "paste" ? 440px : root.dialog == "add" || root.dialog == "match" ? 360px : 210px;
+            height: min(root.height - 32px, root.dialog == "paste" ? 440px : root.dialog == "add" || root.dialog == "match" ? 360px : 210px);
             x: (root.width - self.width) / 2;
             y: (root.height - self.height) / 2;
             background: Tokens.neutral-100;
@@ -1484,14 +1542,15 @@ export component MainWindow inherits Window {
             border-color: #ffffff24;
             TouchArea { }
             VerticalLayout {
-                padding: 24px; spacing: 16px;
+                padding: root.mobile ? 16px : 24px; spacing: root.mobile ? 12px : 16px;
                 Text {
                     text: root.dialog == "auth" ? "Доступ до слів пісень" : root.dialog == "paste" ? "Вставити слова пісні" :
                           root.dialog == "add" ? "Додати до списку" :
                           root.dialog == "source" ? "Шлях до папки або файлу" :
                           root.dialog == "match" ? "Перевірте збіг YouTube Music" : "Новий список відтворення";
                     color: Tokens.ink-100;
-                    font-size: 20px;
+                    font-size: root.mobile ? 18px : 20px;
+                    wrap: word-wrap;
                     font-weight: 700;
                 }
                 if root.dialog == "create" || root.dialog == "source": LineEdit {
@@ -1510,7 +1569,7 @@ export component MainWindow inherits Window {
                 }
                 if root.dialog == "paste": lyrics-edit-viewport := Rectangle {
                     vertical-stretch: 1;
-                    min-height: 200px;
+                    min-height: root.mobile ? 80px : 200px;
                     out property <float> widget-x: self.absolute-position.x / 1px;
                     out property <float> widget-y: self.absolute-position.y / 1px;
                     changed widget-x => {root.lyrics-editor-x=self.widget-x;}
@@ -1545,9 +1604,10 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     spacing: 10px;
                     Rectangle { horizontal-stretch: 1; }
-                    Action { text: "Скасувати"; outlined: true; clicked => { root.dialog = ""; } }
+                    Action { comfortable: root.mobile; text: "Скасувати"; outlined: true; clicked => { root.dialog = ""; } }
                     if root.dialog != "add": Action {
                         text: "Зберегти";
+                        comfortable: root.mobile;
                         primary: true;
                         clicked => {
                             if root.dialog == "auth" { root.submit-auth(root.auth-token); root.auth-token = ""; }

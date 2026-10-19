@@ -9,12 +9,14 @@ export component Action inherits Rectangle {
     in property <bool> primary;
     in property <bool> selected;
     in property <bool> outlined;
+    in property <bool> comfortable;
+    in property <bool> wide;
     callback clicked();
-    horizontal-stretch: 0;
-    min-width: text == "" ? 36px : max(chip ? 64px : 84px, (icon.width > 0 ? 54px : 32px) + label-text.preferred-width);
+    horizontal-stretch: wide ? 1 : 0;
+    min-width: text == "" ? (comfortable ? 44px : 36px) : max(chip ? 64px : 84px, (icon.width > 0 ? 54px : 32px) + label-text.preferred-width);
     preferred-width: self.min-width;
-    max-width: text == "" ? 36px : 280px;
-    height: chip ? 32px : 36px;
+    max-width: wide ? 100000px : text == "" ? (comfortable ? 44px : 36px) : 280px;
+    height: comfortable ? 44px : chip ? 32px : 36px;
     border-width: 0px;
     border-color: Tokens.neutral-300;
     background: primary ? (touch.has-hover ? Tokens.brand-300 : Tokens.brand-500) : selected ? Tokens.primary-container : touch.has-hover ? Tokens.neutral-200 : chip || outlined ? Tokens.neutral-150 : transparent;
@@ -235,4 +237,49 @@ export component TonalSlider inherits Rectangle {
             changed(value) => { root.changed(value); }
         }
     }
+}
+
+export component MobileNavItem inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> selected;
+    callback clicked();
+    horizontal-stretch: 1;
+    height: 64px;
+    Rectangle {
+        width: min(52px, root.width - 4px); height: 28px;
+        x: (root.width - self.width) / 2; y: 7px;
+        border-radius: 16px;
+        background: root.selected ? Tokens.primary-container : transparent;
+        animate background { duration: 120ms; }
+        Image { source: root.icon; width: 20px; height: 20px; x: (parent.width - 20px) / 2; y: 4px; colorize: root.selected ? Tokens.brand-300 : Tokens.ink-200; }
+    }
+    Text { text: root.text; x: 1px; y: 39px; width: root.width - 2px; height: 18px; font-size: 10px; font-weight: root.selected ? 700 : 500; color: root.selected ? Tokens.brand-300 : Tokens.ink-200; horizontal-alignment: center; overflow: elide; }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    accessible-role: button; accessible-label: text;
+    accessible-action-default => { root.clicked(); }
+}
+
+export component SettingsTile inherits Rectangle {
+    in property <string> text;
+    in property <string> detail;
+    in property <image> icon;
+    callback clicked();
+    height: 80px;
+    border-radius: 24px;
+    background: touch.has-hover ? Tokens.neutral-150 : Tokens.neutral-100;
+    HorizontalLayout {
+        padding: 16px; spacing: 14px;
+        Rectangle { width: 44px; height: 44px; border-radius: 16px; background: Tokens.primary-container;
+            Image { source: root.icon; width: 22px; height: 22px; x: 11px; y: 11px; colorize: Tokens.brand-300; }
+        }
+        VerticalLayout { alignment: center; spacing: 5px; horizontal-stretch: 1;
+            Text { text: root.text; color: Tokens.ink-100; font-size: 16px; font-weight: 600; overflow: elide; }
+            Text { text: root.detail; color: Tokens.ink-300; font-size: 12px; overflow: elide; }
+        }
+        Image { source: @image-url("../assets/icons/ChevronRight.svg"); width: 18px; height: 18px; colorize: Tokens.ink-200; }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    accessible-role: button; accessible-label: text;
+    accessible-action-default => { root.clicked(); }
 }

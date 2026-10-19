@@ -64,13 +64,14 @@ try {
   await page.mouse.click(1374,100);
   await page.waitForFunction(() => document.querySelector('iframe').style.clipPath.includes('evenodd'));
   assert.deepEqual(await page.locator('iframe[title="Braccato lyrics"]').boundingBox(), box, 'settings do not resize or move lyrics');
+  await page.waitForTimeout(220);
   const overlay = await frame.evaluate(() => window.latestHostState.overlay);
   assert.ok(overlay.width<=380 && overlay.height<=304,JSON.stringify(overlay));
   assert.equal(await page.evaluate(({x,y}) => document.elementFromPoint(x,y)?.tagName, {x:overlay.x+overlay.width/2,y:overlay.y+overlay.height/2}), 'CANVAS', 'overlay receives input above iframe');
   await page.screenshot({path:fileURLToPath(new URL('../../docs/screenshots/38-player-settings-overlay.png',import.meta.url))});
   await page.mouse.click(overlay.x+overlay.width-58,overlay.y+222);
   await frame.waitForFunction(() => window.latestHostState.offset===100);
-  await page.mouse.click(overlay.x+148,overlay.y+222);
+  await page.mouse.click(overlay.x+overlay.width-188,overlay.y+222);
   await frame.waitForFunction(() => window.latestHostState.offset===0);
   await page.mouse.click(overlay.x+overlay.width-32,overlay.y+32);
   await page.waitForFunction(() => document.querySelector('iframe').style.clipPath==='');

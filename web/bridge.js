@@ -42,6 +42,7 @@ export function resetBraccato() {
 }
 export function updateBraccato(json) {
   const next = JSON.parse(json);
+  if (next.navigation) syncNavigationHistory(next.navigation);
   // Keep an unsent artwork change when clock samples arrive in a hidden tab.
   if (next.ambient && braccatoState.ambient)
     next.ambient = {...braccatoState.ambient,...next.ambient};
@@ -146,3 +147,39 @@ export function challenge() {
     modal.addEventListener('cancel',()=>{cleanup();reject(Error('Перевірку закрито'));});addEventListener('message',onMessage);
   });
 }
+
+// CSS owns platform safe-area values. Read only on startup and viewport changes.
+let insetProbe;
+export function viewportInsets() {
+  if (!insetProbe) {
+    insetProbe=document.createElement('div');
+    insetProbe.style.cssText='position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)';
+    document.body.append(insetProbe);
+  }
+  const style=getComputedStyle(insetProbe);
+  return JSON.stringify([style.paddingTop,style.paddingBottom,style.paddingLeft,style.paddingRight].map(v=>Math.max(0,parseFloat(v)||0)));
+}
+
+// Back/forward gestures use the same Rust navigation and settings transitions.
+let navigationKey='';
+let historyTarget='';
+let historyTargetUntil=0;
+const routeKey=nav=>`${nav.view}:${nav.view==='settings' ? nav.section||'' : ''}`;
+function syncNavigationHistory(nav) {
+  const key=routeKey(nav);
+  if(historyTarget) {
+    if(key===historyTarget) { navigationKey=key;historyTarget='';return; }
+    if(performance.now()<historyTargetUntil)return;
+    historyTarget='';
+  }
+  if(key===navigationKey)return;
+  const state={...(typeof history.state==='object' ? history.state : {}),vey:{view:nav.view,section:nav.section||''}};
+  if(navigationKey)history.pushState(state,'');else history.replaceState(state,'');
+  navigationKey=key;
+}
+addEventListener('popstate',event=>{
+  const nav=event.state?.vey;
+  if(!nav)return;
+  historyTarget=routeKey(nav);historyTargetUntil=performance.now()+1000;
+  braccatoMessages.push({type:'navigation',view:nav.view,section:nav.section||''});
+});

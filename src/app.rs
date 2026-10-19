@@ -571,6 +571,9 @@ pub fn run() -> Result<(), slint::PlatformError> {
             refresh(&ui, &mut state.borrow_mut());
         }
     });
+    bind!(on_refresh_explore, |ui, state| {
+        browse(state, &ui, None, false);
+    });
     bind!(on_search, |ui, state, query| {
         ui.set_active_view("search".into());
         let needle = query.to_lowercase();

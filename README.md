@@ -1,13 +1,16 @@
 # Vey — Rust + Slint
 
-<img src="assets/vey-logo.png" alt="Vey" width="200">
+<img src="assets/vey-logo-transparent.png" alt="Vey" width="200">
 
 Vey is a native music player with synchronized lyrics. Formerly PlayerVF;
 existing library data and settings remain compatible.
 
 The interface pairs a compact bento home with soft, organic shapes and
 Material You inspired tonal colors that adapt to the current cover.
-See [the tonal interface notes](docs/MATERIAL-STYLE.md).
+On phones, the player opens as an overlay over the current page. Settings has
+focused subpages and large touch controls.
+See [the tonal interface notes](docs/MATERIAL-STYLE.md) and
+[phone layout checks](docs/PHONE-VERIFICATION.md).
 
 Built in Rust.
 The application shell is Slint. Lyrics use the original Braccato web component
@@ -66,7 +69,7 @@ by likes and local playlists remain stable when the same files are reselected.
 ## Data migration
 
 1. Open the original app's DevTools and run `scripts/export-local-data.js`.
-2. In the Rust app, open **Налаштування → Перенести дані** and choose the exported JSON.
+2. In the Rust app, open **Налаштування → Дані та вхід → Перенести дані** and choose the exported JSON.
 3. Rescan the library, then check the imported likes, history, sources and lyric offsets.
 
 Migration is one-time and allowlisted. It excludes account data, Google cookies,
