@@ -5,7 +5,7 @@ try {
     rustup target add wasm32-unknown-unknown
     if ($LASTEXITCODE -ne 0) { throw 'WASM target installation failed' }
     $profile = if ($Debug) { 'debug' } else { 'release' }
-    $buildArgs = @('build','--lib','--target','wasm32-unknown-unknown')
+    $buildArgs = @('build','--locked','--lib','--target','wasm32-unknown-unknown')
     if (-not $Debug) { $buildArgs += '--release' }
     & cargo @buildArgs
     if ($LASTEXITCODE -ne 0) { throw 'WASM compilation failed' }

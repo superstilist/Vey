@@ -64,7 +64,7 @@ success from compilation or a supplied CI workflow.
 ## Release cleanup
 
 Build the Windows ZIP and Android APK before cleanup. Run
-scripts/clean-artifacts.ps1 -RequireAndroid to retain only the current Cargo
+scripts/clean-artifacts.ps1 -RequireAndroid to retain every platform artifact for the current Cargo
 version under dist/, remove root build logs, web/pkg, docs/smoke-data and target/
 (including debug and release caches). Every deletion checks checkout containment
 and refuses tracked files or links. -KeepBuildCache retains target/ for repeated
@@ -73,3 +73,20 @@ or external signing keys/user state. Build scripts recreate generated assets.
 
 The widget builder publishes changed output files by replacement, avoiding
 Windows mapped-file overwrite errors when embedding generated assets.
+
+## Additional platform packaging
+
+- Web: scripts/package-web.ps1 builds optimized WASM/bindings and archives the
+  web/ directory with launch helpers and notices. -SkipBuild packages existing
+  generated assets. Online features require the same-origin Vey backend.
+- Native Linux: bash scripts/build-linux.sh produces tar.gz/.deb plus hashes.
+  Build on a native Linux host; release 0.1.12 targets Mint 22/Ubuntu 24.04+
+  x64 (glibc 2.39). scripts/prepare-linux-user-deps.sh optionally extracts
+  Mint/Ubuntu development packages into a user cache without sudo. Source its
+  env.sh before building. No system packages or services are changed by it.
+- Android x86_64: scripts/build-android.ps1 -Architecture x64; default arm64 is
+  unchanged. ABI/version/non-debuggable checks guard output naming.
+- Cleanup preserves all Vey-VERSION-* artifacts for the current version.
+  Published tags and earlier GitHub release assets are retained.
+- Native macOS/iOS requires an Apple host/SDK; do not label browser compatibility
+  as a native Apple release. Package checks do not establish device/UI runtime.

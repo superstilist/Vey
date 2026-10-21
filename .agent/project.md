@@ -38,6 +38,7 @@ Only load the relevant detail file; this map remains the short starting point.
 
 | Concern | Start here |
 | --- | --- |
+| Platform release archives | scripts/package-web.ps1, scripts/build-linux.sh, scripts/build-android.ps1; docs/WEB-RELEASE.md, docs/LINUX-RELEASE.md |
 | Startup, CLI modes, target gates | `src/main.rs`, `src/lib.rs`, `Cargo.toml` |
 | Native callbacks, async results, UI models | `src/app.rs` |
 | Local audio, scanning, public YTM | `src/native.rs`, `src/audio.rs` |

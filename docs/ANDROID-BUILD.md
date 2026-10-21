@@ -46,3 +46,16 @@ currently stubs. Since 0.1.5, adding music starts permission-aware device audio
 discovery through MediaStore; manual path entry remains available. Import/export
 document picking is incomplete. See ANDROID-FIXES.md and PARITY.md for checks
 and the remaining platform differences.
+
+## Additional release ABI
+
+The default remains ARM64. Use scripts/build-android.ps1 -Architecture x64 for
+Android x86_64 (compatible devices/emulators). The packager verifies the actual
+APK ABI, version, signature, alignment and non-debuggable manifest before naming
+the output. Both variants use the existing signing identity. Installation and
+playback on physical devices or emulators are separate checks.
+
+ARMv7 is not published for 0.1.12: the selected Skia dependency has no prebuilt
+armv7 archive for this configuration and its source-build fallback needs extra
+toolchain setup. macOS/iOS and Windows ARM64 are not available from this build
+environment.

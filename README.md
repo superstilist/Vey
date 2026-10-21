@@ -40,7 +40,10 @@ Version 0.1.12 adds permanent local downloads and cover tools, local-cover marks
 per-song lyric source selection, automatic translation and romanization in the
 player tools menu. See [release notes](docs/RELEASE.md) and
 [lyric controls](docs/LYRICS-PREFERENCES.md).
-Windows x64 ZIP and Android ARM64 APK are available on the GitHub Releases page.
+Windows x64 ZIP, Linux x64 tar.gz/.deb, Android ARM64/x86_64 APKs and a Web ZIP
+are available on the GitHub Releases page. Linux targets Mint 22/Ubuntu 24.04+
+(glibc 2.39). See [Linux packaging](docs/LINUX-RELEASE.md) and
+[Web startup](docs/WEB-RELEASE.md); the Web online features need the Vey backend.
 
 ## Responsiveness
 

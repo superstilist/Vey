@@ -27,7 +27,7 @@ function Remove-Generated([string]$Path) {
     Remove-Item -LiteralPath $absolute -Recurse -Force
 }
 Get-ChildItem -LiteralPath (Join-Path $projectRoot 'dist') -Force |
-    Where-Object { $_.Name -notin $keep } | ForEach-Object { Remove-Generated $_.FullName }
+    Where-Object { $_.Name -notlike ('Vey-' + $version + '-*') } | ForEach-Object { Remove-Generated $_.FullName }
 Get-ChildItem -LiteralPath $projectRoot -File -Force |
     Where-Object { $_.Name -match '(?i)(\.log|\.err|\.out|\.bak|-(build|link|results|run|smoke)\.txt)$' -or $_.Name -in @('wasm-tools.txt', 'live-ytm.txt') } |
     ForEach-Object { Remove-Generated $_.FullName }
