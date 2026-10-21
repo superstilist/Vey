@@ -1,4 +1,4 @@
-# Vey 0.1.13
+# Vey 0.1.14
 
 ## Downloads
 
@@ -9,10 +9,10 @@
 | Android | ARM64 and x86_64 APKs | API 26+ |
 | Web | WASM ZIP | Online services require the Vey backend |
 
-Every artifact includes a SHA-256 checksum. This release adds native audio
-routing to the current operating system output device. The player detects
-default-output changes, retries after device loss, and resumes the current track
-with its position, volume, playback speed and play/pause state preserved.
+Every artifact includes a SHA-256 checksum. This release adds debounced
+search-as-you-type across local tracks and YouTube Music, combines local and
+remote web search results, and improves recovery when the system audio output
+fails while a track is playing.
 
 Other included features: YouTube Music search and playback; permanent local
 downloads with embedded artwork; local-file marks on list and card covers;
@@ -20,7 +20,7 @@ remembered lyric providers and variants; automatic translation and romanization;
 and synchronized lyric display. Translation and reading controls remain in the
 player tools menu. Untimed generated lyrics do not claim word-level timing.
 
-Windows, Linux, Android and Web packages are built from tag v0.1.13. Linux
+Windows, Linux, Android and Web packages are built from tag v0.1.14. Linux
 packages target Mint 22.3 / Ubuntu 24.04 x64. Android APKs use the existing
 Vey development signing key to permit compatible updates. Web assets require
 HTTP(S); full online playback and lyric services need a same-origin Vey backend.

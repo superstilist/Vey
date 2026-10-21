@@ -80,8 +80,8 @@ Windows mapped-file overwrite errors when embedding generated assets.
   web/ directory with launch helpers and notices. -SkipBuild packages existing
   generated assets. Online features require the same-origin Vey backend.
 - Native Linux: bash scripts/build-linux.sh produces tar.gz/.deb plus hashes.
-  Build on a native Linux host; release 0.1.12 targets Mint 22/Ubuntu 24.04+
-  x64 (glibc 2.39). scripts/prepare-linux-user-deps.sh optionally extracts
+  Build on a native Linux host; current x64 packages target Mint 22/Ubuntu
+  24.04+ (glibc 2.39). scripts/prepare-linux-user-deps.sh optionally extracts
   Mint/Ubuntu development packages into a user cache without sudo. Source its
   env.sh before building. No system packages or services are changed by it.
 - Android x86_64: scripts/build-android.ps1 -Architecture x64; default arm64 is

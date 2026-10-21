@@ -334,6 +334,7 @@ export component MainWindow inherits Window {
 
     callback navigate(string);
     callback search(string);
+    callback search-edited(string);
     callback select-track(int);
     callback play-toggle();
     callback previous-track();
@@ -456,6 +457,7 @@ export component MainWindow inherits Window {
                             font-size: 14px;
                             vertical-alignment: center;
                             single-line: true;
+                            edited => { root.search-edited(self.text); }
                             accepted => { root.search(self.text); }
                         }
                     }

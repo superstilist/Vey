@@ -453,6 +453,7 @@ fn search(w: &MainWindow, a: &Rc<RefCell<WebApp>>, query: Option<String>, radio:
     let mut state = a.borrow_mut();
     state.generation += 1;
     let generation = state.generation;
+    let is_search = query.is_some();
     let weak = w.as_weak();
     let shared = a.clone();
     w.set_status("Завантаження з YouTube Music…".into());
@@ -486,7 +487,19 @@ fn search(w: &MainWindow, a: &Rc<RefCell<WebApp>>, query: Option<String>, radio:
             }
             match result {
                 Ok(rows) => {
-                    a.visible = rows.clone();
+                    if is_search {
+                        let mut merged = a.visible.clone();
+                        let mut seen = merged
+                            .iter()
+                            .map(|track| track.path.clone())
+                            .collect::<std::collections::HashSet<_>>();
+                        merged.extend(rows.iter().filter_map(|track| {
+                            seen.insert(track.path.clone()).then(|| track.clone())
+                        }));
+                        a.visible = merged;
+                    } else {
+                        a.visible = rows.clone();
+                    }
                     for t in rows {
                         a.store.remember(t);
                     }
@@ -564,6 +577,22 @@ pub fn run() -> Result<(), JsValue> {
         );
     }
     macro_rules! bind{($method:ident,|$ui:ident,$state:ident $(,$arg:ident)*|$body:block)=>{{let weak=w.as_weak();let shared=a.clone();w.$method(move|$($arg),*|{if let Some($ui)=weak.upgrade(){let $state=&shared;$body}});}};}
+    let search_timer = Rc::new(slint::Timer::default());
+    let edit_timer = Rc::clone(&search_timer);
+    bind!(on_search_edited, |ui, _state, query| {
+        let weak = ui.as_weak();
+        let query = query.to_string();
+        edit_timer.start(
+            slint::TimerMode::SingleShot,
+            Duration::from_millis(300),
+            move || {
+                if let Some(ui) = weak.upgrade() {
+                    ui.invoke_search(query.clone().into());
+                }
+            },
+        );
+    });
+    let submit_timer = Rc::clone(&search_timer);
     bind!(on_navigate, |ui, state, view| {
         state.borrow_mut().generation += 1;
         let cached = state.borrow().page_results.get(view.as_str()).cloned();
@@ -581,8 +610,29 @@ pub fn run() -> Result<(), JsValue> {
         search(&ui, state, None, false);
     });
     bind!(on_search, |ui, state, q| {
+        submit_timer.stop();
         ui.set_active_view("search".into());
-        search(&ui, state, Some(q.to_string()), false);
+        let query = q.trim().to_lowercase();
+        {
+            let mut app = state.borrow_mut();
+            app.generation += 1;
+            app.visible = app
+                .library
+                .iter()
+                .filter(|track| {
+                    format!("{} {} {}", track.title, track.artist, track.album)
+                        .to_lowercase()
+                        .contains(&query)
+                })
+                .cloned()
+                .collect();
+            refresh(&ui, &mut app);
+        }
+        if query.is_empty() {
+            ui.set_status("".into());
+        } else {
+            search(&ui, state, Some(q.to_string()), false);
+        }
     });
     bind!(on_select_track, |ui, state, index| {
         let track = {

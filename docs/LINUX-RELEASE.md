@@ -1,4 +1,4 @@
-# Vey 0.1.12 — Linux
+# Vey 0.1.14 — Linux
 
 The x64 release is built on Linux Mint 22.3 (Ubuntu 24.04 base), with glibc 2.39.
 Use Mint 22.x / Ubuntu 24.04 or a compatible newer x86-64 desktop system. This
@@ -9,7 +9,7 @@ binary is not a package for older glibc distributions, ARM or macOS.
 From the download directory:
 
 ```sh
-sudo apt install ./Vey-0.1.12-linux-x64.deb
+sudo apt install ./Vey-0.1.14-linux-x64.deb
 ```
 
 Launch Vey from the desktop menu or run `vey`. Apt resolves the desktop, font,

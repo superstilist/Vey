@@ -1,8 +1,8 @@
 # Capabilities and project status
 
-Snapshot: 2026-10-20, working-tree source and checked-in reports. Version in
-`Cargo.toml`: 0.1.12. The initial inventory was documentation-only; Android
-changes and fresh validation are recorded in `docs/ANDROID-FIXES.md`.
+Snapshot: 2026-10-21, working-tree source and checked-in reports. Version in
+`Cargo.toml`: 0.1.14. Release packages are being prepared; platform build
+evidence belongs to the current release workflow, not this status snapshot.
 Implemented does not mean verified on every target.
 
 ## Product

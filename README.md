@@ -36,9 +36,10 @@ Unreadable state is copied to a timestamped backup before recovery.
 
 ## Latest release
 
-Version 0.1.13 adds system-default audio routing and output recovery. It includes
-the local downloads, artwork, lyric source selection, translation and
-romanization features from 0.1.12. See [release notes](docs/RELEASE.md) and
+Version 0.1.14 adds live search-as-you-type across local tracks and YouTube Music,
+and improves audio recovery after output-device failures. It includes the local
+downloads, artwork, lyric source selection, translation and romanization features
+from 0.1.13. See [release notes](docs/RELEASE.md) and
 [lyric controls](docs/LYRICS-PREFERENCES.md).
 Windows x64 ZIP, Linux x64 tar.gz/.deb, Android ARM64/x86_64 APKs and a Web ZIP
 are available on the GitHub Releases page. Linux targets Mint 22/Ubuntu 24.04+

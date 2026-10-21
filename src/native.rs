@@ -563,13 +563,14 @@ fn audio_thread(
                     (None, None) => false,
                     _ => true,
                 };
-            if stream.is_none() || route_changed || failed.swap(false, Ordering::AcqRel) {
+            let output_failed = failed.swap(false, Ordering::AcqRel);
+            if stream.is_none() || route_changed || output_failed {
                 // Freeze position during unplug/recovery. Rebuild only on a
                 // routing change, never on the UI or the real-time callback.
                 sink.pause();
                 let position = held_position.unwrap_or(position_offset + sink.get_pos());
-                let has_track =
-                    current_path.is_some() && (held_position.is_some() || !sink.empty());
+                let has_track = current_path.is_some()
+                    && (held_position.is_some() || !sink.empty() || output_failed);
                 if has_track {
                     held_position = Some(position);
                 }
@@ -716,7 +717,9 @@ fn audio_thread(
         }
 
         // Update shared status
-        let empty = held_position.is_none() && sink.empty();
+        // A failed output can empty Rodio's sink before the next routing poll.
+        // Keep the current track alive until recovery captures its position.
+        let empty = held_position.is_none() && sink.empty() && !failed.load(Ordering::Acquire);
         let state = if empty || (current_path.is_none()) {
             PlaybackState::Stopped
         } else if stream.is_none() || sink.is_paused() {
