@@ -7,9 +7,17 @@ enum ChallengeEvent {
 fn navigation_allowed(url: &str) -> bool {
     use base64::Engine;
     use std::sync::LazyLock;
-    static BOOTSTRAP: LazyLock<String> = LazyLock::new(|| {
-        base64::engine::general_purpose::STANDARD
-            .encode(include_str!("../assets/lyrics-challenge.html"))
+    static BOOTSTRAPS: LazyLock<Vec<String>> = LazyLock::new(|| {
+        crate::i18n::LANGUAGES
+            .iter()
+            .map(|locale| {
+                let document = include_str!("../assets/lyrics-challenge.html").replace(
+                    "Перевірка доступу до слів пісень",
+                    &crate::i18n::translate(locale, "Перевірка доступу до слів пісень"),
+                );
+                base64::engine::general_purpose::STANDARD.encode(document)
+            })
+            .collect()
     });
     url == "about:blank"
         || url.starts_with("https://lyrics.api.dacubeking.com/")
@@ -21,7 +29,7 @@ fn navigation_allowed(url: &str) -> bool {
         .iter()
         .any(|prefix| {
             url.strip_prefix(prefix)
-                .is_some_and(|data| data == BOOTSTRAP.as_str())
+                .is_some_and(|data| BOOTSTRAPS.iter().any(|allowed| data == allowed))
         })
 }
 fn parse_message(raw: &str) -> Option<ChallengeEvent> {
@@ -64,18 +72,23 @@ pub fn run_helper() -> Result<(), String> {
     };
     let event_loop = EventLoopBuilder::<String>::with_user_event().build();
     let silent = std::env::args().any(|a| a == "--silent-challenge");
+    let locale = std::env::args()
+        .find_map(|arg| arg.strip_prefix("--lyrics-language=").map(str::to_owned))
+        .unwrap_or_else(|| "uk".into());
+    let prompt = crate::i18n::translate(&locale, "Перевірка доступу до слів пісень");
     let builder = WindowBuilder::new()
         .with_visible(!silent)
-        .with_title("Vey — перевірка слів пісень")
+        .with_title(format!("Vey — {prompt}"))
         .with_inner_size(tao::dpi::LogicalSize::new(500., 360.));
     eprintln!("[lyrics-auth] starting browser host");
     let window = builder.build(&event_loop).map_err(|e| e.to_string())?;
     let proxy = event_loop.create_proxy();
-    let html = include_str!("../assets/lyrics-challenge.html");
+    let html = include_str!("../assets/lyrics-challenge.html")
+        .replace("Перевірка доступу до слів пісень", &prompt);
     let mut context =
         wry::WebContext::new(Some(std::env::temp_dir().join("playervf-lyrics-challenge")));
     let webview = wry::WebViewBuilder::new_with_web_context(&mut context)
-        .with_html(html)
+        .with_html(&html)
         .with_navigation_handler(|url| {
             let allowed = navigation_allowed(&url);
             if !allowed {
@@ -143,6 +156,7 @@ async fn acquire_mode(silent: bool) -> Result<String, String> {
             };
             let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
             command.arg("--lyrics-challenge");
+            command.arg(format!("--lyrics-language={}", crate::i18n::current()));
             if silent {
                 command.arg("--silent-challenge");
             }
@@ -204,7 +218,37 @@ async fn acquire_mode(silent: bool) -> Result<String, String> {
         .await
         .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        let html = include_str!("../assets/lyrics-challenge.html").replace(
+            "Перевірка доступу до слів пісень",
+            &crate::i18n::translate(crate::i18n::current(), "Перевірка доступу до слів пісень"),
+        );
+        let request = serde_json::json!({"html":html,"silent":silent});
+        crate::android::bridge_call("challenge", &request.to_string())?;
+        let timeout = std::time::Duration::from_secs(if silent { 20 } else { 120 });
+        let started = std::time::Instant::now();
+        let result = loop {
+            let raw = match crate::android::bridge_poll() {
+                Ok(raw) => raw,
+                Err(error) => break Err(error),
+            };
+            match parse_message(&raw) {
+                Some(ChallengeEvent::Token(token)) => break Ok(token),
+                Some(ChallengeEvent::Progress(message)) if message.starts_with("Turnstile:") => {
+                    break Err(message)
+                }
+                _ => {}
+            }
+            if started.elapsed() >= timeout {
+                break Err("Час перевірки вичерпано".into());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        };
+        let _ = crate::android::bridge_call("cancelChallenge", "{}");
+        result
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         Err("Вбудована перевірка ще недоступна на цій платформі".into())
     }

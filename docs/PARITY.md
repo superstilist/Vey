@@ -5,7 +5,7 @@ The TypeScript/Tauri source project was read as the reference and was not delete
 
 | Area | Status |
 |---|---|
-| Native shell | Home, Explore, Library, Liked, Search, local Playlist, Settings, Now Playing, queue; Ukrainian labels, original neutral/orange palette, bundled Roboto and Lucide icons |
+| Native shell | Home, Explore, Library, Liked, Search, local Playlist, Settings, Now Playing, queue; eight interface languages, cover-derived tonal palette, bundled Roboto/Noto Sans JP and Lucide icons |
 | Responsive layouts | Desktop, collapsed sidebar, tablet, compact mobile navigation; native fixture screenshot capture provided |
 | Audio | Original threaded Rodio decoder including Opus; play/pause/seek/rate/volume, queue next/previous, repeat, shuffle, automatic advance, load errors |
 | Library | Original recursive folder/file scan, metadata, artwork cache, deduplication and unavailable-source reporting |
@@ -21,9 +21,9 @@ The TypeScript/Tauri source project was read as the reference and was not delete
 ## Remaining parity work
 
 - Live public streaming reached the upstream media service but both tested tracks failed with HTTP 403 during ranged download. Search is verified; end-to-end public audio playback is not. The browser reports the playback failure.
-- Inline video clip rendering is not implemented. The cover/clip preference is retained and the UI reports the missing renderer. Public clip lookup and URL resolution services are ported.
-- Android compiles as a native-activity library, but SAF file dialogs, storage permissions, browser intents and on-device packaging/runtime checks remain. Manual app-accessible source paths are available. Desktop file dialogs do not work on Android.
-- The embedded challenge host is implemented for Windows and web. Linux/Android still need a platform challenge host.
+- Inline video surface adapters now exist for web, Windows, Android and Linux (optional FFmpeg). Browser fixture playback is checked separately from live streams and device acceptance; native playback acceptance is pending. See PLAYER-REFINEMENT.md.
+- Android 0.1.5 requests runtime audio permission and scans MediaStore instead of a desktop Music folder. Native layout consumes status/navigation/cutout insets. SAF file/save dialogs, browser intents and device runtime acceptance remain; manual app-accessible paths are available. APK packaging checks do not establish device playback/permission behavior. See ANDROID-FIXES.md.
+- The embedded challenge host is implemented for Windows, web and Android. Android device acquisition is pending runtime acceptance; Linux still needs a challenge host.
 - Community CSS themes are executed by the upstream widget on Windows/browser. An exhaustive visual audit of every external theme and preset remains. The Rust fallback still uses converted properties.
 - Public album/artist/playlist detail navigation, continuation UX, all original context-menu/gesture shortcuts, download progress/cancellation and exhaustive settings parity remain.
 - Browser metadata/artwork extraction from selected file bytes and complete web artwork parity remain. Browser file handles need reselection after page reload.

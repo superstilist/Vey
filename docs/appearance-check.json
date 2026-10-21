@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "checks": [
+    "intermediate color fade",
+    "dynamic covers",
+    "static covers stay fixed",
+    "background-only preserves accent",
+    "color selection persists",
+    "reload restores mode and color",
+    "phone layout",
+    "no browser errors"
+  ]
+}

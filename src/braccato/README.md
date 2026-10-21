@@ -38,9 +38,11 @@ Playback, authenticated requests, canonical parsing and storage remain Rust.
 No JWT or account credential is passed into the rendering widget. Playback
 samples do not rebuild the DOM or recompile themes; frame interpolation stops
 while paused/hidden. The native widget is disposed before the Slint window.
-Word-by-word highlighting follows the per-word timestamps supplied by the lyric
-source. Line-synced lyrics still scroll by line because they contain no reliable
-word timestamps to animate.
+Word and syllable highlighting follows the explicit part timestamps supplied by
+the lyric source. Adjacent syllables keep their text boundaries and separate
+clocks through the shared Rust adapter. See [syllable support](../../docs/SYLLABLE-LYRICS.md).
+Line-synced lyrics still scroll by line because they contain no reliable part
+timestamps to animate.
 
 ## Rust parser and fallback implementation
 

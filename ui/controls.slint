@@ -1,6 +1,31 @@
+import { I18n } from "i18n.slint";
+import { Motion } from "motion.slint";
 import { Slider } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 
+export global CoverBadges {
+    in-out property <bool> shown: true;
+    in-out property <string> style: "triangle";
+    in-out property <string> position: "bottom-right";
+}
+
+export component DownloadMark inherits Rectangle {
+    width: 20px; height: 20px;
+    callback clicked();
+    background: CoverBadges.style == "icon" ? #101410ee : transparent;
+    border-radius: CoverBadges.style == "icon" ? self.width / 2 : 0px;
+    Image {
+        source: CoverBadges.style == "icon" ? @image-url("../assets/icons/LocalFile.svg") : @image-url("../assets/icons/Downloaded.svg");
+        x: CoverBadges.style == "icon" ? 3px : 0px;
+        y: CoverBadges.style == "icon" ? 3px : 0px;
+        width: root.width - self.x * 2; height: root.height - self.y * 2;
+        colorize: CoverBadges.style == "icon" ? #f1f5ed : #172ba5;
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    accessible-role: button;
+    accessible-label: I18n.tr("Доступно локально");
+    accessible-action-default => { root.clicked(); }
+}
 export component Action inherits Rectangle {
     in property <string> text;
     in property <string> label;
@@ -13,7 +38,7 @@ export component Action inherits Rectangle {
     in property <bool> wide;
     callback clicked();
     horizontal-stretch: wide ? 1 : 0;
-    min-width: text == "" ? (comfortable ? 44px : 36px) : max(chip ? 64px : 84px, (icon.width > 0 ? 54px : 32px) + label-text.preferred-width);
+    min-width: wide ? 0px : text == "" ? (comfortable ? 44px : 36px) : max(chip ? 64px : 84px, (icon.width > 0 ? 54px : 32px) + label-text.preferred-width);
     preferred-width: self.min-width;
     max-width: wide ? 100000px : text == "" ? (comfortable ? 44px : 36px) : 280px;
     height: comfortable ? 44px : chip ? 32px : 36px;
@@ -21,8 +46,8 @@ export component Action inherits Rectangle {
     border-color: Tokens.neutral-300;
     background: primary ? (touch.has-hover ? Tokens.brand-300 : Tokens.brand-500) : selected ? Tokens.primary-container : touch.has-hover ? Tokens.neutral-200 : chip || (outlined && text != "") ? Tokens.neutral-150 : transparent;
     border-radius: Tokens.radius-pill;
-    animate background { duration: 110ms; }
-    animate border-color { duration: 110ms; }
+    animate background { duration: Motion.feedback; }
+    animate border-color { duration: Motion.feedback; }
     HorizontalLayout {
         x: 0px; y: 0px; width: 100%; height: 100%;
         alignment: center;
@@ -41,6 +66,7 @@ export component Action inherits Rectangle {
         }
         if root.text != "": Text {
             text: root.text;
+            font-family: I18n.language == "ja" || root.text == "日本語" ? "Noto Sans JP" : "Roboto";
             color: root.primary ? Tokens.brand-ink : root.selected ? Tokens.brand-300 : Tokens.ink-100;
             font-size: Tokens.font-sm;
             font-weight: root.primary || root.selected ? 700 : 600;
@@ -51,6 +77,7 @@ export component Action inherits Rectangle {
     label-text := Text {
         visible: false;
         text: root.text;
+        font-family: I18n.language == "ja" || root.text == "日本語" ? "Noto Sans JP" : "Roboto";
         font-size: Tokens.font-sm;
         font-weight: root.primary || root.selected ? 700 : 600;
     }
@@ -58,6 +85,23 @@ export component Action inherits Rectangle {
     accessible-role: button;
     accessible-label: label == "" ? text : label;
     accessible-action-default => { root.clicked(); }
+}
+
+export component PreferenceToggle inherits Rectangle {
+    in property <string> text;
+    in property <bool> checked;
+    callback toggled();
+    height: 44px;
+    min-width: 0px;
+    TouchArea { mouse-cursor: pointer; clicked => { root.toggled(); } }
+    HorizontalLayout {
+        spacing: 12px;
+        Text { text: root.text; color: Tokens.ink-100; font-size: 14px; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
+        Action { text: root.checked ? I18n.tr("Увімкнено") : I18n.tr("Вимкнено"); label: root.text; chip: true; selected: root.checked; outlined: true; clicked => { root.toggled(); } }
+    }
+    accessible-role: button;
+    accessible-label: root.text + " · " + (root.checked ? I18n.tr("Увімкнено") : I18n.tr("Вимкнено"));
+    accessible-action-default => { root.toggled(); }
 }
 
 export component NavItem inherits Rectangle {
@@ -71,7 +115,7 @@ export component NavItem inherits Rectangle {
     background: selected ? Tokens.primary-container : touch.has-hover ? Tokens.neutral-150 : transparent;
     border-width: 0px;
     border-color: #ffffff14;
-    animate background { duration: 110ms; }
+    animate background { duration: Motion.feedback; }
     Image {
         source: root.icon;
         x: root.collapsed ? (root.width - 20px) / 2 : 16px;
@@ -101,29 +145,93 @@ export component NavItem inherits Rectangle {
 export component Artwork inherits Rectangle {
     in property <image> art;
     in property <int> tone;
+    in property <bool> downloaded;
+    callback mark-clicked();
     border-radius: 24px;
-    clip: true;
-    border-width: 0px;
-    border-color: #ffffff14;
-    background: art.width > 0 ? transparent : Math.mod(tone, 3) == 0 ? Tokens.primary-container : Math.mod(tone, 3) == 1 ? Tokens.secondary-container : Tokens.tertiary-container;
-    if root.art.width == 0: Image {
-        source: @image-url("../assets/icons/Music2.svg");
-        width: root.width * 0.32;
-        height: root.height * 0.32;
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
-        colorize: #ffffff38;
+    border-top-left-radius: self.border-radius;
+    border-top-right-radius: self.border-radius;
+    border-bottom-left-radius: self.border-radius;
+    border-bottom-right-radius: self.border-radius;
+    // The small corner tab may extend past the cover without clipping its tip.
+    clip: false;
+    Rectangle {
+        width: 100%; height: 100%; border-radius: root.border-radius;
+        border-top-left-radius: root.border-top-left-radius;
+        border-top-right-radius: root.border-top-right-radius;
+        border-bottom-left-radius: root.border-bottom-left-radius;
+        border-bottom-right-radius: root.border-bottom-right-radius;
+        clip: true;
+        background: root.art.width > 0 ? transparent : Math.mod(root.tone, 3) == 0 ? Tokens.primary-container : Math.mod(root.tone, 3) == 1 ? Tokens.secondary-container : Tokens.tertiary-container;
+        if root.art.width == 0: Image {
+            source: @image-url("../assets/icons/Music2.svg");
+            width: root.width * 0.32; height: root.height * 0.32;
+            x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
+            colorize: #ffffff38;
+        }
+        Image { source: root.art; width: 100%; height: 100%; image-fit: cover; }
     }
-    Image {
-        source: root.art;
-        x: 0px;
-        y: 0px;
-        width: 100%;
-        height: 100%;
-        image-fit: cover;
+    private property <bool> badge-left: CoverBadges.position == "bottom-left" || CoverBadges.position == "top-left";
+    private property <bool> badge-top: CoverBadges.position == "top-left" || CoverBadges.position == "top-right";
+    private property <length> badge-radius: self.badge-top ? (self.badge-left ? self.border-top-left-radius : self.border-top-right-radius) : (self.badge-left ? self.border-bottom-left-radius : self.border-bottom-right-radius);
+    private property <length> badge-inset: max(3px, self.width * 0.035, self.badge-radius * 0.28);
+    if root.downloaded && CoverBadges.shown: DownloadMark {
+        width: CoverBadges.style == "icon" ? clamp(root.width * 0.18, 20px, 36px) : clamp(root.width * 0.16, 12px, 42px); height: self.width;
+        x: root.badge-left ? root.badge-inset : root.width - self.width - root.badge-inset;
+        y: root.badge-top ? root.badge-inset : root.height - self.height - root.badge-inset;
+        clicked => { root.mark-clicked(); }
     }
 }
 
+// A single alignment and action layout for every song list, including player queue.
+export component SongRow inherits Rectangle {
+    min-width: 0px;
+    preferred-width: 240px;
+    in property <string> title;
+    in property <string> artist;
+    in property <string> album;
+    in property <string> duration;
+    in property <image> art;
+    in property <bool> current;
+    in property <bool> downloaded;
+    in property <bool> downloading;
+    in property <bool> liked;
+    in property <bool> mobile;
+    in property <bool> actions: true;
+    in property <bool> removable;
+    in property <bool> filled;
+    in property <bool> album-column;
+    in property <int> tone;
+    callback activated();
+    callback like-clicked();
+    callback download-clicked();
+    callback remove-clicked();
+    callback mark-clicked();
+    height: root.mobile ? 68px : 72px;
+    border-radius: 14px;
+    background: root.current ? Tokens.primary-container.with-alpha(0.5) : row-touch.has-hover ? Tokens.neutral-150 : root.filled ? Tokens.neutral-100 : transparent;
+    animate background { duration: Motion.feedback; }
+    row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
+    HorizontalLayout {
+        padding: 10px; spacing: 14px;
+        Artwork { art: root.art; downloaded: root.downloaded; tone: root.tone; width: root.mobile ? 48px : 52px; height: self.width; border-radius: 12px; mark-clicked => { root.mark-clicked(); } }
+        VerticalLayout {
+            spacing: 4px; alignment: center; horizontal-stretch: 1;
+            Text { text: root.title; color: root.current ? Tokens.brand-300 : Tokens.ink-100; font-size: 14px; font-weight: 600; overflow: elide; }
+            Text { text: root.artist + (!root.album-column && root.album != "" ? (root.artist != "" ? " · " : "") + root.album : ""); color: Tokens.ink-300; font-size: 12px; overflow: elide; }
+        }
+        if root.album-column: Text { text: root.album; width: 180px; color: Tokens.ink-300; font-size: 12px; vertical-alignment: center; overflow: elide; }
+        if !root.mobile: Text { text: root.duration; color: Tokens.ink-300; width: 42px; font-size: 12px; vertical-alignment: center; horizontal-alignment: right; }
+        if root.actions: Action { icon: @image-url("../assets/icons/Heart.svg"); label: I18n.tr("Подобається"); selected: root.liked; clicked => { root.like-clicked(); } }
+        if root.actions && !root.mobile: Rectangle {
+            width: 36px; height: 36px;
+            if !root.downloaded: Action { icon: root.downloading ? @image-url("../assets/icons/MoreHorizontal.svg") : @image-url("../assets/icons/Download.svg"); label: root.downloading ? I18n.tr("Завантаження файлу…") : I18n.tr("Завантажити"); clicked => { root.download-clicked(); } }
+        }
+        if root.removable: Action { icon: @image-url("../assets/icons/X.svg"); label: I18n.tr("Видалити зі списку"); clicked => { root.remove-clicked(); } }
+    }
+    accessible-role: button;
+    accessible-label: root.title + " · " + root.artist;
+    accessible-action-default => { root.activated(); }
+}
 export component Transport inherits Rectangle {
     in property <bool> playing;
     in property <bool> brand;
@@ -131,8 +239,9 @@ export component Transport inherits Rectangle {
     width: brand ? 42px : 58px;
     height: brand ? 42px : 58px;
     border-radius: root.playing ? (root.brand ? 15px : 20px) : self.width / 2;
+    animate border-radius { duration: Motion.feedback; }
     background: touch.has-hover ? Tokens.brand-300 : Tokens.brand-500;
-    animate background { duration: 110ms; }
+    animate background { duration: Motion.feedback; }
     Image {
         source: root.playing ? @image-url("../assets/icons/Pause.svg") : @image-url("../assets/icons/Play.svg");
         width: root.brand ? 20px : 26px;
@@ -143,7 +252,7 @@ export component Transport inherits Rectangle {
     }
     touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
     accessible-role: button;
-    accessible-label: playing ? "Пауза" : "Відтворити";
+    accessible-label: playing ? I18n.tr("Пауза") : I18n.tr("Відтворити");
     accessible-action-default => { root.clicked(); }
 }
 
@@ -160,7 +269,7 @@ export component SeekBar inherits Rectangle {
         width: 100%;
         border-radius: 3px;
         background: Tokens.neutral-200;
-        animate height { duration: 100ms; }
+        animate height { duration: Motion.feedback; }
         Rectangle {
             x: 0px;
             y: 0px;
@@ -177,7 +286,7 @@ export component SeekBar inherits Rectangle {
         height: touch.has-hover || touch.pressed ? 12px : 0px;
         border-radius: self.width / 2;
         background: root.accent ? Tokens.brand-300 : Tokens.ink-100;
-        animate width, height { duration: 100ms; }
+        animate width, height { duration: Motion.feedback; }
     }
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -193,7 +302,7 @@ export component SeekBar inherits Rectangle {
         }
     }
     accessible-role: slider;
-    accessible-label: "Позиція відтворення";
+    accessible-label: I18n.tr("Позиція відтворення");
     accessible-value: root.position;
     accessible-value-minimum: 0;
     accessible-value-maximum: root.duration;
@@ -210,33 +319,76 @@ export component TonalSlider inherits Rectangle {
     in property <string> label;
     callback changed(float);
     horizontal-stretch: 1;
-    min-height: 20px;
-    preferred-height: 20px;
+    min-height: 32px;
+    preferred-height: 44px;
     vertical-stretch: 1;
-    border-radius: 10px;
-    border-width: native-input.has-focus ? 1px : 0px;
-    border-color: Tokens.brand-300;
+    forward-focus: native-input;
     min-width: 40px;
     private property <float> ratio: maximum > minimum ? clamp((value - minimum) / (maximum - minimum), 0, 1) : 0;
-    Rectangle {
-        x: 0px; y: (root.height - 6px) / 2; width: 100%; height: 6px;
-        border-radius: 3px; background: Tokens.neutral-300;
-        Rectangle { width: parent.width * root.ratio; height: 100%; border-radius: 3px; background: Tokens.brand-500; }
+    private property <length> thumb-size: 18px;
+    function change-at(position: length) {
+        root.value = root.minimum + clamp((position - root.thumb-size / 2) / max(1px, root.width - root.thumb-size), 0, 1) * (root.maximum - root.minimum);
+        root.changed(root.value);
     }
     Rectangle {
-        x: (root.width - 4px) * root.ratio; y: (root.height - 20px) / 2;
-        width: 4px; height: 20px; border-radius: 2px;
+        x: root.thumb-size / 2; y: (root.height - 8px) / 2; width: root.width - root.thumb-size; height: 8px;
+        border-radius: 4px; background: Tokens.neutral-300;
+        Rectangle { x: 0px; y: 0px; width: parent.width * root.ratio; height: 100%; border-radius: 4px; background: Tokens.brand-500; }
+    }
+    Rectangle {
+        x: (root.width - root.thumb-size) * root.ratio; y: (root.height - root.thumb-size) / 2;
+        width: root.thumb-size; height: root.thumb-size; border-radius: root.thumb-size / 2;
         background: Tokens.brand-300;
+        border-width: 2px; border-color: Tokens.neutral-100;
     }
     Rectangle {
         width: 100%; height: 100%; opacity: 0.001;
         native-input := Slider {
             width: 100%; height: 100%; minimum: root.minimum; maximum: root.maximum;
+            step: (root.maximum - root.minimum) / 100;
             value <=> root.value;
             accessible-label: root.label;
             changed(value) => { root.changed(value); }
         }
     }
+    TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                native-input.focus();
+                root.change-at(self.mouse-x);
+            }
+        }
+        moved => { if self.pressed { root.change-at(self.mouse-x); } }
+    }
+}
+
+export component PlaylistChoice inherits Rectangle {
+    in property <string> name;
+    in property <string> detail;
+    callback clicked();
+    height: 64px;
+    min-width: 0px;
+    border-radius: 16px;
+    background: touch.has-hover || touch.pressed ? Tokens.neutral-200 : Tokens.neutral-150;
+    HorizontalLayout {
+        padding-left: 14px; padding-right: 14px; spacing: 12px;
+        VerticalLayout { alignment: center; width: 22px;
+            Image { source: @image-url("../assets/icons/ListMusic.svg"); width: 22px; height: 22px; colorize: Tokens.brand-300; }
+        }
+        VerticalLayout {
+            alignment: center; horizontal-stretch: 1; spacing: 4px;
+            Text { text: root.name; font-size: 14px; font-weight: 600; color: Tokens.ink-100; overflow: elide; }
+            Text { text: root.detail; font-size: 12px; color: Tokens.ink-300; overflow: elide; }
+        }
+        VerticalLayout { alignment: center; width: 18px;
+            Image { source: @image-url("../assets/icons/Plus.svg"); width: 18px; height: 18px; colorize: Tokens.ink-200; }
+        }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-action-default => { root.clicked(); }
 }
 
 export component MobileNavItem inherits Rectangle {
@@ -248,13 +400,13 @@ export component MobileNavItem inherits Rectangle {
     height: 64px;
     Rectangle {
         width: min(52px, root.width - 4px); height: 28px;
-        x: (root.width - self.width) / 2; y: 7px;
+        x: (root.width - self.width) / 2; y: root.height < 60px ? 1px : 7px;
         border-radius: 16px;
         background: root.selected ? Tokens.primary-container : transparent;
-        animate background { duration: 120ms; }
+        animate background { duration: Motion.feedback; }
         Image { source: root.icon; width: 20px; height: 20px; x: (parent.width - 20px) / 2; y: 4px; colorize: root.selected ? Tokens.brand-300 : Tokens.ink-200; }
     }
-    Text { text: root.text; x: 1px; y: 39px; width: root.width - 2px; height: 18px; font-size: 10px; font-weight: root.selected ? 700 : 500; color: root.selected ? Tokens.brand-300 : Tokens.ink-200; horizontal-alignment: center; overflow: elide; }
+    Text { text: root.text; x: 1px; y: root.height < 60px ? 29px : 39px; width: root.width - 2px; height: 18px; font-size: 10px; font-weight: root.selected ? 700 : 500; color: root.selected ? Tokens.brand-300 : Tokens.ink-200; horizontal-alignment: center; overflow: elide; }
     TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
     accessible-role: button; accessible-label: text;
     accessible-action-default => { root.clicked(); }

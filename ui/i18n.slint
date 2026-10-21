@@ -1,0 +1,9 @@
+// The original Ukrainian copy is also the stable lookup key.
+export global I18n {
+    in-out property <string> language: "uk";
+    pure callback translate(string, string) -> string;
+    public pure function tr(text: string) -> string {
+        return self.language == "uk" ? text : self.translate(self.language, text);
+    }
+}
+

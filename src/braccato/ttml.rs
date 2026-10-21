@@ -12,6 +12,8 @@ static DECLARED: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"xmlns:([A-Za-z][\w.-]*)\s*=").unwrap());
 static ROOT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<(?:[\w.-]+:)?tt\b[^>]*>").unwrap());
 static ENTITY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"&([A-Za-z][A-Za-z0-9]+);").unwrap());
+static SPACE_ENTITY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)&(?:amp;)*#(?:x0*20|0*32);").unwrap());
 pub fn prepare_xml(raw: &str) -> String {
     let mut xml = ENTITY
         .replace_all(raw, |c: &regex::Captures<'_>| {
@@ -81,6 +83,7 @@ fn text(node: roxmltree::Node<'_, '_>) -> String {
     node.descendants()
         .filter(|n| n.is_text())
         .filter_map(|n| n.text())
+        .map(|value| SPACE_ENTITY.replace_all(value, " "))
         .collect::<String>()
 }
 fn role<'a>(node: roxmltree::Node<'a, '_>) -> &'a str {
@@ -89,7 +92,7 @@ fn role<'a>(node: roxmltree::Node<'a, '_>) -> &'a str {
 fn parts(
     paragraph: roxmltree::Node<'_, '_>,
     start: u64,
-    end: u64,
+    _end: u64,
 ) -> (Vec<LyricPart>, String, String) {
     let mut parts = vec![];
     let mut translation = String::new();
@@ -107,24 +110,32 @@ fn parts(
         if !n.is_text() {
             continue;
         }
-        let value = n.text().unwrap_or("");
-        if value.trim().is_empty() && value.contains(['\n', '\r']) {
-            continue;
-        }
+        let value = SPACE_ENTITY.replace_all(n.text().unwrap_or(""), " ");
+        let value = if value.trim().is_empty() && value.contains(['\n', '\r']) {
+            // Ignore indentation, but retain a deliberate numeric space
+            // between spans even if the document is pretty-printed.
+            if SPACE_ENTITY.is_match(&n.document().input_text()[n.range()]) {
+                std::borrow::Cow::Borrowed(" ")
+            } else {
+                continue;
+            }
+        } else {
+            value
+        };
         let ancestors = n
             .ancestors()
             .take_while(|p| *p != paragraph)
             .filter(|p| p.is_element())
             .collect::<Vec<_>>();
         if ancestors.iter().any(|p| role(*p) == "x-translation") {
-            translation.push_str(value);
+            translation.push_str(&value);
             continue;
         }
         if ancestors
             .iter()
             .any(|p| matches!(role(*p), "x-roman" | "x-romanization"))
         {
-            roman.push_str(value);
+            roman.push_str(&value);
             continue;
         }
         let begin = ancestors
@@ -140,9 +151,12 @@ fn parts(
                         .map(|d| begin.saturating_add(d))
                 })
             })
-            .unwrap_or(end);
+            .unwrap_or(begin);
         parts.push(LyricPart {
             start_ms: begin,
+            start_time_explicit: ancestors
+                .iter()
+                .any(|p| attr(*p, "begin").and_then(time).is_some()),
             duration_ms: finish.saturating_sub(begin),
             text: value.into(),
             is_background: ancestors.iter().any(|p| role(*p) == "x-bg"),
@@ -183,6 +197,27 @@ pub fn parse(raw: &str) -> ParsedLyrics {
     }
     for n in doc.descendants().filter(|n| n.is_element()) {
         let name = n.tag_name().name();
+        if n.ancestors()
+            .any(|a| a.is_element() && a.tag_name().name() == "metadata")
+        {
+            let key = if name == "meta" {
+                attr(n, "key").unwrap_or("")
+            } else {
+                name
+            };
+            let value = attr(n, "value")
+                .map(str::to_string)
+                .unwrap_or_else(|| text(n));
+            let value = value.trim();
+            if !value.is_empty() {
+                match key {
+                    "title" => result.title = Some(value.into()),
+                    "artist" | "artists" => result.artist = Some(value.into()),
+                    "album" => result.album = Some(value.into()),
+                    _ => {}
+                }
+            }
+        }
         let writer = if name == "songwriter" {
             Some(text(n))
         } else if name == "meta" && matches!(attr(n, "key"), Some("songwriter" | "songwriters")) {
@@ -205,9 +240,10 @@ pub fn parse(raw: &str) -> ParsedLyrics {
         {
             continue;
         }
-        let Some(start) = n.ancestors().find_map(|a| attr(a, "begin").and_then(time)) else {
-            continue;
-        };
+        let start = n
+            .ancestors()
+            .find_map(|a| attr(a, "begin").and_then(time))
+            .unwrap_or(0);
         let end = attr(n, "end")
             .and_then(time)
             .or_else(|| {
@@ -237,7 +273,13 @@ pub fn parse(raw: &str) -> ParsedLyrics {
             .unwrap_or(start);
         result.lines.push(LyricLine {
             start_ms: start,
-            duration_ms: end.max(word_end).saturating_sub(start),
+            duration_ms: if attr(n, "end").and_then(time).is_some()
+                || attr(n, "dur").and_then(time).is_some()
+            {
+                end.saturating_sub(start)
+            } else {
+                word_end.saturating_sub(start)
+            },
             text: words,
             parts,
             translation,

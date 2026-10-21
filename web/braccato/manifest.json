@@ -8,19 +8,19 @@
     "provider-blyrics",
     "types"
   ],
-  "bundledModules": 97,
+  "bundledModules": 98,
   "assets": {
     "widget.js": {
-      "bytes": 259531,
-      "sha256": "a6842be765fe163c3ac9471eac465deaf8f78ae21aaf078bef905080babb7712"
+      "bytes": 340026,
+      "sha256": "b82d578870f16298cab4ec5055ecf6b0c4e95ee719cec72c87b9b8c9852824b1"
     },
     "widget.css": {
       "bytes": 675441,
       "sha256": "2aed6d0ace94c26c38df674e80a974e3b41a53c9039dbe8d3028dbdbe8fa0eab"
     },
     "LICENSES.txt": {
-      "bytes": 14337,
-      "sha256": "78ccac3af37acd932a8e97c201066d378d142d55a4594cb924bafbca826c0569"
+      "bytes": 18726,
+      "sha256": "fb3b4af30c69e8b5d7272f8ed9eb871569080fe0588ef7f5882988a3010cf2a3"
     }
   }
 }

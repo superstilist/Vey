@@ -35,8 +35,8 @@ impl JwtCache {
             .and_then(|b| serde_json::from_slice::<Self>(&b).ok())
             .unwrap_or_default();
         // Derive expiry from the actual token rather than trusting a stale side field.
-        cached.exp = jwt_exp(cached.token.trim()).unwrap_or(0);
-        cached.token = cached.token.trim().into();
+        cached.token = normalize_token(&cached.token);
+        cached.exp = jwt_exp(&cached.token).unwrap_or(0);
         cached
     }
     fn save(&self) -> Result<(), String> {
@@ -68,23 +68,45 @@ impl JwtCache {
     }
 }
 
-fn normalize_token(raw: &str) -> String {
-    let raw = raw.trim();
-    let value = serde_json::from_str::<serde_json::Value>(raw).ok();
-    let raw = value
-        .as_ref()
-        .and_then(|v| v.get("jwt").or_else(|| v.get("token")))
-        .and_then(|v| v.as_str())
-        .unwrap_or(raw)
-        .trim();
-    if raw
-        .get(..7)
-        .is_some_and(|s| s.eq_ignore_ascii_case("bearer "))
-    {
-        raw[7..].trim().into()
-    } else {
-        raw.into()
+pub(crate) fn normalize_token(raw: &str) -> String {
+    let mut raw = raw.trim().to_owned();
+    for _ in 0..8 {
+        if raw
+            .get(..7)
+            .is_some_and(|s| s.eq_ignore_ascii_case("bearer "))
+        {
+            raw = raw[7..].trim().to_owned();
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            break;
+        };
+        let next = if let Some(text) = value.as_str() {
+            Some(text.to_owned())
+        } else {
+            [
+                "jwt",
+                "token",
+                "access_token",
+                "accessToken",
+                "data",
+                "result",
+            ]
+            .iter()
+            .filter_map(|key| value.get(key))
+            .find(|v| v.is_string() || v.is_object())
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| v.to_string())
+            })
+        };
+        let Some(next) = next else {
+            break;
+        };
+        raw = next.trim().to_owned();
     }
+    raw
 }
 
 fn jwt_exp(token: &str) -> Option<u64> {
@@ -230,7 +252,29 @@ pub fn v2_lyrics_form(track: &Track, video_id: &str, token: &str) -> HashMap<Str
 
 /// v2 can answer SSE, direct lyrics, or a JSON-wrapped lyric payload.
 pub fn parse_lyrics_response(raw: &str) -> Vec<LyricsAlternative> {
-    let raw = raw.trim();
+    parse_lyrics_response_depth(raw, 0)
+}
+fn parse_lyrics_response_depth(raw: &str, depth: usize) -> Vec<LyricsAlternative> {
+    if depth > 8 {
+        return vec![];
+    }
+    let raw = raw.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    if raw.starts_with("```") || raw.starts_with("~~~") {
+        if let Some(body) = crate::lyrics::code_fence_body(raw) {
+            return parse_lyrics_response_depth(body, depth + 1);
+        }
+        return crate::lyrics::recover_ttml(raw)
+            .map(|document| parse_lyrics_response_depth(&document, depth + 1))
+            .unwrap_or_default();
+    }
+    if let Some(document) = crate::lyrics::recover_ttml(raw) {
+        return parse_lyrics_response_depth(&document, depth + 1);
+    }
+    if raw.starts_with('"') {
+        return serde_json::from_str::<String>(raw)
+            .map(|body| parse_lyrics_response_depth(&body, depth + 1))
+            .unwrap_or_default();
+    }
     if matches!(raw, "" | "null" | "{}" | "[DONE]") {
         return vec![];
     }
@@ -245,6 +289,35 @@ pub fn parse_lyrics_response(raw: &str) -> Vec<LyricsAlternative> {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
             if value.get("results").is_some() {
                 alternatives = parse_provider_sse(&format!("data: {raw}\n\n"));
+            }
+            // API gateways may wrap the same provider records in data/result arrays.
+            // Keep every provider alternative instead of treating the envelope as text.
+            if alternatives.is_empty() {
+                if let Some(records) = value.as_array() {
+                    if records
+                        .iter()
+                        .any(|v| v.get("results").is_some() || v.get("provider").is_some())
+                    {
+                        for record in records {
+                            alternatives.extend(parse_lyrics_response_depth(
+                                &record.to_string(),
+                                depth + 1,
+                            ));
+                        }
+                    }
+                } else {
+                    for field in ["data", "result", "response", "payload"] {
+                        if let Some(inner) =
+                            value.get(field).filter(|v| v.is_object() || v.is_array())
+                        {
+                            alternatives
+                                .extend(parse_lyrics_response_depth(&inner.to_string(), depth + 1));
+                            if !alternatives.is_empty() {
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -673,6 +746,39 @@ mod tests {
                 .encode(serde_json::to_vec(&serde_json::json!({"exp":exp})).unwrap())
         )
     }
+
+    #[test]
+    fn jwt_exchange_envelopes_and_quoted_bearer_tokens_are_normalized() {
+        let valid = fixture_jwt(crate::services::now_ms() / 1000 + 7200);
+        for raw in [
+            serde_json::json!({"data":{"access_token":valid}}).to_string(),
+            serde_json::json!(format!("Bearer {valid}")).to_string(),
+            serde_json::json!({"result":{"jwt":format!("Bearer {valid}")}}).to_string(),
+        ] {
+            let mut cache = JwtCache::default();
+            cache.accept(raw).unwrap();
+            assert_eq!(cache.token().as_deref(), Some(valid.as_str()));
+        }
+        assert!(JwtCache::default()
+            .accept("Bearer not.a.jwt".into())
+            .is_err());
+    }
+
+    #[test]
+    fn provider_envelopes_preserve_alternatives_and_source_timing() {
+        let response = serde_json::json!({"data":[
+            {"provider":"first","results":{"synced":"[00:00.00]First\n[00:02.25]Second"}},
+            {"provider":"second","results":{"plain":"Untimed words"}}
+        ]});
+        let parsed = parse_lyrics_response(&response.to_string());
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].provider, "first");
+        assert_eq!(parsed[0].sync_type, LyricsSyncType::Synced);
+        assert_eq!(parsed[0].lyrics.lines[1].start_ms, 2250);
+        assert_eq!(parsed[1].sync_type, LyricsSyncType::Plain);
+        assert!(!crate::lyrics::has_word_level_timing(&parsed[0].lyrics));
+        assert!(parse_lyrics_response(r#"{"error":"unauthorized"}"#).is_empty());
+    }
     #[test]
     fn jwt_inputs_are_trimmed_decoded_and_expiry_is_validated() {
         let valid = fixture_jwt(crate::services::now_ms() / 1000 + 1200);
@@ -735,6 +841,23 @@ mod tests {
         );
         assert!(parse_lyrics_response("event: provider\ndata: broken\n\n").is_empty());
         assert!(parse_lyrics_response("null").is_empty());
+        let fenced = format!("```json\n{event}\n```");
+        assert_eq!(parse_lyrics_response(&fenced)[0].provider, "lrclib");
+        let encoded = serde_json::to_string(&fenced).unwrap();
+        assert_eq!(parse_lyrics_response(&encoded)[0].provider, "lrclib");
+        let xml = "```xml\n<tt><body><p begin='1s' end='3s'>Fixture</p></body></tt>\n```";
+        let event = serde_json::json!({"provider":"fixture", "results":{"xml":xml, "plainLyrics":"Fallback"}});
+        let found = parse_lyrics_response(&format!("```json\n{event}\n```"));
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].provider, "fixture");
+        assert_eq!(found[0].format, "ttml");
+        assert_eq!(found[0].sync_type, LyricsSyncType::Synced);
+        assert_eq!(found[1].format, "txt");
+        assert!(parse_lyrics_response("```xml\n<tt invalid\n```").is_empty());
+        let messy = "````sql\nxml ``` <tt><body><p begin='1s' end='2s'>First&amp;#x20;line</p></body></tt> ```\n````";
+        let parsed = parse_lyrics_response(messy);
+        assert_eq!(parsed[0].format, "ttml");
+        assert_eq!(parsed[0].lyrics.lines[0].text, "First line");
     }
     #[test]
     fn parses_plain_and_timed_paste() {

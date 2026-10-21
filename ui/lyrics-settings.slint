@@ -1,0 +1,58 @@
+import { ComboBox } from "std-widgets.slint";
+import { I18n } from "i18n.slint";
+import { Tokens } from "tokens.slint";
+import { Action, PreferenceToggle } from "controls.slint";
+
+export component LyricsSettings inherits Rectangle {
+    in property <bool> embedded;
+    in-out property <string> provider: "auto";
+    in-out property <bool> romanization: true;
+    in-out property <bool> translation: true;
+    in-out property <string> language: "auto";
+    in property <string> status;
+    private property <[string]> languages: ["auto", "uk", "en", "cs", "pl", "de", "es", "fr", "ja"];
+    in-out property <bool> reduced-motion;
+    in-out property <bool> stage;
+    in-out property <bool> passive;
+    private property <bool> advanced;
+    private property <[string]> provider-ids: ["auto", "dacubeking", "unison", "lrclib", "youtube"];
+    callback provider-changed(string);
+    callback display-changed();
+    callback mode-changed();
+    max-width: 520px;
+    height: body.preferred-height;
+    vertical-stretch: 0;
+    border-radius: 24px;
+    background: Tokens.neutral-100;
+    body := VerticalLayout {
+        padding: root.embedded ? 0px : 16px; spacing: 8px;
+        Text { text: I18n.tr("Слова пісень"); color: Tokens.ink-100; font-size: 18px; font-weight: 600; }
+        PreferenceToggle { text: I18n.tr("Романізація"); checked: root.romanization; toggled => { root.romanization = !root.romanization; root.display-changed(); } }
+        PreferenceToggle { text: I18n.tr("Переклад"); checked: root.translation; toggled => { root.translation = !root.translation; root.display-changed(); } }
+        if root.translation: Text { text: I18n.tr("Мова перекладу"); color: Tokens.ink-300; font-size: 12px; }
+        if root.translation: ComboBox {
+            height: 40px;
+            model: [I18n.tr("Мова інтерфейсу"), "Українська", "English", "Čeština", "Polski", "Deutsch", "Español", "Français", "日本語"];
+            current-index: root.language == "uk" ? 1 : root.language == "en" ? 2 : root.language == "cs" ? 3 : root.language == "pl" ? 4 : root.language == "de" ? 5 : root.language == "es" ? 6 : root.language == "fr" ? 7 : root.language == "ja" ? 8 : 0;
+            selected(value) => { root.language = root.languages[self.current-index]; root.display-changed(); }
+        }
+        if root.romanization: Text { text: I18n.tr("Автоматична романізація: Unison / Google"); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
+        if root.translation: Text { text: I18n.tr("Автоматичний переклад: Unison / Google Translate"); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
+        if root.status != "": Text { text: I18n.tr(root.status); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
+        Action { text: I18n.tr("Додатково"); wide: true; selected: root.advanced; outlined: true; clicked => { root.advanced = !root.advanced; } }
+        if root.advanced: VerticalLayout {
+            spacing: 8px;
+            Text { text: I18n.tr("Джерело за замовчуванням"); color: Tokens.ink-300; font-size: 12px; }
+            ComboBox {
+                height: 40px;
+                model: [I18n.tr("Автоматично"), "Dacubeking", "Unison", "LRCLIB", "YouTube"];
+                current-index: root.provider == "dacubeking" ? 1 : root.provider == "unison" ? 2 : root.provider == "lrclib" ? 3 : root.provider == "youtube" ? 4 : 0;
+                selected(value) => { root.provider = root.provider-ids[self.current-index]; root.provider-changed(root.provider); }
+            }
+            Text { text: I18n.tr("Вибір джерела зберігається для кожної пісні."); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
+        }
+        if root.advanced: PreferenceToggle { text: I18n.tr("Менше руху"); checked: root.reduced-motion; toggled => { root.reduced-motion = !root.reduced-motion; root.mode-changed(); } }
+        if root.advanced: PreferenceToggle { text: I18n.tr("Сцена для дуетів"); checked: root.stage; toggled => { root.stage = !root.stage; root.mode-changed(); } }
+        if root.advanced: PreferenceToggle { text: I18n.tr("Автопрокручування"); checked: root.passive; toggled => { root.passive = !root.passive; root.mode-changed(); } }
+    }
+}

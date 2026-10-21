@@ -2,7 +2,8 @@
   "passed": true,
   "checks": [
     "labeled bottom tabs",
-    "audio rate and volume controls",
+    "normal playback after legacy speed preference",
+    "volume tap, drag and keyboard endpoints",
     "browser back/forward",
     "settings back button",
     "local file import",

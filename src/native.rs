@@ -19,8 +19,8 @@ use std::time::Duration;
 use walkdir::WalkDir;
 
 const AUDIO_EXTS: &[&str] = &[
-    "aif", "aiff", "caf", "flac", "m4a", "m4b", "mka", "mkv", "mov", "mp1", "mp2", "mp3", "mp4",
-    "oga", "ogg", "opus", "wav",
+    "aac", "aif", "aiff", "caf", "flac", "m4a", "m4b", "mka", "mkv", "mov", "mp1", "mp2", "mp3",
+    "mp4", "oga", "ogg", "opus", "wav",
 ];
 
 // ── Shared types ─────────────────────────────────────────────────────────────
@@ -711,6 +711,9 @@ fn canonical_path(path: &Path) -> PathBuf {
 
 fn add_track(path: &Path, seen: &mut HashSet<PathBuf>, tracks: &mut Vec<TrackMeta>) -> bool {
     let canonical = canonical_path(path);
+    if seen.contains(&canonical) {
+        return false;
+    }
     let Some(track) = read_track(&canonical) else {
         return false;
     };
@@ -827,6 +830,14 @@ fn scan_sources(
         source_statuses.push(status);
     }
 
+    sort_tracks(&mut tracks);
+    LibraryScanResult {
+        tracks,
+        source_statuses,
+    }
+}
+
+fn sort_tracks(tracks: &mut [TrackMeta]) {
     tracks.sort_by(|a, b| {
         a.artist
             .to_lowercase()
@@ -834,10 +845,6 @@ fn scan_sources(
             .then(a.album.to_lowercase().cmp(&b.album.to_lowercase()))
             .then(a.track_no.unwrap_or(999).cmp(&b.track_no.unwrap_or(999)))
     });
-    LibraryScanResult {
-        tracks,
-        source_statuses,
-    }
 }
 
 fn sources_with_system_music(sources: Vec<LibrarySource>) -> Vec<LibrarySource> {
@@ -877,6 +884,38 @@ pub fn scan_library(sources: Vec<LibrarySource>) -> LibraryScanResult {
         sources_with_system_music(sources),
         get_system_music_folder().map(PathBuf::from),
     )
+}
+
+#[cfg(target_os = "android")]
+pub fn scan_android_library(sources: Vec<LibrarySource>) -> Result<LibraryScanResult, String> {
+    // Query first: permission/provider errors must not erase the existing catalog.
+    let paths = crate::android::audio_paths()?;
+    Ok(scan_indexed_audio(sources, paths))
+}
+
+#[cfg(any(target_os = "android", test))]
+fn scan_indexed_audio(sources: Vec<LibrarySource>, paths: Vec<String>) -> LibraryScanResult {
+    let mut result = scan_sources(
+        sources
+            .into_iter()
+            .filter(|s| s.kind != LibrarySourceKind::System)
+            .collect(),
+        None,
+    );
+    let mut seen = result
+        .tracks
+        .iter()
+        .map(|t| canonical_path(Path::new(&t.path)))
+        .collect();
+    for path in paths {
+        let path = Path::new(&path);
+        // MediaStore can retain stale records, or records we cannot open.
+        if File::open(path).is_ok() {
+            add_track(path, &mut seen, &mut result.tracks);
+        }
+    }
+    sort_tracks(&mut result.tracks);
+    result
 }
 
 pub fn get_artwork(path: String) -> Option<String> {
@@ -1022,14 +1061,8 @@ pub async fn verify_turnstile(token: String, base_url: Option<String>) -> Result
         return Err(format!("verify-turnstile HTTP {}", res.status()));
     }
     let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
-    let jwt = data
-        .get("jwt")
-        .or_else(|| data.get("token"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if jwt.is_empty() {
+    let jwt = crate::lyrics_service::normalize_token(&data.to_string());
+    if jwt.is_empty() || jwt.starts_with(['{', '[']) {
         return Err("verify-turnstile returned no jwt".to_string());
     }
     Ok(jwt)
@@ -1763,6 +1796,84 @@ fn ytm_shelf_kind(title: &str) -> &'static str {
 /// result, a Songs shelf and a Videos shelf side by side, and each section's
 /// localized title tells us which of the two artwork halves applies to it.
 fn parse_ytm_songs(json: &serde_json::Value, limit: usize) -> Vec<YtmSong> {
+    // yt-rust owns normalized catalog metadata. The host decoder retains
+    // renderer-specific availability, ordering, clip hints and layouts that
+    // the library does not yet recognize (carousels and continuation pages).
+    let mut songs = parse_ytm_songs_host(json, usize::MAX);
+    if let Ok(page) = yt_rust::providers::youtube_music::parse_search(json) {
+        for (track, kind) in page
+            .songs
+            .into_iter()
+            .map(|track| (track, "song"))
+            .chain(page.videos.into_iter().map(|track| (track, "video")))
+        {
+            let Some(id) = track.video_id else { continue };
+            let artist = track
+                .artists
+                .into_iter()
+                .map(|a| a.name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let album = track.album.map(|a| a.title).unwrap_or_default();
+            let duration = track
+                .duration
+                .as_deref()
+                .and_then(parse_yt_length)
+                .unwrap_or(0.) as u64;
+            let thumbnail = track
+                .thumbnails
+                .into_iter()
+                .max_by_key(|t| {
+                    let width = t.width.unwrap_or(0);
+                    let height = t.height.unwrap_or(0);
+                    (width == height, u64::from(width) * u64::from(height))
+                })
+                .map(|t| upgrade_cover_url(&t.url))
+                .unwrap_or_default();
+            if let Some(song) = songs.iter_mut().find(|song| song.video_id == id) {
+                if !track.title.trim().is_empty() {
+                    song.title = track.title;
+                }
+                if !artist.is_empty() {
+                    song.artist = artist;
+                }
+                if !album.is_empty() {
+                    song.album = album;
+                }
+                if duration > 0 {
+                    song.duration_secs = duration;
+                }
+                if song.thumbnail_url.is_empty() {
+                    song.thumbnail_url = thumbnail;
+                }
+            } else if id.len() == 11
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                && !track.title.trim().is_empty()
+            {
+                songs.push(YtmSong {
+                    video_id: id,
+                    title: track.title,
+                    artist,
+                    album,
+                    thumbnail_url: thumbnail,
+                    clip_url: String::new(),
+                    kind: kind.into(),
+                    video_type: String::new(),
+                    // Unknown video provenance is never enough to invent a clip.
+                    has_video: false,
+                    clip_video_id: String::new(),
+                    duration_secs: duration,
+                });
+            }
+        }
+    }
+    songs.truncate(limit);
+    songs
+}
+
+fn parse_ytm_songs_host(json: &serde_json::Value, limit: usize) -> Vec<YtmSong> {
     let mut out: Vec<YtmSong> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut push = |song: YtmSong| {
@@ -2317,7 +2428,7 @@ async fn ytm_search_clip_fallback(
 }
 
 pub async fn ytm_search_songs(query: String, limit: Option<usize>) -> Result<Vec<YtmSong>, String> {
-    let limit = limit.unwrap_or(8).clamp(1, 15);
+    let limit = limit.unwrap_or(8).clamp(1, 100);
     let query = query.trim().to_string();
     if query.is_empty() {
         return Ok(Vec::new());
@@ -2331,7 +2442,11 @@ pub async fn ytm_search_songs(query: String, limit: Option<usize>) -> Result<Vec
     // Gather from *every* page before applying the limit. The Videos shelf is
     // what the clip pairing draws on, and it is the third request — stopping at
     // the limit would have filled the list with Songs and never read it.
-    for page in ytm_search_pages_json(&client, &query).await {
+    let pages = ytm_search_pages_json(&client, &query).await;
+    if pages.is_empty() {
+        return Err("YouTube Music search is unavailable. Please retry.".into());
+    }
+    for page in pages {
         for song in parse_ytm_songs(&page, limit) {
             if seen.insert(song.video_id.clone()) {
                 out.push(song);
@@ -2351,10 +2466,8 @@ pub async fn ytm_search_songs(query: String, limit: Option<usize>) -> Result<Vec
         .iter_mut()
         .take(limit)
         .filter(|song| song.kind == "song" && !song.has_video && song.clip_video_id.is_empty())
+        .take(3)
     {
-        if fallback_clips >= 3 {
-            break;
-        }
         if let Some((clip_id, still)) =
             ytm_search_clip_fallback(&client, &auth, &version, song).await
         {
@@ -2488,6 +2601,28 @@ pub async fn ytm_search_suggestions(query: String) -> Result<Vec<YtmSuggestion>,
 }
 
 fn parse_ytm_suggestions(json: &serde_json::Value, limit: usize) -> Vec<YtmSuggestion> {
+    let host = parse_ytm_suggestions_host(json, usize::MAX);
+    yt_rust::providers::youtube_music::parse_suggestions(json)
+        .into_iter()
+        .filter(|suggestion| !suggestion.text.trim().is_empty())
+        .take(limit)
+        .map(|suggestion| {
+            host.iter()
+                .find(|item| item.text == suggestion.text)
+                .cloned()
+                .unwrap_or_else(|| YtmSuggestion {
+                    runs: vec![YtmSuggestionRun {
+                        text: suggestion.text.clone(),
+                        bold: false,
+                    }],
+                    text: suggestion.text,
+                    from_history: false,
+                })
+        })
+        .collect()
+}
+
+fn parse_ytm_suggestions_host(json: &serde_json::Value, limit: usize) -> Vec<YtmSuggestion> {
     let Some(contents) = json
         .pointer("/contents/0/searchSuggestionsSectionRenderer/contents")
         .and_then(|contents| contents.as_array())
@@ -3178,6 +3313,18 @@ struct PlayerClient {
     origin: &'static str,
 }
 
+// Public mobile player context, matching NewPipeExtractor's current client.
+// Android's plain URLs can be previews that reject ranges beyond 1 MiB.
+const VISIONOS_UA: &str =
+    "com.google.visionos.youtube/1.04(RealityDevice17,1; U; CPU visionOS 26_6_0 like Mac OS X; US)";
+const AUDIO_PLAYER: PlayerClient = PlayerClient {
+    name: "VISIONOS",
+    version: "1.04",
+    header_name: "101",
+    host: "https://youtubei.googleapis.com",
+    origin: "https://www.youtube.com",
+};
+
 /// WEB_REMIX first (music entities), then ANDROID: pinned release 20.10.38
 /// answers OK with plain (non-ciphered) audio URLs where WEB_REMIX answers
 /// UNPLAYABLE or cipher-only (e.g. major-label tracks like Training Season).
@@ -3208,7 +3355,7 @@ async fn ytm_player_json(
     player: &PlayerClient,
     video_id: &str,
 ) -> Result<Option<serde_json::Value>, String> {
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "context": innertube_context(player.name, player.version, visitor),
         "videoId": video_id,
         "playbackContext": {
@@ -3217,12 +3364,38 @@ async fn ytm_player_json(
             }
         },
     });
+    if player.name == "VISIONOS" {
+        let context = &mut body["context"]["client"];
+        context["deviceMake"] = "Apple".into();
+        context["deviceModel"] = "RealityDevice17,1".into();
+        context["osName"] = "visionOS".into();
+        context["osVersion"] = "26.6.0.23O770".into();
+        context["userAgent"] = VISIONOS_UA.into();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .to_le_bytes();
+        body["cpn"] = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(&nonce[..12])
+            .into();
+        body["contentCheckOk"] = true.into();
+        body["racyCheckOk"] = true.into();
+    }
     let mut req = client
         .post(format!(
             "{}/youtubei/v1/player?key={}&prettyPrint=false&alt=json",
             player.host, api_key
         ))
-        .header("User-Agent", YT_UA)
+        .header(
+            "User-Agent",
+            if player.name == "VISIONOS" {
+                VISIONOS_UA
+            } else {
+                YT_UA
+            },
+        )
+        .header("X-Goog-Api-Format-Version", "2")
         .header("Content-Type", "application/json")
         .header("Origin", player.origin)
         .header("Referer", format!("{}/", player.origin))
@@ -3237,6 +3410,13 @@ async fn ytm_player_json(
         return Err(format!("player {} HTTP {}", player.name, res.status()));
     }
     let json: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    if json
+        .pointer("/videoDetails/videoId")
+        .and_then(|v| v.as_str())
+        .is_some_and(|id| id != video_id)
+    {
+        return Ok(None);
+    }
     if json
         .pointer("/playabilityStatus/status")
         .and_then(|status| status.as_str())
@@ -3330,13 +3510,7 @@ fn pick_best_audio(json: &serde_json::Value) -> (Option<YtmAudio>, usize, usize)
     (best, total, plain)
 }
 
-/// Best playable audio stream for a video, trying each player client and
-/// keeping the best pick across all of them.
-///
-/// WEB_REMIX is tried first, but it sometimes answers OK with a playable yet
-/// low-bitrate stream while ANDROID would have served a better one — taking
-/// the first pick would lock playback to the worse quality. Comparing every
-/// client's pick with `is_better_audio_pick` keeps all clients in the running.
+/// Prefer the public visionOS audio client; retain the older clients as fallbacks.
 async fn ytm_audio_stream(
     client: &reqwest::Client,
     video_id: &str,
@@ -3345,7 +3519,7 @@ async fn ytm_audio_stream(
     let visitor = auth.visitor.clone();
     let mut last_error: Option<String> = None;
     let mut best: Option<YtmAudio> = None;
-    for player in PLAYER_CLIENTS {
+    for player in std::iter::once(&AUDIO_PLAYER).chain(PLAYER_CLIENTS) {
         match ytm_player_json(client, &auth.api_key, visitor.as_deref(), player, video_id).await {
             Err(error) => {
                 eprintln!(
@@ -3368,6 +3542,11 @@ async fn ytm_audio_stream(
                     pick.as_ref().map(|audio| audio.bitrate).unwrap_or(0)
                 );
                 if let Some(pick) = pick {
+                    if player.name == "VISIONOS"
+                        && audio_container_rank(&pick.mime) == audio_container_rank("audio/mp4")
+                    {
+                        return Ok(Some(pick));
+                    }
                     let better = best
                         .as_ref()
                         .map(|current| is_better_audio_pick(&pick.mime, pick.bitrate, current))
@@ -3616,17 +3795,54 @@ const YT_ANDROID_REFERER: &str = "https://www.youtube.com/";
 /// sequential download into a few seconds.
 const AUDIO_DL_CONCURRENCY: usize = 4;
 
+fn audio_user_agent(url: &str) -> &'static str {
+    if reqwest::Url::parse(url).ok().is_some_and(|url| {
+        url.query_pairs()
+            .any(|(key, value)| key == "c" && value == "VISIONOS")
+    }) {
+        VISIONOS_UA
+    } else {
+        YT_ANDROID_UA
+    }
+}
+
+async fn audio_chunk(
+    res: reqwest::Response,
+    start: u64,
+    end: u64,
+    total: u64,
+) -> Result<Vec<u8>, String> {
+    let expected = format!("bytes {start}-{end}/{total}");
+    if res
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        != Some(expected.as_str())
+    {
+        return Err(format!("audio invalid Content-Range (expected {expected})"));
+    }
+    let chunk = res
+        .bytes()
+        .await
+        .map_err(|e| e.without_url().to_string())?
+        .to_vec();
+    if chunk.len() as u64 != end - start + 1 {
+        return Err(format!("audio incomplete range (bytes {start}-{end})"));
+    }
+    Ok(chunk)
+}
+
 async fn download_audio_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
     let end0 = AUDIO_CHUNK_BYTES - 1;
     let res = client
         .get(url)
-        .header("User-Agent", YT_ANDROID_UA)
+        .header("User-Agent", audio_user_agent(url))
         .header("Origin", YT_ANDROID_ORIGIN)
         .header("Referer", YT_ANDROID_REFERER)
         .header("Range", format!("bytes=0-{end0}"))
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.without_url().to_string())?;
     let status = res.status();
     if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
         eprintln!("[ytm-dl] range-not-satisfiable on first chunk");
@@ -3650,12 +3866,24 @@ async fn download_audio_bytes(client: &reqwest::Client, url: &str) -> Result<Vec
         .get(reqwest::header::CONTENT_RANGE)
         .and_then(|value| value.to_str().ok())
         .and_then(parse_content_range_total);
-    let first = res.bytes().await.map_err(|e| e.to_string())?.to_vec();
+    if total.is_some_and(|size| size == 0 || size > AUDIO_CHUNK_BYTES * AUDIO_MAX_CHUNKS as u64) {
+        return Err("audio download exceeds size limit".into());
+    }
+    let first = match total {
+        Some(total) => audio_chunk(res, 0, end0.min(total - 1), total).await?,
+        None => res
+            .bytes()
+            .await
+            .map_err(|e| e.without_url().to_string())?
+            .to_vec(),
+    };
     if first.is_empty() {
         return Err("audio download too small".to_string());
     }
     let done = |len: u64| {
-        first.len() < AUDIO_CHUNK_BYTES as usize || total.map(|size| len >= size).unwrap_or(false)
+        total
+            .map(|size| len == size)
+            .unwrap_or(first.len() < AUDIO_CHUNK_BYTES as usize)
     };
     if done(first.len() as u64) {
         eprintln!("[ytm-dl] bytes={} chunks=1", first.len());
@@ -3680,36 +3908,33 @@ async fn download_audio_bytes(client: &reqwest::Client, url: &str) -> Result<Vec
     }
     let mut parts: Vec<(u64, Vec<u8>)> = vec![(0, first)];
     for wave in ranges.chunks(AUDIO_DL_CONCURRENCY) {
-        let mut handles = Vec::with_capacity(wave.len());
+        // Dropping this set on failure or track cancellation aborts remaining requests.
+        let mut handles = tokio::task::JoinSet::new();
         for &(range_start, range_end) in wave {
             let client = client.clone();
             let url = url.to_string();
-            handles.push(tokio::spawn(async move {
+            handles.spawn(async move {
                 let res = client
                     .get(&url)
-                    .header("User-Agent", YT_ANDROID_UA)
+                    .header("User-Agent", audio_user_agent(&url))
                     .header("Origin", YT_ANDROID_ORIGIN)
                     .header("Referer", YT_ANDROID_REFERER)
                     .header("Range", format!("bytes={range_start}-{range_end}"))
                     .send()
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| e.without_url().to_string())?;
                 if res.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                     return Err::<(u64, Vec<u8>), String>(format!(
                         "audio HTTP {} (bytes {range_start}-{range_end})",
                         res.status()
                     ));
                 }
-                let chunk = res.bytes().await.map_err(|e| e.to_string())?.to_vec();
+                let chunk = audio_chunk(res, range_start, range_end, total).await?;
                 Ok((range_start, chunk))
-            }));
+            });
         }
-        for handle in handles {
-            parts.push(
-                handle
-                    .await
-                    .map_err(|e| format!("audio download task failed: {e}"))??,
-            );
+        while let Some(part) = handles.join_next().await {
+            parts.push(part.map_err(|e| format!("audio download task failed: {e}"))??);
         }
     }
     parts.sort_by_key(|(range_start, _)| *range_start);
@@ -3722,8 +3947,8 @@ async fn download_audio_bytes(client: &reqwest::Client, url: &str) -> Result<Vec
         out.extend_from_slice(&chunk);
         expect += chunk.len() as u64;
     }
-    if out.is_empty() {
-        return Err("audio download too small".to_string());
+    if out.len() as u64 != total {
+        return Err("audio incomplete download".to_string());
     }
     eprintln!("[ytm-dl] bytes={} chunks={}", out.len(), 1 + ranges.len());
     Ok(out)
@@ -3750,7 +3975,7 @@ async fn download_audio_bytes_sequential(
         let end = start.saturating_add(AUDIO_CHUNK_BYTES - 1);
         let res = client
             .get(url)
-            .header("User-Agent", YT_ANDROID_UA)
+            .header("User-Agent", audio_user_agent(url))
             .header("Origin", YT_ANDROID_ORIGIN)
             .header("Referer", YT_ANDROID_REFERER)
             .header("Range", format!("bytes={start}-{end}"))
@@ -3840,14 +4065,31 @@ pub async fn ytm_cache_stream(video_id: String) -> Result<Option<YtmCachedTrack>
     let dir = std::env::temp_dir().join("playervf-yt");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{id}.{}", audio_ext_for_mime(&audio.mime)));
-    let fresh =
-        path.exists() && std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0) > 1024;
+    let expected_size = reqwest::Url::parse(&audio.url).ok().and_then(|url| {
+        url.query_pairs()
+            .find(|(key, _)| key == "clen")
+            .and_then(|(_, value)| value.parse::<u64>().ok())
+    });
+    let cached_size = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+    let fresh = cached_size > 1024 && expected_size.is_none_or(|size| cached_size == size);
     if !fresh {
         let bytes = download_audio_with_fresh_stream(&client, &id, &audio).await?;
         if bytes.len() < 1024 {
             return Err("audio download too small".to_string());
         }
-        std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+        if expected_size.is_some_and(|size| bytes.len() as u64 != size) {
+            return Err("audio incomplete download".to_string());
+        }
+        // Publish only a complete file; interruption cannot leave a playable-looking cache entry.
+        static CACHE_WRITE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let serial = CACHE_WRITE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temporary = path.with_extension(format!("{}.{}.part", std::process::id(), serial));
+        let result =
+            std::fs::write(&temporary, &bytes).and_then(|_| std::fs::rename(&temporary, &path));
+        if let Err(error) = result {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error.to_string());
+        }
     }
     Ok(Some(YtmCachedTrack {
         path: path.to_string_lossy().to_string(),
@@ -3864,51 +4106,76 @@ pub async fn ytm_download_track(
     artist: String,
     album: Option<String>,
 ) -> Result<Option<String>, String> {
-    let id = video_id.trim().to_string();
-    if id.len() != 11
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Ok(None);
-    }
-    let title = title.trim().to_string();
-    let artist = artist.trim().to_string();
-    if title.is_empty() {
-        return Err("missing title".to_string());
-    }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(25))
-        .timeout(Duration::from_secs(60))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let audio = match ytm_audio_stream(&client, &id).await? {
-        Some(audio) => audio,
-        None => return Ok(None),
-    };
-    let ext = audio_ext_for_mime(&audio.mime);
-    let music_dir = PathBuf::from(get_system_music_folder().ok_or("Music directory unavailable")?);
-    let dir = music_dir.join("YouTube Music");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let stem = if artist.is_empty() {
-        sanitize_filename(&title)
-    } else {
-        sanitize_filename(&format!("{artist} - {title}"))
-    };
-    let _ = album;
-    let path = dir.join(format!("{stem}.{ext}"));
-    let fresh =
-        path.exists() && std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0) > 1024;
-    if !fresh {
-        let bytes = download_audio_with_fresh_stream(&client, &id, &audio).await?;
-        if bytes.len() < 1024 {
-            return Err("audio download too small".to_string());
-        }
-        std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
-    }
-    Ok(Some(path.to_string_lossy().to_string()))
+    ytm_download_track_with_cover(video_id, title, artist, album, None).await
 }
 
+pub async fn ytm_download_track_with_cover(
+    video_id: String,
+    title: String,
+    artist: String,
+    album: Option<String>,
+    thumbnail: Option<String>,
+) -> Result<Option<String>, String> {
+    let id = video_id.trim().to_owned();
+    let Some(audio) = ytm_cache_stream(id.clone()).await? else {
+        return Ok(None);
+    };
+    let title = if title.trim().is_empty() {
+        audio.title.clone()
+    } else {
+        title.trim().to_owned()
+    };
+    let artist = if artist.trim().is_empty() {
+        audio.artist.clone()
+    } else {
+        artist.trim().to_owned()
+    };
+    let url = thumbnail
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(|| format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg"));
+    let fallback = format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg");
+    let cover = match crate::media_library::fetch_cover(&url).await {
+        Ok(bytes) => bytes,
+        Err(_) if url != fallback => crate::media_library::fetch_cover(&fallback).await?,
+        Err(error) => return Err(error),
+    };
+    let dir = PathBuf::from(get_system_music_folder().ok_or("Music directory unavailable")?)
+        .join("YouTube Music");
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let stem = sanitize_filename(&if artist.is_empty() {
+            title.clone()
+        } else {
+            format!("{artist} - {title}")
+        });
+        // IDs avoid collisions between recordings with identical artist/title metadata.
+        let path = dir.join(format!("{stem} [{id}].{}", audio.format));
+        let stage = dir.join(format!(
+            ".{id}-{}-{}.{}",
+            std::process::id(),
+            crate::services::now_ms(),
+            audio.format
+        ));
+        let result = (|| {
+            std::fs::copy(&audio.path, &stage).map_err(|e| e.to_string())?;
+            crate::media_library::write_tags(
+                &stage,
+                &title,
+                &artist,
+                album.as_deref().unwrap_or(""),
+                Some(&cover),
+            )?;
+            std::fs::rename(&stage, &path).map_err(|e| e.to_string())?;
+            Ok(Some(path.to_string_lossy().to_string()))
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(stage);
+        }
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
 #[allow(dead_code)]
 fn extract_yt_video_id(html: &str) -> Option<String> {
     // Pattern 1: "videoId":"XXXXXXXXXXX" (standard JSON)
@@ -4730,7 +4997,21 @@ fn ytm_subtitle_texts(subtitle: &serde_json::Value) -> Vec<String> {
         .map(ytm_run_text)
         .filter(|text| {
             let trimmed = text.trim();
+            let lower = trimmed.to_lowercase();
+            let statistic = trimmed.chars().next().is_some_and(char::is_numeric)
+                && [
+                    "view",
+                    "play",
+                    "listener",
+                    "subscriber",
+                    "перегляд",
+                    "просмотр",
+                ]
+                .iter()
+                .any(|unit| lower.contains(unit));
             !trimmed.is_empty()
+                && !statistic
+                && !(trimmed.contains(':') && parse_yt_length(trimmed).is_some())
                 && trimmed != "•"
                 && trimmed != "·"
                 && !TYPE_WORDS.contains(&trimmed.to_lowercase().as_str())
@@ -5256,6 +5537,44 @@ pub fn open_ytm_login() -> Result<(), String> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn indexed_audio_merges_custom_sources_and_ignores_duplicate_stale_or_non_audio_records() {
+        let root = temp_directory("android-media-index");
+        let first = root.join("Музика.wav");
+        let second = root.join("podcast.wav");
+        let other = root.join("cover.png");
+        write_wav(&first);
+        write_wav(&second);
+        fs::write(&other, b"not audio").unwrap();
+        let sources = vec![
+            LibrarySource {
+                id: "custom".into(),
+                kind: LibrarySourceKind::File,
+                path: first.to_string_lossy().into(),
+            },
+            LibrarySource {
+                id: "old-system".into(),
+                kind: LibrarySourceKind::System,
+                path: "desktop/Music".into(),
+            },
+        ];
+        let result = scan_indexed_audio(
+            sources,
+            vec![
+                first.to_string_lossy().into(),
+                second.to_string_lossy().into(),
+                second.to_string_lossy().into(),
+                other.to_string_lossy().into(),
+                root.join("deleted.wav").to_string_lossy().into(),
+            ],
+        );
+        assert_eq!(result.tracks.len(), 2);
+        assert!(result.tracks.iter().all(|t| t.duration_secs > 0.));
+        assert_eq!(result.source_statuses.len(), 1);
+        assert_eq!(result.source_statuses[0].state, SourceScanState::Ready);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn temp_directory(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -5825,6 +6144,75 @@ mod tests {
         assert_eq!(audio_ext_for_mime("audio/webm; codecs=opus"), "webm");
         assert_eq!(audio_ext_for_mime("audio/mpeg"), "mp3");
         assert_eq!(audio_ext_for_mime("audio/unknown"), "m4a");
+    }
+
+    #[test]
+    fn yt_rust_top_card_does_not_use_view_counts_as_album_metadata() {
+        let response = serde_json::json!({"contents":{"tabbedSearchResultsRenderer":{"tabs":[{"tabRenderer":{"content":{"sectionListRenderer":{"contents":[
+            {"musicCardShelfRenderer":{
+                "title":{"runs":[{"text":"A song"}]},
+                "subtitle":{"runs":[{"text":"Video"},{"text":" • "},{"text":"An Artist"},{"text":" • "},{"text":"709M views"},{"text":" • "},{"text":"4:17"}]},
+                "onTap":{"watchEndpoint":{"videoId":"abcdefghijk"}}
+            }}
+        ]}}}}]}}});
+        let songs = parse_ytm_songs(&response, 40);
+        assert_eq!(songs.len(), 1);
+        assert_eq!(songs[0].artist, "An Artist");
+        assert!(songs[0].album.is_empty());
+        assert_eq!(songs[0].duration_secs, 257);
+    }
+
+    #[test]
+    fn yt_rust_search_normalizes_linked_metadata_and_skips_unplayable_entities() {
+        let response =
+            serde_json::from_str(include_str!("../tests/fixtures/yt-rust-search.json")).unwrap();
+        let songs = parse_ytm_songs(&response, 40);
+        assert_eq!(songs.len(), 1);
+        let song = &songs[0];
+        assert_eq!(song.video_id, "abcdefghijk");
+        assert_eq!(song.title, "Shared Song");
+        assert_eq!(song.artist, "First Artist, Second Artist");
+        assert_eq!(song.album, "The Album");
+        assert_eq!(song.duration_secs, 226);
+        assert_eq!(song.thumbnail_url, "https://example.invalid/cover.jpg");
+        assert!(!song.has_video);
+        assert!(song.clip_video_id.is_empty());
+        assert!(parse_ytm_songs(&response, 0).is_empty());
+    }
+
+    #[test]
+    fn yt_rust_metadata_merge_preserves_host_video_and_artwork_hints() {
+        let mut row = test_search_row("abcdefghijk", "Song");
+        row["musicResponsiveListItemRenderer"]["flexColumns"][1]
+            ["musicResponsiveListItemFlexColumnRenderer"]["text"]["runs"] = serde_json::json!([
+            {"text":"First Artist", "navigationEndpoint":{"browseEndpoint":{"browseId":"UC_first"}}},
+            {"text":" & "},
+            {"text":"Second Artist", "navigationEndpoint":{"browseEndpoint":{"browseId":"UC_second"}}}
+        ]);
+        let response = serde_json::json!({"contents":{"tabbedSearchResultsRenderer":{"tabs":[{"tabRenderer":{"content":{"sectionListRenderer":{"contents":[
+            {"musicShelfRenderer":{"title":{"simpleText":"Songs"},"contents":[row]}}
+        ]}}}}]}}});
+        let host = parse_ytm_songs_host(&response, 40);
+        let merged = parse_ytm_songs(&response, 40);
+        assert_eq!(merged.len(), host.len());
+        assert_eq!(merged[0].artist, "First Artist, Second Artist");
+        assert_eq!(merged[0].thumbnail_url, host[0].thumbnail_url);
+        assert_eq!(merged[0].video_type, host[0].video_type);
+        assert_eq!(merged[0].has_video, host[0].has_video);
+    }
+
+    #[test]
+    fn yt_rust_suggestions_accept_display_text_when_query_endpoint_is_missing() {
+        let response = serde_json::json!({"contents":[{"searchSuggestionsSectionRenderer":{"contents":[
+            {"searchSuggestionRenderer":{"suggestion":{"runs":[{"text":"first "},{"text":"query"}]}}},
+            {"searchSuggestionRenderer":{"suggestion":{"runs":[{"text":"first query"}]}}},
+            {"searchSuggestionRenderer":{"suggestion":{"runs":[{"text":" "}]}}}
+        ]}}]});
+        let suggestions = parse_ytm_suggestions(&response, 10);
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].text, "first query");
+        assert_eq!(suggestions[0].runs[0].text, "first query");
+        assert!(parse_ytm_suggestions(&response, 0).is_empty());
     }
 
     #[test]

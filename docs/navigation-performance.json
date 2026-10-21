@@ -1,9 +1,9 @@
 {
   "environment": "headless Edge, Rust WASM app",
   "performance": {
-    "samples": 120,
-    "medianMs": 22.19999999999709,
-    "p95Ms": 50.099999999998545,
-    "maxMs": 111.09999999999854
+    "samples": 148,
+    "medianMs": 16.60000000000582,
+    "p95Ms": 50,
+    "maxMs": 133.40000000000146
   }
 }

@@ -1,0 +1,18 @@
+```xml
+<tt xmlns="http://www.w3.org/ns/ttml"
+xmlns:ttm="http://www.w3.org/ns/ttml#metadata"
+xmlns:ttp="http://www.w3.org/ns/ttml#parameter"
+xmlns:itunes="http://music.apple.com/lyric-ttml-internal"
+xmlns:composer="https://composer.betterlyrics.org/ttml"
+ttp:timeBase="media" itunes:timing="Line" composer:timing="Line">
+<head><metadata>
+<ttm:title>Fixture title</ttm:title>
+<composer:meta key="artists" value="First &amp; Second"/>
+<composer:meta key="album" value="Fixture album"/>
+<ttm:agent xml:id="v1" type="person"><ttm:name>Lead</ttm:name></ttm:agent>
+</metadata></head>
+<body dur="2:39.521"><div>
+<p begin="0:05.684" end="0:08.072" ttm:agent="v1">First line</p>
+<p begin="1:03.824" end="1:10.798" ttm:agent="v1">Next line</p>
+</div></body></tt>
+```

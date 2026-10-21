@@ -21,10 +21,16 @@ static SRT_CUE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 static SUBTITLE_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"</?[A-Za-z][^>]*>").unwrap());
+static TTML_START: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<(?:[A-Za-z_][\w.-]*:)?tt(?:\s|/?>)").unwrap());
+static TTML_TIMING: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\b(?:begin|end|dur)\s*=").unwrap());
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LyricPart {
     #[serde(default)]
     pub explicit: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub start_time_explicit: bool,
     pub start_ms: u64,
     pub duration_ms: u64,
     pub text: String,
@@ -78,6 +84,154 @@ pub struct LyricsAlternative {
     pub sync_type: LyricsSyncType,
     pub format: String,
     pub lyrics: ParsedLyrics,
+}
+
+pub fn line_has_word_level_timing(line: &LyricLine) -> bool {
+    let parts = line
+        .parts
+        .iter()
+        .filter(|part| !part.is_background && !part.text.trim().is_empty())
+        .collect::<Vec<_>>();
+    if parts.len() < 2
+        || !parts.iter().all(|part| part.start_time_explicit)
+        || !parts.iter().any(|part| part.start_ms != parts[0].start_ms)
+    {
+        return false;
+    }
+
+    let has_cjk = line.text.chars().any(|ch| {
+        matches!(
+            ch as u32,
+            0x2E80..=0x2FFF
+                | 0x3000..=0x30FF
+                | 0x3100..=0x312F
+                | 0x3130..=0x318F
+                | 0x31A0..=0x31BF
+                | 0x31F0..=0x31FF
+                | 0x3400..=0x4DBF
+                | 0x4E00..=0x9FFF
+                | 0xAC00..=0xD7AF
+                | 0xF900..=0xFAFF
+                | 0xFF00..=0xFFEF
+                | 0x20000..=0x323AF
+        )
+    });
+    if has_cjk {
+        // QRC may time Chinese characters or syllables without spaces.
+        // Validate the concatenated cue text, ignoring only whitespace.
+        let compact = |text: &str| {
+            text.chars()
+                .filter(|ch| !ch.is_whitespace())
+                .collect::<String>()
+        };
+        let reconstructed = parts
+            .iter()
+            .map(|part| part.text.as_str())
+            .collect::<String>();
+        compact(&reconstructed) == compact(&line.text)
+    } else {
+        let line_word_count = line.text.split_whitespace().count();
+        line_word_count > 1
+            && parts
+                .iter()
+                .all(|part| part.text.split_whitespace().count() == 1)
+            && parts.len() == line_word_count
+            && parts
+                .iter()
+                .map(|part| part.text.trim())
+                .collect::<Vec<_>>()
+                .join(" ")
+                == line.text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+}
+
+pub fn has_word_level_timing(lyrics: &ParsedLyrics) -> bool {
+    lyrics.lines.iter().any(line_has_word_level_timing)
+}
+
+/// Explicit cues inside a word, as used by Braccato/Unison TTML and QRC.
+/// Keep the source's whitespace: adjacent spans can be syllables, whereas a
+/// whitespace-only node between spans can be an intentional word boundary.
+pub fn line_has_syllable_level_timing(line: &LyricLine) -> bool {
+    let lead = line
+        .parts
+        .iter()
+        .filter(|part| !part.is_background)
+        .collect::<Vec<_>>();
+    let cues = lead
+        .iter()
+        .copied()
+        .filter(|part| !part.text.trim().is_empty())
+        .collect::<Vec<_>>();
+    if cues.len() < 2
+        || cues.len() <= line.text.split_whitespace().count()
+        || cues
+            .iter()
+            .any(|part| !part.start_time_explicit || part.text.split_whitespace().count() != 1)
+        || cues
+            .windows(2)
+            .any(|pair| pair[1].start_ms < pair[0].start_ms)
+        || !cues.iter().any(|part| part.start_ms != cues[0].start_ms)
+    {
+        return false;
+    }
+    let normalize = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let reconstructed = lead
+        .iter()
+        .map(|part| part.text.as_str())
+        .collect::<String>();
+    normalize(&reconstructed) == normalize(&line.text)
+}
+
+pub fn line_has_part_level_timing(line: &LyricLine) -> bool {
+    line_has_word_level_timing(line) || line_has_syllable_level_timing(line)
+}
+
+fn background_timing_line(line: &LyricLine) -> LyricLine {
+    let parts = line
+        .parts
+        .iter()
+        .filter(|part| part.is_background)
+        .cloned()
+        .map(|mut part| {
+            part.is_background = false;
+            part
+        })
+        .collect::<Vec<_>>();
+    LyricLine {
+        text: parts.iter().map(|part| part.text.as_str()).collect(),
+        parts,
+        ..Default::default()
+    }
+}
+
+pub fn line_has_background_part_timing(line: &LyricLine) -> bool {
+    line_has_part_level_timing(&background_timing_line(line))
+}
+
+pub fn has_syllable_level_timing(lyrics: &ParsedLyrics) -> bool {
+    lyrics.lines.iter().any(|line| {
+        line_has_syllable_level_timing(line)
+            || line_has_syllable_level_timing(&background_timing_line(line))
+    })
+}
+
+pub fn has_part_level_timing(lyrics: &ParsedLyrics) -> bool {
+    lyrics
+        .lines
+        .iter()
+        .any(|line| line_has_part_level_timing(line) || line_has_background_part_timing(line))
+}
+
+pub fn has_any_timing(lyrics: &ParsedLyrics) -> bool {
+    lyrics.lines.iter().any(|line| {
+        line.start_ms > 0
+            || line.duration_ms > 0
+            || line
+                .parts
+                .iter()
+                .any(|part| part.start_ms > 0 || part.duration_ms > 0)
+    })
 }
 
 fn parse_lrc_time(value: &str) -> Option<u64> {
@@ -176,6 +330,7 @@ fn parse_word_parts(
     let mut plain = String::new();
     let mut cursor = 0;
     let mut active_start = line_start_ms;
+    let mut active_start_explicit = false;
     let mut segment_start = 0;
 
     while let Some((start_ms, after_tag)) = parse_time_tag(raw, '<', '>', cursor) {
@@ -188,6 +343,7 @@ fn parse_word_parts(
             plain.push_str(&text);
             parts.push(LyricPart {
                 start_ms: active_start,
+                start_time_explicit: active_start_explicit,
                 duration_ms: start_ms.saturating_sub(active_start),
                 text,
                 is_background,
@@ -195,6 +351,7 @@ fn parse_word_parts(
             });
         }
         active_start = start_ms;
+        active_start_explicit = true;
         cursor = after_tag;
         segment_start = after_tag;
     }
@@ -204,6 +361,7 @@ fn parse_word_parts(
         plain.push_str(remainder);
         parts.push(LyricPart {
             start_ms: active_start,
+            start_time_explicit: active_start_explicit,
             duration_ms: 0,
             text: remainder.to_string(),
             is_background,
@@ -399,14 +557,6 @@ pub fn parse_lrc(input: &str) -> ParsedLyrics {
             result.lines[index].duration_ms =
                 next.start_ms.saturating_sub(result.lines[index].start_ms);
         }
-        let result_line_end = result.lines[index]
-            .start_ms
-            .saturating_add(result.lines[index].duration_ms);
-        for part in &mut result.lines[index].parts {
-            if part.duration_ms == 0 {
-                part.duration_ms = result_line_end.saturating_sub(part.start_ms);
-            }
-        }
     }
     result
 }
@@ -465,6 +615,7 @@ pub fn parse_qrc(input: &str) -> ParsedLyrics {
                 parts.push(LyricPart {
                     // QQ and the original Braccato parser use absolute song times.
                     start_ms: captures[1].parse().unwrap_or(start_ms),
+                    start_time_explicit: true,
                     duration_ms: captures[2].parse().unwrap_or(0),
                     text: word.to_string(),
                     is_background: false,
@@ -476,17 +627,17 @@ pub fn parse_qrc(input: &str) -> ParsedLyrics {
         let remainder = &body[cursor..];
         if !remainder.is_empty() {
             text.push_str(remainder);
-            let start = parts
-                .last()
-                .map(|p| p.start_ms.saturating_add(p.duration_ms))
-                .unwrap_or(start_ms);
-            parts.push(LyricPart {
-                start_ms: start,
-                duration_ms: start_ms.saturating_add(duration_ms).saturating_sub(start),
-                text: remainder.to_string(),
-                is_background: false,
-                ..Default::default()
-            });
+            if let Some(last) = parts.last_mut() {
+                last.text.push_str(remainder);
+            } else {
+                parts.push(LyricPart {
+                    start_ms,
+                    duration_ms: 0,
+                    text: remainder.to_string(),
+                    is_background: false,
+                    ..Default::default()
+                });
+            }
         }
         if let Some(names) = crate::braccato::credits::credit_line(&text) {
             result.songwriters.extend(names);
@@ -613,6 +764,55 @@ pub fn parse_srt(input: &str) -> ParsedLyrics {
 pub fn parse_payload(raw: &str) -> Option<(ParsedLyrics, &'static str, LyricsSyncType)> {
     parse_payload_depth(raw, 0)
 }
+/// Recover a complete TTML document from chat prose, stray fence/language
+/// markers, or an HTML-escaped transport. Never decode entities inside XML
+/// which already has real tags, or search through a JSON/SSE envelope.
+pub(crate) fn recover_ttml(raw: &str) -> Option<String> {
+    if raw.starts_with(['{', '[', '"'])
+        || raw
+            .lines()
+            .any(|line| line.starts_with("data:") || line.starts_with("event:"))
+    {
+        return None;
+    }
+    let mut source = std::borrow::Cow::Borrowed(raw);
+    for _ in 0..3 {
+        if let Some(root) = TTML_START.find(&source) {
+            let name = source[root.start() + 1..]
+                .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
+                .next()?;
+            let closing = format!("</{name}");
+            let end = source.rfind(&closing)? + closing.len();
+            let tail = &source[end..];
+            let bracket = tail.find('>')?;
+            if !tail[..bracket].trim().is_empty() {
+                return None;
+            }
+            let document = &source[root.start()..end + bracket + 1];
+            return (document != raw).then(|| document.to_string());
+        }
+        let decoded = html_escape::decode_html_entities(&source);
+        if decoded == source {
+            break;
+        }
+        source = std::borrow::Cow::Owned(decoded.into_owned());
+    }
+    None
+}
+pub(crate) fn code_fence_body(raw: &str) -> Option<&str> {
+    let marker = raw.chars().next()?;
+    let (opening, rest) = raw.split_once('\n')?;
+    let width = opening.chars().take_while(|&c| c == marker).count();
+    if opening[width..].contains(marker) {
+        return None;
+    }
+    let (body, closing) = rest.rsplit_once('\n')?;
+    let closing = closing.trim();
+    if closing.len() < width || !closing.chars().all(|c| c == marker) {
+        return None;
+    }
+    Some(body)
+}
 fn parse_payload_depth(
     raw: &str,
     depth: usize,
@@ -620,9 +820,22 @@ fn parse_payload_depth(
     if depth > 8 {
         return None;
     }
-    let raw = raw.trim_start_matches('\u{feff}').trim();
+    let raw = raw.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
     if raw.is_empty() {
         return None;
+    }
+    // Chat/provider responses often fence the document, including JSON which
+    // can itself contain fenced lyrics. Unwrap before format detection and use
+    // the same depth limit as JSON envelopes. Unwrap clean fences first so
+    // escaped XML inside a JSON string is not mistaken for raw XML.
+    if raw.starts_with("```") || raw.starts_with("~~~") {
+        if let Some(body) = code_fence_body(raw) {
+            return parse_payload_depth(body, depth + 1);
+        }
+        return recover_ttml(raw).and_then(|document| parse_payload_depth(&document, depth + 1));
+    }
+    if let Some(document) = recover_ttml(raw) {
+        return parse_payload_depth(&document, depth + 1);
     }
     if raw.starts_with('"') {
         let inner = serde_json::from_str::<String>(raw).ok()?;
@@ -632,10 +845,17 @@ fn parse_payload_depth(
         let value: serde_json::Value = serde_json::from_str(raw).ok()?;
         for field in [
             "ttml",
+            "xml",
             "wordByWord",
+            "syncedLyrics",
+            "lrc",
+            "qrc",
+            "srt",
+            "vtt",
             "lyrics",
             "synced",
             "plain",
+            "plainLyrics",
             "data",
             "result",
             "raw",
@@ -689,13 +909,28 @@ fn parse_payload_depth(
         .strip_prefix('[')
         .is_some_and(|s| s.trim_start().starts_with('{'))
     {
-        let lyrics: Vec<crate::braccato::types::Lyric> = serde_json::from_str(raw).ok()?;
+        let source: serde_json::Value = serde_json::from_str(raw).ok()?;
+        let lyrics: Vec<crate::braccato::types::Lyric> =
+            serde_json::from_value(source.clone()).ok()?;
+        let source_lines = source.as_array()?;
+        let has_start = |value: &serde_json::Value| {
+            value.get("startTimeMs").is_some() || value.get("start_time_ms").is_some()
+        };
+        let has_explicit_timing = source_lines.iter().any(|line| {
+            has_start(line)
+                || line
+                    .get("parts")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|parts| parts.iter().any(has_start))
+        });
         let mut parsed = ParsedLyrics::default();
-        for line in lyrics {
+        for (line_index, line) in lyrics.into_iter().enumerate() {
             if line.words.is_empty() && !line.is_instrumental {
                 continue;
             }
+            let source_line = &source_lines[line_index];
             let convert = |p: crate::braccato::types::LyricPart| LyricPart {
+                start_time_explicit: false,
                 start_ms: p.start_time_ms.max(0) as u64,
                 duration_ms: p.duration_ms.max(0) as u64,
                 text: p.words,
@@ -723,7 +958,17 @@ fn parse_payload_depth(
                     .parts
                     .unwrap_or_default()
                     .into_iter()
-                    .map(convert)
+                    .enumerate()
+                    .map(|(part_index, part)| {
+                        let start_time_explicit = source_line
+                            .get("parts")
+                            .and_then(serde_json::Value::as_array)
+                            .and_then(|parts| parts.get(part_index))
+                            .is_some_and(has_start);
+                        let mut converted = convert(part);
+                        converted.start_time_explicit = start_time_explicit;
+                        converted
+                    })
                     .collect(),
                 key: line.key.unwrap_or_default(),
                 agent: line.agent.unwrap_or_default(),
@@ -734,7 +979,16 @@ fn parse_payload_depth(
                     .timed_romanization
                     .unwrap_or_default()
                     .into_iter()
-                    .map(convert)
+                    .enumerate()
+                    .map(|(index, part)| {
+                        let mut converted = convert(part);
+                        converted.start_time_explicit = source_line
+                            .get("timedRomanization")
+                            .and_then(serde_json::Value::as_array)
+                            .and_then(|parts| parts.get(index))
+                            .is_some_and(has_start);
+                        converted
+                    })
                     .collect(),
             });
         }
@@ -742,17 +996,9 @@ fn parse_payload_depth(
         if parsed.lines.is_empty() {
             return None;
         }
-        let sync = if parsed.lines.iter().any(|line| {
-            line.parts
-                .iter()
-                .any(|part| part.duration_ms > 0 || part.start_ms != line.start_ms)
-        }) {
+        let sync = if has_part_level_timing(&parsed) {
             LyricsSyncType::RichSync
-        } else if parsed
-            .lines
-            .iter()
-            .any(|l| l.start_ms > 0 || l.duration_ms > 0)
-        {
+        } else if has_any_timing(&parsed) || has_explicit_timing {
             LyricsSyncType::Synced
         } else {
             LyricsSyncType::Plain
@@ -788,33 +1034,19 @@ fn parse_payload_depth(
     if lyrics.lines.is_empty() {
         return None;
     }
-    let words = lyrics.lines.iter().any(|l| {
-        let mut count = 0;
-        let mut distinct = false;
-        for part in l.parts.iter().filter(|p| !p.is_background) {
-            count += 1;
-            distinct |= part.start_ms != l.start_ms || part.duration_ms < l.duration_ms;
-        }
-        count > 1 && distinct
-    }) || match format {
-        "lrc" => LRC_WORD.is_match(raw),
-        "qrc" => lyrics
-            .lines
-            .iter()
-            .any(|l| l.parts.iter().any(|p| p.duration_ms > 0)),
-        "ttml" => {
-            lyrics.lines.iter().any(|l| {
-                l.parts
-                    .iter()
-                    .any(|p| p.start_ms != l.start_ms || p.duration_ms != l.duration_ms)
-            }) || raw.contains("<span begin=")
-                || raw.contains("<span end=")
-        }
-        _ => false,
-    };
-    let sync = if format == "txt" {
+    let words = has_part_level_timing(&lyrics);
+    let syllables = has_syllable_level_timing(&lyrics);
+    let has_line_timing = has_any_timing(&lyrics)
+        || match format {
+            "lrc" => LRC_LINE.is_match(raw),
+            "qrc" => QRC_LINE.is_match(raw),
+            "ttml" => TTML_TIMING.is_match(raw),
+            "srt" | "vtt" => SRT_CUE.is_match(raw),
+            _ => false,
+        };
+    let sync = if format == "txt" || !has_line_timing {
         LyricsSyncType::Plain
-    } else if words && matches!(format, "ttml" | "qrc") {
+    } else if syllables || words && matches!(format, "ttml" | "qrc" | "json") {
         LyricsSyncType::RichSync
     } else if words {
         LyricsSyncType::Word
@@ -854,8 +1086,8 @@ pub fn parse_plain(input: &str) -> ParsedLyrics {
     }
 }
 
-/// Fill open-ended cues using the track length, preserving explicit singing ends.
-pub fn complete_timing(lyrics: &mut ParsedLyrics, duration_ms: u64) {
+/// Fill open-ended line cues without creating part-level timing.
+pub fn complete_line_timing(lyrics: &mut ParsedLyrics, duration_ms: u64) {
     for index in 0..lyrics.lines.len() {
         let next = lyrics
             .lines
@@ -866,38 +1098,12 @@ pub fn complete_timing(lyrics: &mut ParsedLyrics, duration_ms: u64) {
         if line.duration_ms == 0 {
             line.duration_ms = next.saturating_sub(line.start_ms);
         }
-        let end = line.start_ms.saturating_add(line.duration_ms);
-        // JSON lyric providers often send word start times without durations. Braccato
-        // uses zero-duration parts as cues that end at the next word, so filling every
-        // one through the line end makes all earlier words remain active at once.
-        // Keep lead and backing-vocal timelines independent because they can overlap.
-        let mut foreground_starts = line
-            .parts
-            .iter()
-            .filter(|part| !part.is_background)
-            .map(|part| part.start_ms)
-            .collect::<Vec<_>>();
-        let mut background_starts = line
-            .parts
-            .iter()
-            .filter(|part| part.is_background)
-            .map(|part| part.start_ms)
-            .collect::<Vec<_>>();
-        foreground_starts.sort_unstable();
-        background_starts.sort_unstable();
-        for part in &mut line.parts {
-            if part.duration_ms == 0 {
-                let starts = if part.is_background {
-                    &background_starts
-                } else {
-                    &foreground_starts
-                };
-                let next = starts.partition_point(|start| *start <= part.start_ms);
-                let next_part = starts.get(next).copied().unwrap_or(end);
-                part.duration_ms = next_part.min(end).saturating_sub(part.start_ms);
-            }
-        }
     }
+}
+
+/// Kept as the shared timing completion entry point; only line ends are inferred.
+pub fn complete_timing(lyrics: &mut ParsedLyrics, duration_ms: u64) {
+    complete_line_timing(lyrics, duration_ms);
 }
 
 /// Export the current model without dropping word timing, translations or backing vocals.
@@ -1004,7 +1210,20 @@ pub fn parse_provider_sse(input: &str) -> Vec<LyricsAlternative> {
             continue;
         };
         let start = alternatives.len();
-        for field in ["wordByWord", "lyrics", "synced", "plain"] {
+        for field in [
+            "ttml",
+            "xml",
+            "wordByWord",
+            "syncedLyrics",
+            "lrc",
+            "qrc",
+            "srt",
+            "vtt",
+            "lyrics",
+            "synced",
+            "plain",
+            "plainLyrics",
+        ] {
             let Some(value) = results.get(field) else {
                 continue;
             };

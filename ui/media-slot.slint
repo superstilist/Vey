@@ -1,0 +1,19 @@
+import { Artwork } from "controls.slint";
+
+// One artwork-area contract for embedded video and decoded native frames.
+export component MediaSlot inherits Rectangle {
+    in property <bool> active;
+    in property <image> cover;
+    in property <image> frame;
+    callback geometry(float, float, float, float);
+    private property <float> left: self.absolute-position.x / 1px;
+    private property <float> top: self.absolute-position.y / 1px;
+    border-radius: 24px;
+    clip: false;
+    Rectangle {
+        width: 100%; height: 100%; border-radius: root.border-radius; clip: true;
+        Artwork { art: root.cover; width: 100%; height: 100%; border-radius: root.border-radius; }
+        if root.frame.width > 0: Image { source: root.frame; width: 100%; height: 100%; image-fit: contain; }
+    }
+    Timer { interval: 32ms; running: root.active; triggered => { root.geometry(root.left, root.top, root.width / 1px, root.height / 1px); } }
+}

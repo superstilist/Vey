@@ -19,6 +19,10 @@ import './widget.css';
 import { renderAmbient, paintNativeBackdrop, disposeAmbient } from './ambient';
 import { PlaybackClock } from './clock';
 import { CameraPresentation } from '../../web/player-motion.js';
+import catalog from '../../locales/catalog.tsv';
+const locales = ['uk','en','cs','pl','de','es','fr','ja'];
+const messages = new Map(catalog.trimEnd().split('\n').map((line:string) => {const fields=line.replace(/\r$/, '').split('\t');return [fields[0],fields];}));
+const tr = (text:string) => messages.get(text)?.[Math.max(0,locales.indexOf(state.language || 'uk'))] || text;
 
 export const upstream = { core, element, constants, text, themeSettings, util, parsers, format, highlight, providers };
 export const revision = '1e6b6954b1c18136274681a9bf4985efb2332b01';
@@ -112,7 +116,14 @@ export function update(next: any) {
   renderAmbient(next.ambient, send);
   const wasVisible = state.visible;
   const wasEditing = state.mode === 'editor';
+  const oldLanguage = state.language;
   state = { ...state, ...next };
+  if (state.language !== oldLanguage) {
+    document.documentElement.lang = state.language || 'uk';
+    resume.textContent = tr('Повернутися до слів');
+    editorInput.setAttribute('aria-label',tr('Текст пісні'));
+    document.querySelector('#pretty')!.textContent = tr('Форматувати TTML');
+  }
   const cameraMoving = cameraPresentation.update(!state.grouped && state.visible && state.mode !== 'editor' ? state.camera : null, !!state.reduced);
   const presentation = JSON.stringify([!!state.grouped,state.presentationOpacity ?? 1,state.grouped ? 0 : cameraMoving ? 'camera' : state.presentationX ?? 0,state.grouped ? 0 : cameraMoving ? 'camera' : state.presentationY ?? 0,!!state.reduced]);
   if (presentation !== presentationKey) {
@@ -152,12 +163,13 @@ export function update(next: any) {
   if (view.layout !== layout) view.layout = layout;
   const requestedSize = Number.isFinite(state.size) ? state.size : 48;
   const size = state.mobile ? Math.min(Math.max(requestedSize, 22), 26) : Math.max(requestedSize, 48);
-  const config = JSON.stringify([size, state.reduced, state.passiveSeconds, state.scrollRatio, state.lookahead, state.scrollDuration, state.disableRichsync, state.richsyncOffset, state.lineOffset]);
+  const disableRichsync = !!state.disableRichsync;
+  const config = JSON.stringify([size, state.reduced, state.passiveSeconds, state.scrollRatio, state.lookahead, state.scrollDuration, disableRichsync, state.richsyncOffset, state.lineOffset]);
   if (config !== themeKey) {
     themeKey = config;
     themeCompiles++;
     const motion = state.reduced ? `:root,.blyrics-container{--blyrics-animate-line-scale:0;--blyrics-animate-word-wobble:0;--blyrics-animate-instrumental:0;--blyrics-animate-decoration-entry:0;--blyrics-scale:1;--blyrics-active-scale:1;}` : '';
-    const settings = `/* blyrics-target-scroll-pos-ratio=${state.scrollRatio ?? 0.37}; blyrics-early-scroll-consider-s=${(state.lookahead ?? 540) / 1000}; blyrics-line-scroll-duration=${state.scrollDuration ?? 750}ms; blyrics-passive-scroll-seconds-per-line=${state.passiveSeconds || 3.5}; ${state.disableRichsync ? 'blyrics-disable-richsync=true;' : ''} */`;
+    const settings = `/* blyrics-target-scroll-pos-ratio=${state.scrollRatio ?? 0.37}; blyrics-early-scroll-consider-s=${(state.lookahead ?? 540) / 1000}; blyrics-line-scroll-duration=${state.scrollDuration ?? 750}ms; blyrics-passive-scroll-seconds-per-line=${state.passiveSeconds || 3.5}; blyrics-line-synced-animation-delay=0ms; blyrics-swipe-lead-ratio=0; blyrics-swipe-duration-ratio=1; ${disableRichsync ? 'blyrics-disable-richsync=true;' : ''} */`;
     // The upstream default adds 150 ms to rich-sync cues. PlayerVF's native
     // renderer uses the configured value directly (0 ms by default), so pass
     // the same offset into Braccato to keep word highlights aligned with audio.

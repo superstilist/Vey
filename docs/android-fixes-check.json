@@ -1,0 +1,44 @@
+{
+  "date": "2026-10-20",
+  "version": "0.1.5",
+  "rust": {
+    "failed": 0,
+    "ignored": 7,
+    "indexedAudioRegression": "passed",
+    "passed": 154
+  },
+  "nativeLayout": {
+    "syntheticInsets": true,
+    "host": "Windows Slint",
+    "screenshots": "docs/screenshots/android-insets-*.png",
+    "passed": 8
+  },
+  "wasmBuild": "passed",
+  "browserPhone": {
+    "passed": true,
+    "checks": [
+      "labeled bottom tabs",
+      "audio rate and volume controls",
+      "browser back/forward",
+      "settings back button",
+      "local file import",
+      "reduced motion persistence",
+      "320/360/390/430px layouts",
+      "mobile player overlay preserves page and scroll",
+      "overlay Back dismissal",
+      "rapid navigation",
+      "cached Explore and explicit refresh",
+      "no browser errors"
+    ],
+    "browseCalls": 2
+  },
+  "android": {
+    "manifest": "passed",
+    "runtime": "not tested - no connected device/emulator",
+    "signature": "passed",
+    "sha256": "ce6b27d1ac3544b7978e155d82ae834806a22f2e33fe727faa62487ac5a26ff6",
+    "apk": "dist/Vey-0.1.5-android-arm64.apk",
+    "alignment16KiB": "passed",
+    "releaseBuild": "passed"
+  }
+}

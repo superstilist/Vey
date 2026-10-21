@@ -44,7 +44,14 @@ pub fn validate(reference: &str, lyrics: &[Lyric], threshold: f64) -> bool {
 }
 pub fn normalize_alternatives(alternatives: &mut Vec<LyricsAlternative>) {
     alternatives.retain(|a| !a.lyrics.lines.is_empty());
-    alternatives.sort_by_key(|a| rank(a.sync_type));
+    // The rendering mode "richsync" covers both words and syllables. Prefer
+    // actual syllable cues within that mode, without trusting provider labels.
+    alternatives.sort_by_key(|a| {
+        (
+            !crate::lyrics::has_syllable_level_timing(&a.lyrics),
+            rank(a.sync_type),
+        )
+    });
     let mut seen = std::collections::HashSet::new();
     alternatives.retain(|a| seen.insert((a.provider.clone(), a.format.clone(), a.sync_type as u8)));
 }

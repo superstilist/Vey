@@ -15,19 +15,26 @@ struct App {
     visible: Vec<Track>,
     page_results: std::collections::HashMap<String, Vec<Track>>,
     library: Vec<Track>,
+    local_paths: std::collections::HashSet<String>,
     queue: Queue,
     current: Option<Track>,
     playlist: String,
     alternatives: Vec<LyricsAlternative>,
+    enrichment_attempts: RefCell<std::collections::HashSet<String>>,
     audio: Arc<core::CoreState>,
     rt: Arc<Runtime>,
     tx: mpsc::Sender<Event>,
     loading: bool,
+    scanning: bool,
+    #[cfg(target_os = "android")]
+    permission_wait_started: Option<Instant>,
     search_generation: u64,
     lyric_generation: u64,
     loaded_path: String,
     ended: bool,
     load_generation: Arc<std::sync::atomic::AtomicU64>,
+    load_task: Option<tokio::task::JoinHandle<()>>,
+    download_pending: std::collections::HashSet<String>,
     load_gate: Arc<std::sync::Mutex<()>>,
     last_playing: Option<(Track, String)>,
     pending_tag_path: Option<String>,
@@ -42,9 +49,16 @@ struct App {
 enum Event {
     Match(String, Result<local_sync::TagSnapshot, String>),
     Scan(Vec<Track>, String),
+    #[cfg(target_os = "android")]
+    ScanFailed(String),
     Search(u64, Result<Vec<Track>, String>),
-    Loaded(String, Result<String, String>),
+    Loaded(u64, String, Result<String, String>),
+    Downloaded(Track, Result<Option<String>, String>),
     Lyrics(String, u64, Result<Vec<LyricsAlternative>, String>),
+    Enriched(
+        String,
+        Result<crate::lyrics_translation::Enrichment, String>,
+    ),
     Art(String, Result<image::RgbaImage, String>),
     Message(String),
     Jwt(Result<ls::JwtCache, String>),
@@ -59,7 +73,10 @@ fn fmt_time(secs: f64) -> String {
 }
 fn apply_settings(w: &MainWindow, a: &App) {
     let s = &a.store.settings;
+    crate::preferences::apply(w, s);
     w.set_volume(s.volume);
+    w.set_color_mode(s.color_mode.as_str().into());
+    w.set_color_hue(s.color_hue as f32);
     w.set_rate(s.rate);
     w.set_shuffle(s.shuffle);
     w.set_repeat_mode(s.repeat.clone().into());
@@ -96,6 +113,72 @@ fn row(a: &App, t: &Track) -> TrackRow {
         path: t.path.clone().into(),
         art: art_image(a, t),
         liked: a.store.likes.contains(&t.path),
+        downloaded: is_downloaded(a, &t.path),
+        downloading: a.download_pending.contains(&t.path),
+    }
+}
+fn is_downloaded(a: &App, path: &str) -> bool {
+    a.local_paths.contains(&normalize_path(path))
+        || a.store.downloads.contains_key(path)
+        || a.store
+            .downloads
+            .values()
+            .any(|p| normalize_path(p) == normalize_path(path))
+}
+fn local_file(a: &App, track: &Track) -> Option<String> {
+    if track.video_id.is_none() {
+        Some(track.path.clone())
+    } else {
+        a.store.downloads.get(&track.path).cloned()
+    }
+}
+fn refresh_media_rows(w: &MainWindow, a: &App) {
+    let mut local_paths: std::collections::HashSet<_> = a
+        .store
+        .downloads
+        .values()
+        .map(|p| normalize_path(p))
+        .collect();
+    local_paths.extend(a.local_paths.iter().cloned());
+    for model in [
+        w.get_tracks(),
+        w.get_home_page_tracks(),
+        w.get_explore_page_tracks(),
+        w.get_library_page_tracks(),
+        w.get_liked_page_tracks(),
+        w.get_playlist_page_tracks(),
+        w.get_queue_page_tracks(),
+        w.get_search_page_tracks(),
+        w.get_settings_page_tracks(),
+        w.get_queue_tracks(),
+    ] {
+        if let Some(rows) = model.as_any().downcast_ref::<VecModel<TrackRow>>() {
+            for i in 0..rows.row_count() {
+                if let Some(mut row) = rows.row_data(i) {
+                    let downloaded = a.store.downloads.contains_key(row.path.as_str())
+                        || local_paths.contains(&normalize_path(row.path.as_str()));
+                    let downloading = a.download_pending.contains(row.path.as_str());
+                    let mut changed =
+                        row.downloaded != downloaded || row.downloading != downloading;
+                    row.downloaded = downloaded;
+                    row.downloading = downloading;
+                    if let Some(art) = a.art.get(row.path.as_str()) {
+                        if row.art != *art {
+                            row.art = art.clone();
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        rows.set_row_data(i, row);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(track) = &a.current {
+        w.set_current_downloaded(is_downloaded(a, &track.path));
+        w.set_current_downloading(a.download_pending.contains(&track.path));
+        w.set_current_local(local_file(a, track).is_some());
     }
 }
 fn refresh(w: &MainWindow, a: &mut App) {
@@ -164,20 +247,36 @@ fn refresh(w: &MainWindow, a: &mut App) {
     let mut playlists = vec![
         PlaylistRow {
             id: "liked".into(),
-            name: "Музика, яка сподобалась".into(),
-            detail: format!("{} композицій · локально", a.store.likes.len()).into(),
+            name: crate::i18n::translate(&a.store.settings.language, "Музика, яка сподобалась")
+                .into(),
+            detail: crate::i18n::translate(
+                &a.store.settings.language,
+                &format!("{} композицій · локально", a.store.likes.len()),
+            )
+            .into(),
         },
         PlaylistRow {
             id: "history".into(),
-            name: "Послухати пізніше".into(),
-            detail: "Локальні списки відтворення".into(),
+            name: crate::i18n::translate(&a.store.settings.language, "Послухати пізніше").into(),
+            detail: crate::i18n::translate(
+                &a.store.settings.language,
+                "Локальні списки відтворення",
+            )
+            .into(),
         },
     ];
-    playlists.extend(a.store.playlists.iter().map(|p| PlaylistRow {
-        id: p.id.clone().into(),
-        name: p.name.clone().into(),
-        detail: format!("{} композицій", p.tracks.len()).into(),
+    playlists.extend(a.store.playlists.iter().map(|p| {
+        PlaylistRow {
+            id: p.id.clone().into(),
+            name: p.name.clone().into(),
+            detail: crate::i18n::translate(
+                &a.store.settings.language,
+                &format!("{} композицій", p.tracks.len()),
+            )
+            .into(),
+        }
     }));
+    w.set_playlist_destinations(model(playlists.iter().skip(2).cloned().collect()));
     w.set_playlists(model(playlists));
     w.set_sources(model(
         a.store
@@ -188,12 +287,34 @@ fn refresh(w: &MainWindow, a: &mut App) {
     ));
     if let Some(t) = &a.current {
         w.set_current_liked(a.store.likes.contains(&t.path));
+        w.set_current_downloaded(is_downloaded(a, &t.path));
+        w.set_current_downloading(a.download_pending.contains(&t.path));
+        w.set_current_local(local_file(a, t).is_some());
         w.set_current_art(art_image(a, t));
         w.set_current_album(t.album.clone().into());
     }
 }
 fn scan(a: &Shared, w: &MainWindow) {
-    let a = a.borrow();
+    let mut a = a.borrow_mut();
+    if a.scanning {
+        return;
+    }
+    #[cfg(target_os = "android")]
+    match crate::android::ensure_audio_permission() {
+        Ok(true) => {
+            a.permission_wait_started = None;
+            crate::android::finish_permission_request();
+        }
+        Ok(false) => {
+            a.permission_wait_started.get_or_insert_with(Instant::now);
+            w.set_status("Дозвольте доступ до музики й аудіо. Якщо доступ вимкнено — увімкніть його в налаштуваннях Android і повторіть сканування.".into());
+            return;
+        }
+        Err(error) => {
+            w.set_status(error.into());
+            return;
+        }
+    }
     let sources = a
         .store
         .sources
@@ -209,15 +330,30 @@ fn scan(a: &Shared, w: &MainWindow) {
         })
         .collect();
     let tx = a.tx.clone();
+    a.scanning = true;
     w.set_status("Сканування бібліотеки…".into());
     a.rt.spawn_blocking(move || {
+        #[cfg(not(target_os = "android"))]
         let result = core::scan_library(sources);
+        #[cfg(target_os = "android")]
+        let result = match core::scan_android_library(sources) {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = tx.send(Event::ScanFailed(error));
+                return;
+            }
+        };
         let status = result
             .source_statuses
             .iter()
             .filter_map(|s| s.detail.as_deref())
             .collect::<Vec<_>>()
             .join(" · ");
+        let status = if status.is_empty() {
+            format!("Знайдено композицій: {}", result.tracks.len())
+        } else {
+            status
+        };
         let tracks = result
             .tracks
             .into_iter()
@@ -252,6 +388,7 @@ fn browse(a: &Shared, w: &MainWindow, query: Option<String>, radio: bool) {
                     .map(|s| Track {
                         path: format!("yt://{}", s.video_id),
                         video_id: Some(s.video_id),
+                        clip_video_id: (!s.clip_video_id.is_empty()).then_some(s.clip_video_id),
                         title: s.title,
                         artist: s.artist,
                         album: s.album,
@@ -273,6 +410,7 @@ fn browse(a: &Shared, w: &MainWindow, query: Option<String>, radio: bool) {
                     .map(|s| Track {
                         path: format!("yt://{}", s.video_id),
                         video_id: Some(s.video_id),
+                        clip_video_id: (!s.clip_video_id.is_empty()).then_some(s.clip_video_id),
                         title: s.title,
                         artist: s.artist,
                         album: s.album,
@@ -290,6 +428,7 @@ fn load_art(a: &mut App, track: &Track) {
         return;
     }
     let track = track.clone();
+    let local = local_file(a, &track);
     let tx = a.tx.clone();
     let gate = a.art_gate.clone();
     a.rt.spawn(async move {
@@ -309,30 +448,19 @@ fn load_art(a: &mut App, track: &Track) {
             {
                 return Ok(img);
             }
-            let bytes = if !track.thumbnail_url.is_empty() {
-                let client = reqwest::Client::builder()
-                    .timeout(Duration::from_secs(15))
-                    .build()
-                    .map_err(|e| e.to_string())?;
-                let mut response = client
-                    .get(&track.thumbnail_url)
-                    .send()
-                    .await
-                    .and_then(|r| r.error_for_status())
-                    .map_err(|e| e.to_string())?;
-                let mut bytes = Vec::new();
-                while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-                    if bytes.len() + chunk.len() > crate::artwork::MAX_BYTES {
-                        return Err("Artwork exceeds size limit".into());
-                    }
-                    bytes.extend_from_slice(&chunk);
-                }
-                bytes
-            } else {
-                tokio::task::spawn_blocking(move || crate::artwork::local(&track.path))
+            let embedded = if let Some(local) = local {
+                tokio::task::spawn_blocking(move || crate::artwork::local(&local))
                     .await
                     .map_err(|e| e.to_string())?
-                    .ok_or("No artwork")?
+            } else {
+                None
+            };
+            let bytes = if let Some(bytes) = embedded {
+                bytes
+            } else if !track.thumbnail_url.is_empty() {
+                crate::media_library::fetch_cover(&track.thumbnail_url).await?
+            } else {
+                return Err("No artwork".into());
             };
             tokio::task::spawn_blocking(move || {
                 let img = crate::artwork::decode(&bytes)?;
@@ -354,12 +482,30 @@ fn load_art(a: &mut App, track: &Track) {
 }
 fn start(a: &Shared, w: &MainWindow, track: Track) {
     let mut a = a.borrow_mut();
+    if a.store
+        .downloads
+        .get(&track.path)
+        .is_some_and(|p| !std::path::Path::new(p).is_file())
+    {
+        a.store.downloads.remove(&track.path);
+    }
+    if a.loading
+        && a.current
+            .as_ref()
+            .is_some_and(|current| current.path == track.path)
+    {
+        return;
+    }
     a.loading = true;
     a.ended = false;
     a.loaded_path.clear();
     a.lyric_generation += 1;
     a.alternatives.clear();
     a.current = Some(track.clone());
+    refresh_media_rows(w, &a);
+    w.set_current_track_key(track.path.clone().into());
+    w.set_current_video_id(track.video_id.clone().unwrap_or_default().into());
+    w.set_current_clip_video_id(track.clip_video_id.clone().unwrap_or_default().into());
     w.set_current_title(track.title.clone().into());
     w.set_current_artist(track.artist.clone().into());
     w.set_current_album(track.album.clone().into());
@@ -370,6 +516,7 @@ fn start(a: &Shared, w: &MainWindow, track: Track) {
     w.set_duration(track.duration_secs as f32);
     w.set_lyric_lines(model(vec![]));
     w.set_lyrics_document("".into());
+    w.set_lyrics_enrichment_status("".into());
     w.set_active_lyric_index(-1);
     w.set_lyrics_status("Завантаження слів…".into());
     w.set_status("Завантаження композиції…".into());
@@ -382,9 +529,20 @@ fn start(a: &Shared, w: &MainWindow, track: Track) {
         + 1;
     let generation = a.load_generation.clone();
     let gate = a.load_gate.clone();
+    let saved_path = a
+        .store
+        .downloads
+        .get(&track.path)
+        .cloned()
+        .filter(|p| std::path::Path::new(p).is_file());
+    if let Some(previous) = a.load_task.take() {
+        previous.abort();
+    }
     load_art(&mut a, &track);
-    a.rt.spawn(async move {
-        let path = if let Some(id) = &track.video_id {
+    a.load_task = Some(a.rt.spawn(async move {
+        let path = if let Some(path) = saved_path {
+            Ok(path)
+        } else if let Some(id) = &track.video_id {
             match core::ytm_cache_stream(id.clone()).await {
                 Ok(Some(c)) => Ok(c.path),
                 Ok(None) => Err("Потік недоступний".into()),
@@ -407,8 +565,8 @@ fn start(a: &Shared, w: &MainWindow, track: Track) {
             .unwrap_or_else(|e| Err(e.to_string())),
             Err(e) => Err(e),
         };
-        let _ = tx.send(Event::Loaded(track.path, result));
-    });
+        let _ = tx.send(Event::Loaded(serial, track.path, result));
+    }));
 }
 fn lyrics_request(a: &Shared, w: &MainWindow, force: bool) {
     let mut a = a.borrow_mut();
@@ -424,12 +582,12 @@ fn lyrics_request(a: &Shared, w: &MainWindow, force: bool) {
             .or_else(|| ls::migrated_cache(&a.store, &track))
         {
             a.alternatives = alts;
-            show_lyrics(w, &a, 0);
+            show_preferred_lyrics(w, &a);
             return;
         }
     }
     let tx = a.tx.clone();
-    let provider = a.store.settings.lyrics_provider.clone();
+    let provider = a.store.lyrics_request_provider(&track);
     let jwt = ls::JwtCache::load().token();
     w.set_lyrics_status("Шукаємо слова пісні…".into());
     a.rt.spawn(async move {
@@ -437,10 +595,60 @@ fn lyrics_request(a: &Shared, w: &MainWindow, force: bool) {
         let _ = tx.send(Event::Lyrics(track.path, generation, result));
     });
 }
+fn show_preferred_lyrics(w: &MainWindow, a: &App) {
+    let index = a
+        .current
+        .as_ref()
+        .map(|t| a.store.preferred_lyrics_index(t, &a.alternatives))
+        .unwrap_or(0);
+    show_lyrics(w, a, index);
+}
 fn show_lyrics(w: &MainWindow, a: &App, index: usize) {
     let Some(alt) = a.alternatives.get(index) else {
         return;
     };
+    let mut enriched = alt.clone();
+    w.set_lyrics_enrichment_status("".into());
+    if !a.snapshot {
+        if let Some(request) = crate::lyrics_translation::Request::for_song(
+            alt,
+            &a.store.settings,
+            a.current.as_ref().and_then(|t| t.video_id.clone()),
+        ) {
+            request.apply(
+                &crate::lyrics_translation::Enrichment {
+                    lines: vec![Default::default(); request.lines.len()],
+                },
+                &mut enriched,
+            );
+            let key = request.key();
+            if let Some(value) = a.store.lyrics_enrichment.get(&key) {
+                request.apply(value, &mut enriched);
+            } else if request.needs_network(alt)
+                && a.enrichment_attempts.borrow_mut().insert(key.clone())
+            {
+                w.set_lyrics_enrichment_status(
+                    if request.translation {
+                        "Перекладаємо слова…"
+                    } else {
+                        "Романізуємо слова…"
+                    }
+                    .into(),
+                );
+                let tx = a.tx.clone();
+                a.rt.spawn(async move {
+                    let result = crate::lyrics_translation::fetch(&request).await;
+                    let _ = tx.send(Event::Enriched(key, result));
+                });
+            }
+        }
+    }
+    let display = crate::braccato::visible_layers(
+        &enriched,
+        a.store.settings.lyrics_romanization,
+        a.store.settings.lyrics_translation,
+    );
+    let alt = &display;
     w.set_providers(model(
         a.alternatives
             .iter()
@@ -449,6 +657,10 @@ fn show_lyrics(w: &MainWindow, a: &App, index: usize) {
     ));
     w.set_lyrics_credits(alt.lyrics.songwriters.join(" · ").into());
     w.set_lyrics_timed(crate::braccato::effective_sync_type(alt) != LyricsSyncType::Plain);
+    w.set_lyrics_word_timed(matches!(
+        crate::braccato::effective_sync_type(alt),
+        LyricsSyncType::Word | LyricsSyncType::RichSync
+    ));
     w.set_provider_index(index as i32);
     w.set_lyrics_status(format!("{} · натисніть рядок, щоб перейти", alt.provider).into());
     let duration_ms = (a
@@ -476,10 +688,16 @@ fn report(w: &MainWindow, result: Result<(), String>) {
 
 pub fn run() -> Result<(), slint::PlatformError> {
     let w = MainWindow::new()?;
+    #[cfg(target_os = "android")]
+    w.set_android_platform(true);
+    crate::i18n::install(&w);
     crate::material::install(&w);
     crate::renderer::install(&w);
     let (tx, rx) = mpsc::channel();
     let rt = Arc::new(Runtime::new().expect("Rust async runtime"));
+    let _video_surface = crate::video::install(&w, rt.clone());
+    #[cfg(not(target_os = "windows"))]
+    let _ambient_surface = crate::ambient_native::install(&w);
     let widget_smoke = std::env::args().any(|a| a == "--widget-smoke");
     let widget_preview = std::env::args().any(|a| a == "--widget-preview");
     let snapshot = widget_smoke || widget_preview || std::env::args().any(|a| a == "--screenshots");
@@ -488,7 +706,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
     } else {
         None
     };
-    let (store, load_error) = if snapshot {
+    let (mut store, load_error) = if snapshot {
         (Store::default(), None)
     } else {
         match storage::load() {
@@ -496,6 +714,10 @@ pub fn run() -> Result<(), slint::PlatformError> {
             Err(e) => (Store::default(), Some(e)),
         }
     };
+    store
+        .downloads
+        .retain(|_, path| std::path::Path::new(path).is_file());
+    w.set_native_file_tools(!cfg!(target_os = "android"));
     let audio = Arc::new(core::start_audio());
     let error_tx = tx.clone();
     let saver = storage::SaveWorker::new(move |error| {
@@ -506,19 +728,26 @@ pub fn run() -> Result<(), slint::PlatformError> {
         visible: vec![],
         page_results: std::collections::HashMap::new(),
         library: vec![],
+        local_paths: Default::default(),
         queue: Queue::default(),
         current: None,
         playlist: String::new(),
         alternatives: vec![],
+        enrichment_attempts: RefCell::default(),
         audio,
         rt,
         tx,
         loading: false,
+        scanning: false,
+        #[cfg(target_os = "android")]
+        permission_wait_started: None,
         search_generation: 0,
         lyric_generation: 0,
         loaded_path: String::new(),
         ended: false,
         load_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        load_task: None,
+        download_pending: Default::default(),
         load_gate: Arc::new(std::sync::Mutex::new(())),
         last_playing: None,
         pending_tag_path: None,
@@ -648,10 +877,37 @@ pub fn run() -> Result<(), slint::PlatformError> {
         report(&ui, a.audio.volume(a.store.settings.volume));
         persist(&ui, &a);
     });
-    bind!(on_rate_changed, |ui, state, value| {
+    bind!(on_preferences_changed, |ui, state| {
         let mut a = state.borrow_mut();
-        a.store.settings.rate = value.clamp(0.5, 2.);
-        report(&ui, a.audio.rate(a.store.settings.rate));
+        let old_language = a.store.settings.language.clone();
+        let layers = (
+            a.store.settings.lyrics_romanization,
+            a.store.settings.lyrics_translation,
+            a.store.settings.lyrics_translation_language.clone(),
+            a.store.settings.language.clone(),
+        );
+        crate::preferences::capture(&ui, &mut a.store.settings);
+        if layers
+            != (
+                a.store.settings.lyrics_romanization,
+                a.store.settings.lyrics_translation,
+                a.store.settings.lyrics_translation_language.clone(),
+                a.store.settings.language.clone(),
+            )
+        {
+            show_lyrics(&ui, &a, ui.get_provider_index().max(0) as usize);
+        }
+        if old_language != a.store.settings.language {
+            refresh(&ui, &mut a);
+        }
+        persist(&ui, &a);
+    });
+    bind!(on_appearance_changed, |ui, state, mode, hue| {
+        let mut a = state.borrow_mut();
+        a.store.settings.color_mode = ColorMode::from_name(&mode);
+        a.store.settings.color_hue = (hue.round() as u16) % 360;
+        ui.set_color_mode(a.store.settings.color_mode.as_str().into());
+        ui.set_color_hue(a.store.settings.color_hue as f32);
         persist(&ui, &a);
     });
     bind!(on_toggle_shuffle, |ui, state| {
@@ -682,7 +938,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
         .into();
         ui.set_art_mode(a.store.settings.art_mode.clone().into());
-        ui.set_status("Режим кліпу: відтворення відео ще не перенесено".into());
+
         persist(&ui, &a);
     });
     bind!(on_toggle_like, |ui, state, index| {
@@ -697,13 +953,13 @@ pub fn run() -> Result<(), slint::PlatformError> {
     bind!(on_scan, |ui, state| {
         scan(state, &ui);
     });
+    #[cfg(target_os = "android")]
+    bind!(on_add_source, |ui, state, _kind| {
+        // Shared audio is discovered by MediaStore, not a desktop path picker.
+        scan(state, &ui);
+    });
+    #[cfg(not(target_os = "android"))]
     bind!(on_add_source, |ui, state, kind| {
-        #[cfg(target_os = "android")]
-        {
-            ui.set_source_kind(kind.clone());
-            ui.set_dialog("source".into());
-            return;
-        }
         let paths = if kind == "folder" {
             crate::dialogs::FileDialog::new()
                 .pick_folder()
@@ -754,7 +1010,13 @@ pub fn run() -> Result<(), slint::PlatformError> {
     });
     bind!(on_create_playlist, |ui, state, name| {
         let mut a = state.borrow_mut();
-        if a.store.create_playlist(&name).is_some() {
+        if let Some(id) = a.store.create_playlist(&name) {
+            if ui.get_adding_to_new_playlist() {
+                if let Some(track) = a.current.clone() {
+                    a.store.remember(track.clone());
+                    a.store.playlist_add(&id, &track.path);
+                }
+            }
             persist(&ui, &a);
             refresh(&ui, &mut a);
         }
@@ -808,10 +1070,30 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
     });
     bind!(on_refresh_lyrics, |ui, state| {
+        {
+            let mut a = state.borrow_mut();
+            a.enrichment_attempts.borrow_mut().clear();
+            if let Some(alt) = a.alternatives.get(ui.get_provider_index().max(0) as usize) {
+                if let Some(request) = crate::lyrics_translation::Request::for_song(
+                    alt,
+                    &a.store.settings,
+                    a.current.as_ref().and_then(|t| t.video_id.clone()),
+                ) {
+                    a.store.lyrics_enrichment.remove(&request.key());
+                }
+            }
+            show_lyrics(&ui, &a, ui.get_provider_index().max(0) as usize);
+        }
         lyrics_request(state, &ui, true);
     });
     bind!(on_choose_provider, |ui, state, index| {
-        show_lyrics(&ui, &state.borrow(), index.max(0) as usize);
+        let mut a = state.borrow_mut();
+        let index = index.max(0) as usize;
+        if let (Some(track), Some(alt)) = (a.current.clone(), a.alternatives.get(index).cloned()) {
+            a.store.remember_lyrics_choice(&track, &alt);
+            persist(&ui, &a);
+            show_lyrics(&ui, &a, index);
+        }
     });
     bind!(on_adjust_offset, |ui, state, delta| {
         let mut a = state.borrow_mut();
@@ -851,6 +1133,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                         (t.duration_secs.max(0.) * 1000.) as u64,
                     );
                 }
+                a.lyric_generation += 1;
                 a.alternatives = vec![LyricsAlternative {
                     provider: "Власні слова".into(),
                     sync_type,
@@ -858,6 +1141,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     lyrics: parsed,
                 }];
                 let alts = a.alternatives.clone();
+                a.store.remember_lyrics_choice(&t, &alts[0]);
                 a.store.cache_lyrics(t.path.clone(), alts);
                 persist(&ui, &a);
                 report(&ui, ls::save_cache(&t, &a.alternatives));
@@ -878,23 +1162,128 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
     });
     bind!(on_download, |ui, state, index| {
-        let a = state.borrow();
+        let mut a = state.borrow_mut();
         if let Some(t) = selected(&a, index) {
-            if let Some(id) = t.video_id {
+            if a.store
+                .downloads
+                .get(&t.path)
+                .is_some_and(|p| !std::path::Path::new(p).is_file())
+            {
+                a.store.downloads.remove(&t.path);
+                refresh_media_rows(&ui, &a);
+            }
+            if let Some(path) = local_file(&a, &t).filter(|p| std::path::Path::new(p).is_file()) {
+                ui.set_status(format!("Файл доступний локально: {path}").into());
+                return;
+            }
+            if let Some(id) = t.video_id.clone() {
+                if !a.download_pending.insert(t.path.clone()) {
+                    return;
+                }
                 let tx = a.tx.clone();
-                ui.set_status("Завантаження файлу…".into());
+                refresh_media_rows(&ui, &a);
+                ui.set_status("Завантаження файлу й обкладинки…".into());
                 a.rt.spawn(async move {
-                    let result =
-                        core::ytm_download_track(id, t.title, t.artist, Some(t.album)).await;
-                    let msg = match result {
-                        Ok(Some(p)) => format!("Збережено: {p}"),
-                        Ok(None) => "Завантаження недоступне".into(),
-                        Err(e) => e,
-                    };
-                    let _ = tx.send(Event::Message(msg));
+                    let result = core::ytm_download_track_with_cover(
+                        id,
+                        t.title.clone(),
+                        t.artist.clone(),
+                        Some(t.album.clone()),
+                        Some(t.thumbnail_url.clone()),
+                    )
+                    .await;
+                    let _ = tx.send(Event::Downloaded(t, result));
                 });
             }
         }
+    });
+    bind!(on_choose_cover, |_ui, state| {
+        let a = state.borrow();
+        let Some(track) = a.current.clone() else {
+            return;
+        };
+        let Some(path) = local_file(&a, &track) else {
+            return;
+        };
+        let tx = a.tx.clone();
+        a.rt.spawn_blocking(move || {
+            let result = (|| -> Result<Option<image::RgbaImage>, String> {
+                let Some(selected) = crate::dialogs::FileDialog::new()
+                    .add_filter("Обкладинки", &["jpg", "jpeg", "png", "webp"])
+                    .pick_file()
+                else {
+                    return Ok(None);
+                };
+                if std::fs::metadata(&selected)
+                    .map_err(|e| e.to_string())?
+                    .len()
+                    > crate::artwork::MAX_BYTES as u64
+                {
+                    return Err("Обкладинка завелика".into());
+                }
+                let bytes = std::fs::read(selected).map_err(|e| e.to_string())?;
+                crate::media_library::replace_cover(std::path::Path::new(&path), &bytes)?;
+                let img = crate::artwork::decode(&bytes)?;
+                for key in [&path, &track.path] {
+                    crate::artwork::store_image(key, &img);
+                }
+                Ok(Some(img))
+            })();
+            match result {
+                Ok(Some(img)) => {
+                    let _ = tx.send(Event::Art(path, Ok(img.clone())));
+                    let _ = tx.send(Event::Art(track.path, Ok(img)));
+                    let _ = tx.send(Event::Message("Обкладинку збережено у файл".into()));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    let _ = tx.send(Event::Message(e));
+                }
+            }
+        });
+    });
+    bind!(on_save_cover, |_ui, state| {
+        let a = state.borrow();
+        let Some(track) = a.current.clone() else {
+            return;
+        };
+        let local = local_file(&a, &track);
+        let tx = a.tx.clone();
+        a.rt.spawn(async move {
+            let destination = tokio::task::spawn_blocking(|| {
+                crate::dialogs::FileDialog::new()
+                    .add_filter("JPEG", &["jpg"])
+                    .set_file_name("cover.jpg")
+                    .save_file()
+            })
+            .await;
+            let Ok(Some(destination)) = destination else {
+                return;
+            };
+            let result = async {
+                let bytes = if let Some(path) = local {
+                    tokio::task::spawn_blocking(move || crate::artwork::local(&path))
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .ok_or("У файлі немає обкладинки")?
+                } else if !track.thumbnail_url.is_empty() {
+                    crate::media_library::fetch_cover(&track.thumbnail_url).await?
+                } else {
+                    return Err("Обкладинка недоступна".into());
+                };
+                tokio::task::spawn_blocking(move || {
+                    let bytes = crate::media_library::jpeg(&bytes)?;
+                    std::fs::write(destination, bytes).map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|e| e.to_string())?
+            }
+            .await;
+            let _ = tx.send(Event::Message(match result {
+                Ok(()) => "Обкладинку збережено".into(),
+                Err(e) => e,
+            }));
+        });
     });
     bind!(on_radio, |ui, state| {
         ui.set_active_view("explore".into());
@@ -1068,6 +1457,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
     let shared = a.clone();
     let timer = slint::Timer::default();
     let mut last_status = Instant::now();
+    #[cfg(target_os = "android")]
+    let mut last_permission_check = Instant::now();
     timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(16),
@@ -1075,6 +1466,22 @@ pub fn run() -> Result<(), slint::PlatformError> {
             let Some(w) = weak.upgrade() else {
                 return;
             };
+            #[cfg(target_os = "android")]
+            if last_permission_check.elapsed() >= Duration::from_millis(500) {
+                last_permission_check = Instant::now();
+                let waiting = shared.borrow().permission_wait_started;
+                if let Some(started) = waiting {
+                    if crate::android::has_audio_permission().unwrap_or(false) {
+                        scan(&shared, &w);
+                    } else if (started.elapsed() >= Duration::from_secs(2)
+                        && crate::android::has_window_focus())
+                        || started.elapsed() >= Duration::from_secs(120)
+                    {
+                        shared.borrow_mut().permission_wait_started = None;
+                        crate::android::finish_permission_request();
+                    }
+                }
+            }
             let batch_start = Instant::now();
             for event in rx.try_iter().take(8) {
                 let mut a = shared.borrow_mut();
@@ -1091,6 +1498,15 @@ pub fn run() -> Result<(), slint::PlatformError> {
                         Err(e) => w.set_status(e.into()),
                     },
                     Event::Scan(tracks, status) => {
+                        a.scanning = false;
+                        a.store
+                            .downloads
+                            .retain(|_, path| std::path::Path::new(path).is_file());
+                        a.local_paths = tracks
+                            .iter()
+                            .filter(|t| t.video_id.is_none())
+                            .map(|t| normalize_path(&t.path))
+                            .collect();
                         a.library = tracks;
                         let tracks = a.library.clone();
                         for t in tracks {
@@ -1099,6 +1515,12 @@ pub fn run() -> Result<(), slint::PlatformError> {
                         w.set_status(status.into());
                         persist(&w, &a);
                         refresh(&w, &mut a);
+                        refresh_media_rows(&w, &a);
+                    }
+                    #[cfg(target_os = "android")]
+                    Event::ScanFailed(error) => {
+                        a.scanning = false;
+                        w.set_status(error.into());
                     }
                     Event::Search(id, result) => {
                         if id == a.search_generation {
@@ -1124,8 +1546,47 @@ pub fn run() -> Result<(), slint::PlatformError> {
                             }
                         }
                     }
-                    Event::Loaded(path, result) => {
-                        if a.current.as_ref().is_some_and(|t| t.path == path) {
+                    Event::Downloaded(track, result) => {
+                        a.download_pending.remove(&track.path);
+                        match result {
+                            Ok(Some(path)) => {
+                                a.store.downloads.insert(track.path.clone(), path.clone());
+                                a.store.remember(track.clone());
+                                let mut local = track.clone();
+                                local.path = path.clone();
+                                local.video_id = None;
+                                a.local_paths.insert(normalize_path(&path));
+                                a.store.remember(local.clone());
+                                if !a
+                                    .library
+                                    .iter()
+                                    .any(|t| normalize_path(&t.path) == normalize_path(&path))
+                                {
+                                    a.library.push(local.clone());
+                                }
+                                let source_id =
+                                    format!("download-{}", track.video_id.as_deref().unwrap_or(""));
+                                a.store.sources.retain(|s| s.id != source_id);
+                                a.store.sources.push(Source {
+                                    id: source_id,
+                                    kind: "file".into(),
+                                    path: normalize_path(&path),
+                                });
+                                load_art(&mut a, &local);
+                                persist(&w, &a);
+                                refresh(&w, &mut a);
+                                w.set_status(format!("Збережено з обкладинкою: {path}").into());
+                            }
+                            Ok(None) => w.set_status("Завантаження недоступне".into()),
+                            Err(error) => w.set_status(error.into()),
+                        }
+                        refresh_media_rows(&w, &a);
+                    }
+                    Event::Loaded(serial, path, result) => {
+                        if a.load_generation.load(std::sync::atomic::Ordering::SeqCst) == serial
+                            && a.current.as_ref().is_some_and(|t| t.path == path)
+                        {
+                            a.load_task.take();
                             a.loading = false;
                             match result {
                                 Ok(p) => {
@@ -1166,9 +1627,42 @@ pub fn run() -> Result<(), slint::PlatformError> {
                                     a.store.cache_lyrics(path, alts.clone());
                                     a.alternatives = alts;
                                     persist(&w, &a);
-                                    show_lyrics(&w, &a, 0);
+                                    show_preferred_lyrics(&w, &a);
                                 }
                                 Err(e) => w.set_lyrics_status(e.into()),
+                            }
+                        }
+                    }
+                    Event::Enriched(key, result) => {
+                        let index = w.get_provider_index().max(0) as usize;
+                        let current_key = a.alternatives.get(index).and_then(|alt| {
+                            crate::lyrics_translation::Request::for_song(
+                                alt,
+                                &a.store.settings,
+                                a.current.as_ref().and_then(|t| t.video_id.clone()),
+                            )
+                            .map(|r| r.key())
+                        });
+                        match result {
+                            Ok(value) => {
+                                while a.store.lyrics_enrichment.len() >= 128 {
+                                    if let Some(key) =
+                                        a.store.lyrics_enrichment.keys().next().cloned()
+                                    {
+                                        a.store.lyrics_enrichment.remove(&key);
+                                    }
+                                }
+                                a.store.lyrics_enrichment.insert(key.clone(), value);
+                                a.enrichment_attempts.borrow_mut().remove(&key);
+                                persist(&w, &a);
+                                if current_key.as_ref() == Some(&key) {
+                                    show_lyrics(&w, &a, index);
+                                }
+                            }
+                            Err(error) => {
+                                if current_key.as_ref() == Some(&key) {
+                                    w.set_lyrics_enrichment_status(error.into());
+                                }
                             }
                         }
                     }
@@ -1186,17 +1680,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                             Err(_) => slint::Image::default(),
                         };
                         a.art.insert(path.clone(), art.clone());
-                        let rows = w.get_tracks();
-                        if let Some(rows) = rows.as_any().downcast_ref::<VecModel<TrackRow>>() {
-                            for (index, track) in a.visible.iter().enumerate() {
-                                if track.path == path {
-                                    if let Some(mut row) = rows.row_data(index) {
-                                        row.art = art.clone();
-                                        rows.set_row_data(index, row);
-                                    }
-                                }
-                            }
-                        }
+                        refresh_media_rows(&w, &a);
                         if a.current.as_ref().is_some_and(|t| t.path == path) {
                             w.set_current_art(art);
                         }

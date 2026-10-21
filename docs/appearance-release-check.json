@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-20",
+  "version": "0.1.9",
+  "rust": {
+    "failed": 0,
+    "passed": 157,
+    "ignored": 7
+  },
+  "wasmBuild": "passed",
+  "browserFixtures": [
+    "appearance",
+    "material",
+    "phone",
+    "transitions"
+  ],
+  "nativeSyntheticInsetLayouts": 12,
+  "windowsZipCrc": "passed",
+  "androidSignatureAnd16KiBAlignment": "passed",
+  "androidDeviceRuntime": "not tested - no connected device",
+  "artifacts": [
+    {
+      "file": "Vey-0.1.9-windows-x64.zip",
+      "bytes": 17195903,
+      "sha256": "3eebc1ebf2d8c40a95f323ffe63d3c36ee7fecd4d410fdee73fd4dcb2fc58b6a"
+    },
+    {
+      "file": "Vey-0.1.9-android-arm64.apk",
+      "bytes": 17682923,
+      "sha256": "2b90b83f74abf92a4922b44f2c5b2aa2f436025a956c9554304c115ec06fc758"
+    }
+  ]
+}

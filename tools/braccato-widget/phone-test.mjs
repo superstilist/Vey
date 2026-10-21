@@ -11,7 +11,7 @@ try {
   await page.addInitScript(()=>{
     const NativeAudio=window.Audio;
     window.Audio=class extends NativeAudio {constructor(...args){super(...args);window.phoneAudio=this;}};
-    localStorage.setItem('playervf.rust.v1',JSON.stringify({version:1,tracks:[],settings:{volume:1,rate:1}}));
+    localStorage.setItem('playervf.rust.v1',JSON.stringify({version:1,tracks:[],settings:{volume:1,rate:1.75}}));
   });
   await page.route('**/api/browse*',r=>{browseCalls++;return r.fulfill({contentType:'application/json',body:'[]'});});
   await page.route('**/api/search*',r=>r.fulfill({contentType:'application/json',body:'[]'}));
@@ -29,7 +29,7 @@ try {
   });
   const nav=async(view,section='')=>{
     await frame.waitForFunction(({view,section})=>window.nav?.view===view&&window.nav?.section===section,{view,section});
-    await page.waitForTimeout(360);
+    await page.waitForTimeout(560);
   };
   const tapTab=async(index)=>{
     const {width,height}=page.viewportSize();
@@ -40,12 +40,15 @@ try {
   await shot('45-phone-home');
   await tapTab(4);await nav('settings');await shot('46-phone-settings');
   await page.touchscreen.tap(180,184);await nav('settings','audio');
-  await page.touchscreen.tap(235,217);await page.waitForTimeout(100);
-  assert.ok(await page.evaluate(()=>window.phoneAudio.playbackRate)>1.2,'settings rate reaches the actual audio element');
-  await page.touchscreen.tap(180,277);await page.waitForTimeout(100);
-  assert.equal(await page.evaluate(()=>window.phoneAudio.playbackRate),1,'rate reset works');
-  await page.touchscreen.tap(130,372);await page.waitForTimeout(100);
+  assert.equal(await page.evaluate(()=>window.phoneAudio.playbackRate),1,'legacy speed is reset to normal playback');
+  await page.touchscreen.tap(130,218);await page.waitForTimeout(100);
   assert.ok(await page.evaluate(()=>window.phoneAudio.volume)<.7,'phone settings expose working volume');
+  await page.mouse.move(130,218);await page.mouse.down();await page.mouse.move(300,218,{steps:8});await page.mouse.up();
+  assert.ok(await page.evaluate(()=>window.phoneAudio.volume)>.8,'volume drag follows the visible rail');
+  await page.keyboard.press('Home');await page.waitForTimeout(100);
+  assert.equal(await page.evaluate(()=>window.phoneAudio.volume),0,'volume Home reaches mute');
+  await page.keyboard.press('End');await page.waitForTimeout(100);
+  assert.equal(await page.evaluate(()=>window.phoneAudio.volume),1,'volume End reaches full volume');
   await shot('47-phone-audio');
   await page.goBack();await nav('settings');
   await page.goForward();await nav('settings','audio');
@@ -95,14 +98,14 @@ try {
   await nav('settings');
   const cameras=await frame.evaluate(()=>window.cameras);
   assert.ok(cameras.some(c=>c.elapsed<c.duration),'navigation produces intermediate camera samples');
-  assert.ok(cameras.every(c=>c.duration>=180&&c.duration<=460),'page travel uses the faster bounded duration');
+  assert.ok(cameras.every(c=>c.duration>=240&&c.duration<=520),'page travel uses smooth bounded duration');
   await tapTab(1);await nav('explore');const first=browseCalls;
   await tapTab(0);await nav('home');await tapTab(1);await nav('explore');
   assert.equal(browseCalls,first,'returning to Explore uses its cached results');
   await page.touchscreen.tap(312,154);await page.waitForTimeout(500);
   assert.equal(browseCalls,first+1,'explicit refresh still requests new results');
   assert.deepEqual(errors,[]);
-  const report={passed:true,checks:['labeled bottom tabs','audio rate and volume controls','browser back/forward','settings back button','local file import','reduced motion persistence','320/360/390/430px layouts','mobile player overlay preserves page and scroll','overlay Back dismissal','rapid navigation','cached Explore and explicit refresh','no browser errors'],browseCalls};
+  const report={passed:true,checks:['labeled bottom tabs','normal playback after legacy speed preference','volume tap, drag and keyboard endpoints','browser back/forward','settings back button','local file import','reduced motion persistence','320/360/390/430px layouts','mobile player overlay preserves page and scroll','overlay Back dismissal','rapid navigation','cached Explore and explicit refresh','no browser errors'],browseCalls};
   await writeFile(new URL('../../docs/phone-check.json',import.meta.url),JSON.stringify(report,null,2)+'\n');
   console.log(JSON.stringify(report,null,2));
 } catch(error) {

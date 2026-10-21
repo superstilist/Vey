@@ -20,6 +20,7 @@ fn from_song(s: native::YtmSong) -> Track {
         album: s.album,
         duration_secs: s.duration_secs as f64,
         video_id: Some(s.video_id),
+        clip_video_id: (!s.clip_video_id.is_empty()).then_some(s.clip_video_id),
         thumbnail_url: s.thumbnail_url,
     }
 }
@@ -60,6 +61,7 @@ async fn browse(Query(q): Query<HashMap<String, String>>) -> Result<Json<Vec<Tra
                 album: s.album,
                 duration_secs: s.duration_secs as f64,
                 video_id: Some(s.video_id),
+                clip_video_id: (!s.clip_video_id.is_empty()).then_some(s.clip_video_id),
                 thumbnail_url: s.thumbnail_url,
             })
             .collect(),
@@ -93,6 +95,14 @@ async fn lyrics(
     .map(Json)
     .map_err(error)
 }
+async fn enrich(
+    Json(request): Json<crate::lyrics_translation::Request>,
+) -> Result<Json<crate::lyrics_translation::Enrichment>, ApiError> {
+    crate::lyrics_translation::fetch(&request)
+        .await
+        .map(Json)
+        .map_err(error)
+}
 async fn verify(Json(body): Json<HashMap<String, String>>) -> Result<StatusCode, ApiError> {
     let token = body
         .get("token")
@@ -101,6 +111,11 @@ async fn verify(Json(body): Json<HashMap<String, String>>) -> Result<StatusCode,
     let mut jwt = lyrics_service::JwtCache::load();
     jwt.exchange(token).await.map_err(error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+async fn video(
+    Json(track): Json<Track>,
+) -> Result<Json<Option<crate::video::VideoSource>>, ApiError> {
+    crate::video::resolve(&track).await.map(Json).map_err(error)
 }
 pub fn run() -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
@@ -112,7 +127,9 @@ pub fn run() -> Result<(), String> {
             .route("/api/search", get(search))
             .route("/api/browse", get(browse))
             .route("/api/audio/{id}", get(audio))
+            .route("/api/video", post(video))
             .route("/api/lyrics", post(lyrics))
+            .route("/api/lyrics/enrich", post(enrich))
             .route("/api/verify", post(verify))
             .fallback_service(tower_http::services::ServeDir::new("web"));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:4173")

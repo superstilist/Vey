@@ -1,0 +1,35 @@
+{
+  "date": "2026-10-20",
+  "version": "0.1.8",
+  "change": "Remove enclosing volume focus frame; retain left-to-right fill",
+  "nativeRenderedVolumes": [
+    0,
+    25,
+    50,
+    75,
+    100
+  ],
+  "sliderWidths": [
+    312,
+    84,
+    64
+  ],
+  "focusedControlWidth": 84,
+  "fillAndNoFramePixelChecks": "passed",
+  "visualReview": "50 percent, wide and compact sliders",
+  "windows": {
+    "sha256": "13032c12b2c1c522497b17ce1e8f6d89f0e4b029dfff12bfec155f8a76383ad8",
+    "path": "dist/Vey-0.1.8-windows-x64.zip",
+    "archiveCrc": "passed",
+    "releaseBuild": "passed"
+  },
+  "android": {
+    "deviceRuntime": "not tested",
+    "releaseBuild": "passed",
+    "sha256": "d1dd3dfd711d472a3e7f8565ff3011bffffd6bfa1b71dde707159456a8bfcf3d",
+    "alignment16KiB": "passed",
+    "signature": "passed",
+    "path": "dist/Vey-0.1.8-android-arm64.apk",
+    "manifest": "passed"
+  }
+}

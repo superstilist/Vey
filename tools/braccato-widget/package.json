@@ -6,6 +6,8 @@
     "build": "node build.mjs",
     "serve": "node serve.mjs",
     "test": "node test.mjs",
+    "test:sync": "node lyrics-sync-test.mjs",
+    "test:syllables": "node syllable-test.mjs",
     "test:app": "node app-test.mjs",
     "test:ambient": "node ambient-test.mjs",
     "test:transitions": "node track-transition-test.mjs",
@@ -13,7 +15,11 @@
     "test:clock": "node clock-test.mjs",
     "test:stability": "node stability-test.mjs",
     "test:material": "node material-test.mjs",
-    "test:phone": "node phone-test.mjs"
+    "test:phone": "node phone-test.mjs",
+    "test:playlists": "node playlist-test.mjs",
+    "test:appearance": "node appearance-test.mjs",
+    "test:video": "node video-test.mjs",
+    "test:refinement": "node refinement-test.mjs"
   },
   "dependencies": {
     "@kawarp/core": "1.3.1",

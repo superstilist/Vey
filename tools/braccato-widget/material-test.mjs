@@ -46,8 +46,8 @@ try {
   await frame.evaluate(()=>addEventListener('message',e=>{
     if(e.data?.state?.ambient?.source)window.materialSource=e.data.state.ambient.source;
   }));
-  const pixel=async()=>{
-    const png=await page.screenshot({clip:{x:1100,y:16,width:1,height:1}});
+  const pixel=async(x=1100,y=16)=>{
+    const png=await page.screenshot({clip:{x,y,width:1,height:1}});
     return page.evaluate(async data=>{
       const bitmap=await createImageBitmap(new Blob([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],{type:'image/png'}));
       const c=new OffscreenCanvas(1,1);const ctx=c.getContext('2d');ctx.drawImage(bitmap,0,0);bitmap.close();
@@ -59,14 +59,14 @@ try {
   await shot('41-material-home');
   await page.mouse.click(90,865);
   await frame.waitForFunction(()=>!!window.materialSource);
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(1200);
   const red=await pixel();const first=await frame.evaluate(()=>window.materialSource);
   assert.ok(red[0]>red[2],`red cover produces a warm tonal surface: ${red}`);
   await page.mouse.click(150,865);
   const loading=await pixel();
   assert.deepEqual(loading,red,'delayed artwork retains the previous palette');
   await frame.waitForFunction(source=>window.materialSource!==source,first);
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(1300);
   const blue=await pixel();
   assert.ok(blue[2]>blue[0],`blue cover produces a cool tonal surface: ${blue}`);
   await page.mouse.click(450,865);
@@ -89,6 +89,8 @@ try {
   await shot('43-material-mobile-home');
   await page.mouse.click(180,728);await page.waitForTimeout(700);
   await shot('44-material-mobile-player');
+  const phoneBackground=await pixel(20,600);
+  assert.ok(phoneBackground[2]>phoneBackground[0]+12,`mobile player retains the blue artwork background: ${phoneBackground}`);
   assert.deepEqual(errors,[]);
   const report={passed:true,checks:['warm/cool cover-derived surfaces','no loading palette flash','palette retained across navigation','volume slider input and keyboard','desktop/mobile screenshots','no browser errors'],red,loading,blue};
   await writeFile(new URL('../../docs/material-check.json',import.meta.url),JSON.stringify(report,null,2)+'\n');

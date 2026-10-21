@@ -1,0 +1,31 @@
+{
+  "date": "2026-10-20",
+  "version": "0.1.11",
+  "persistentRustTests": {
+    "passed": 161,
+    "ignored": 7,
+    "failed": 0
+  },
+  "suppliedAttachment": {
+    "passed": true,
+    "nestedJsonRoundtrip": true,
+    "lineCues": 46
+  },
+  "wasmBuild": "passed",
+  "windowsZipCrc": "passed",
+  "androidSignatureAnd16KiBAlignment": "passed",
+  "liveProviderRuntime": "not tested",
+  "androidDeviceRuntime": "not tested",
+  "artifacts": [
+    {
+      "file": "Vey-0.1.11-windows-x64.zip",
+      "bytes": 17225130,
+      "sha256": "486ce805e29d53be1190d99b74903026fab0ca03fc582dac0af05f294d87b366"
+    },
+    {
+      "file": "Vey-0.1.11-android-arm64.apk",
+      "bytes": 17695211,
+      "sha256": "d4c0d5a116bfecd1c6f31419f3e6a84cfe754594a85b5854cc13ef8abe473245"
+    }
+  ]
+}

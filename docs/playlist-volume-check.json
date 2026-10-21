@@ -1,0 +1,53 @@
+{
+  "date": "2026-10-20",
+  "version": "0.1.6",
+  "rust": {
+    "passed": 155,
+    "ignored": 7,
+    "failed": 0
+  },
+  "nativeLayout": {
+    "passed": 11,
+    "syntheticAndroidInsets": true
+  },
+  "wasmBuild": "passed",
+  "playlistPicker": {
+    "passed": true,
+    "checks": [
+      "actual playlist destinations",
+      "desktop selection persists the track",
+      "long list scroll reaches the final playlist",
+      "create from picker adds the current track",
+      "320px picker selection",
+      "no browser errors"
+    ]
+  },
+  "phone": {
+    "passed": true,
+    "checks": [
+      "labeled bottom tabs",
+      "normal playback after legacy speed preference",
+      "volume tap, drag and keyboard endpoints",
+      "browser back/forward",
+      "settings back button",
+      "local file import",
+      "reduced motion persistence",
+      "320/360/390/430px layouts",
+      "mobile player overlay preserves page and scroll",
+      "overlay Back dismissal",
+      "rapid navigation",
+      "cached Explore and explicit refresh",
+      "no browser errors"
+    ],
+    "browseCalls": 2
+  },
+  "desktopMaterialAndVolume": "passed",
+  "apk": {
+    "manifest": "passed",
+    "path": "dist/Vey-0.1.6-android-arm64.apk",
+    "sha256": "d2d1293529f2e0d00d0c24e6e73dc666b2ab41ac5e7d93eee822b2b19e3a1ac4",
+    "alignment16KiB": "passed",
+    "signature": "passed"
+  },
+  "androidDeviceRuntime": "not tested - no connected device"
+}

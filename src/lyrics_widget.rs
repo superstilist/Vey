@@ -26,6 +26,7 @@ struct Bridge {
     ambient_reduced: Option<bool>,
     ambient_sequence: u64,
     ambient_source: String,
+    ambient_options: String,
     model: ModelRc<LyricRow>,
     source: slint::SharedString,
     document: String,
@@ -42,7 +43,7 @@ fn same_artwork(a: &slint::Image, b: &slint::Image) -> bool {
     (empty(a) && empty(b)) || a == b
 }
 
-// Invert the shared cubic-bezier(.42,0,.58,1). The camera's actual
+// Invert the shared cubic-bezier(.45,0,.55,1). The camera's actual
 // on-screen displacement is authoritative, including interrupted movement.
 fn camera_time_fraction(displacement: f32) -> f32 {
     let fraction = displacement.clamp(0., 1.);
@@ -60,7 +61,7 @@ fn camera_time_fraction(displacement: f32) -> f32 {
         }
     }
     let t = (low + high) * 0.5;
-    3. * (1. - t) * (1. - t) * t * 0.42 + 3. * (1. - t) * t * t * 0.58 + t * t * t
+    3. * (1. - t) * (1. - t) * t * 0.45 + 3. * (1. - t) * t * t * 0.55 + t * t * t
 }
 
 fn camera_elapsed(w: &MainWindow) -> f32 {
@@ -141,6 +142,7 @@ impl Bridge {
                 && model.row_count() > 0
                 && !w.window().is_minimized());
         let mut state = serde_json::json!({
+            "language":w.global::<crate::I18n>().get_language().to_string(),
             "visible": visible, "position": if visible && !editing { w.get_position() } else { 0. },
             "mode":if editing {"editor"} else {"lyrics"},
             "playing": visible && !editing && w.get_player_state() == "playing", "rate": w.get_rate(),
@@ -187,6 +189,7 @@ impl Bridge {
         #[cfg(target_os = "windows")]
         {
             state["nativeBackdrop"] = serde_json::json!({
+                "opacity":w.get_ambient_opacity(),
                 "surface": format!("#{:02x}{:02x}{:02x}", w.global::<crate::Tokens>().get_neutral_50().red(), w.global::<crate::Tokens>().get_neutral_50().green(), w.global::<crate::Tokens>().get_neutral_50().blue()),
                 "content": {"x":w.get_backdrop_x(),"y":w.get_backdrop_y(),
                     "width":w.get_backdrop_width(),"height":w.get_backdrop_height()},
@@ -205,6 +208,9 @@ impl Bridge {
             .map(|at| now.duration_since(at).as_secs_f64())
             .unwrap_or(0.);
         let animate = w.get_player_state() == "playing" && !w.get_lyrics_reduced_motion();
+        let options = serde_json::json!({"warpIntensity":w.get_kawarp_warp(),"blurPasses":w.get_kawarp_blur().round(),"saturation":w.get_kawarp_saturation(),"dithering":w.get_kawarp_dithering(),"dimBright":w.get_kawarp_dim()});
+        let options_key = options.to_string();
+        let options_changed = options_key != self.ambient_options;
         let motion_changed = self.ambient_reduced != Some(w.get_lyrics_reduced_motion());
         if w.get_lyrics_reduced_motion() {
             self.ambient_transition_until = None;
@@ -216,19 +222,24 @@ impl Bridge {
         // Keep the warp clock continuous; restore normal cadence when settled.
         let ambient_interval = if w.get_page_moving() { 0.06 } else { 0.03 };
         if !w.window().is_minimized()
-            && (changed || motion_changed || ((animate || morphing) && elapsed >= ambient_interval))
+            && w.get_color_mode() != "static"
+            && (changed
+                || motion_changed
+                || options_changed
+                || ((animate || morphing) && elapsed >= ambient_interval))
             && self
                 .ambient_pending_at
                 .is_none_or(|at| now.duration_since(at).as_millis() >= 500)
         {
             self.ambient_pending_at = Some(now);
             self.ambient_reduced = Some(w.get_lyrics_reduced_motion());
+            self.ambient_options = options_key;
             self.ambient_time += if animate { elapsed.min(0.2) * 0.24 } else { 0. };
             self.ambient_at = Some(now);
             // Paused morphs share a frozen warp clock. A request sequence keeps
             // JSON deduplication from dropping their subsequent color frames.
             self.ambient_sequence = self.ambient_sequence.wrapping_add(1);
-            let mut ambient = serde_json::json!({"time": self.ambient_time, "animate": animate, "reduced":w.get_lyrics_reduced_motion(),"frame":self.ambient_sequence});
+            let mut ambient = serde_json::json!({"time": self.ambient_time, "animate": animate, "reduced":w.get_lyrics_reduced_motion(),"duration":w.global::<crate::Motion>().get_palette(),"frame":self.ambient_sequence,"options":options});
             if changed {
                 use base64::Engine;
                 let source = art
@@ -281,11 +292,31 @@ impl Bridge {
 fn handle(w: &MainWindow, message: Message) {
     match message {
         Message::Navigation { view, section }
-            if matches!(view.as_str(), "home"|"explore"|"library"|"liked"|"playlist"|"queue"|"search"|"settings"|"lyrics")
-                && matches!(section.as_str(), ""|"audio"|"library"|"lyrics"|"data") => {
-            if !w.get_dialog().is_empty() { w.set_dialog("".into()); }
-            if w.get_active_view().as_str() != view { w.invoke_navigate(view.clone().into()); }
-            if view == "settings" { w.invoke_open_settings(section.into()); }
+            if matches!(
+                view.as_str(),
+                "home"
+                    | "explore"
+                    | "library"
+                    | "liked"
+                    | "playlist"
+                    | "queue"
+                    | "search"
+                    | "settings"
+                    | "lyrics"
+            ) && matches!(
+                section.as_str(),
+                "" | "audio" | "library" | "lyrics" | "data" | "appearance" | "language"
+            ) =>
+        {
+            if !w.get_dialog().is_empty() {
+                w.set_dialog("".into());
+            }
+            if w.get_active_view().as_str() != view {
+                w.invoke_navigate(view.clone().into());
+            }
+            if view == "settings" {
+                w.invoke_open_settings(section.into());
+            }
         }
         Message::Ambient { pixels } if pixels.len() == 256 * 144 * 4 / 3 * 4 => {
             use base64::Engine;
@@ -440,11 +471,13 @@ pub fn install(w: &MainWindow) -> Option<slint::Timer> {
             w.set_lyrics_renderer_error("Braccato не відповідає. Повторюємо запуск…".into());
         }
         if host.is_none() && (!attempted || Instant::now() >= retry_at) && w.window().is_visible() {
+            // Do not turn Slint's temporary, pre-HWND handle into a failed
+            // WebView attempt and a five-second retry delay.
+            let Some(parent) = crate::windows_webview::parent(w.window()) else { return; };
             attempted = true;
             retry_at=Instant::now()+Duration::from_secs(5);
             let (tx,rx) = std::sync::mpsc::channel();
             let mut context = wry::WebContext::new(Some(crate::storage::data_dir().join("braccato-webview")));
-            let handle = w.window().window_handle();
             let result = wry::WebViewBuilder::new_with_web_context(&mut context)
                 // An HWND WebView cannot reliably alpha-compose over Slint's
                 // swap chain. Paint the matching backdrop inside the child.
@@ -469,9 +502,12 @@ pub fn install(w: &MainWindow) -> Option<slint::Timer> {
                     if request.uri().to_string().starts_with("http://playerlyrics.localhost/") && request.body().len() < 1_000_000 {
                         if let Ok(message) = serde_json::from_str::<Message>(request.body()) { let _ = tx.send(message); }
                     }
-                }).build_as_child(&handle);
+                }).build_as_child(&parent);
             match result {
-                Ok(view) => {host=Some(Host {view,_context:context,events:rx,ready:false,started:Instant::now(),visible:false,bounds:(0,0,0,0),bridge:Bridge::default(),clip_key:String::new(),diagnostic_at:Instant::now(),diagnostics:vec![]});}
+                Ok(view) => {
+                    eprintln!("[braccato] WebView2 initialized");
+                    host=Some(Host {view,_context:context,events:rx,ready:false,started:Instant::now(),visible:false,bounds:(0,0,0,0),bridge:Bridge::default(),clip_key:String::new(),diagnostic_at:Instant::now(),diagnostics:vec![]});
+                }
                 Err(e) => {
                     // Startup can race native handle creation. Keep retry feedback
                     // on the lyric surface instead of a persistent Home banner.
@@ -610,9 +646,9 @@ mod tests {
     fn camera_timing_matches_the_displayed_bezier_path() {
         assert!(camera_time_fraction(-0.5).abs() < 0.00001);
         assert!((camera_time_fraction(1.5) - 1.).abs() < 0.00001);
-        assert!((camera_time_fraction(0.15625) - 0.274375).abs() < 0.00001);
+        assert!((camera_time_fraction(0.15625) - 0.2828125).abs() < 0.00001);
         assert!((camera_time_fraction(0.5) - 0.5).abs() < 0.00001);
-        assert!((camera_time_fraction(0.84375) - 0.725625).abs() < 0.00001);
+        assert!((camera_time_fraction(0.84375) - 0.7171875).abs() < 0.00001);
     }
     #[test]
     fn missing_covers_are_a_stable_ambient_source() {

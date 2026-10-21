@@ -1,0 +1,56 @@
+{
+  "contents": {
+    "sectionListRenderer": {
+      "contents": [
+        {
+          "musicShelfRenderer": {
+            "title": { "runs": [{ "text": "Songs" }] },
+            "contents": [
+              {
+                "musicResponsiveListItemRenderer": {
+                  "flexColumns": [
+                    { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [
+                      { "text": "Shared Song", "navigationEndpoint": { "watchEndpoint": { "videoId": "abcdefghijk" } } }
+                    ] } } },
+                    { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [
+                      { "text": "Song" }, { "text": " • " },
+                      { "text": "First Artist", "navigationEndpoint": { "browseEndpoint": { "browseId": "UC_first" } } },
+                      { "text": " & " },
+                      { "text": "Second Artist", "navigationEndpoint": { "browseEndpoint": { "browseId": "UC_second" } } },
+                      { "text": " • " },
+                      { "text": "The Album", "navigationEndpoint": { "browseEndpoint": { "browseId": "MPRE_album" } } },
+                      { "text": " • " }, { "text": "3:45" }
+                    ] } } }
+                  ],
+                  "fixedColumns": [{ "musicResponsiveListItemFixedColumnRenderer": { "text": { "simpleText": "3:46" } } }],
+                  "thumbnail": { "musicThumbnailRenderer": { "thumbnail": { "thumbnails": [
+                    { "url": "https://example.invalid/small.jpg", "width": 64, "height": 64 },
+                    { "url": "https://example.invalid/cover.jpg", "width": 512, "height": 512 }
+                  ] } } }
+                }
+              },
+              {
+                "musicResponsiveListItemRenderer": {
+                  "musicItemRendererDisplayPolicy": "MUSIC_ITEM_RENDERER_DISPLAY_POLICY_GREY_OUT",
+                  "flexColumns": [{ "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [
+                    { "text": "Unavailable", "navigationEndpoint": { "watchEndpoint": { "videoId": "unavailable" } } }
+                  ] } } }]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "musicShelfRenderer": {
+            "title": { "simpleText": "Albums" },
+            "contents": [{ "musicResponsiveListItemRenderer": {
+              "flexColumns": [{ "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [
+                { "text": "A catalog album", "navigationEndpoint": { "browseEndpoint": { "browseId": "MPRE_catalog" } } }
+              ] } } }]
+            } }]
+          }
+        }
+      ]
+    }
+  }
+}

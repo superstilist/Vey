@@ -1,3 +1,5 @@
+import { I18n } from "i18n.slint";
+import { Motion } from "motion.slint";
 // Native Rust Braccato surface. Selection, word state and animation clock live in Rust.
 import { ScrollView } from "std-widgets.slint";
 import { Action } from "controls.slint";
@@ -23,6 +25,7 @@ export component BraccatoLyrics inherits Rectangle {
         triggered => {root.widget-geometry(root.widget-x,root.widget-y,root.width / 1px,root.height / 1px);}
     }
     in property <bool> lyrics-timed;
+    in property <bool> word-timed;
     in property <int> active-lyric-index;
     in property <int> lyrics-position;
     in property <int> lyrics-offset;
@@ -51,13 +54,13 @@ export component BraccatoLyrics inherits Rectangle {
         width: 100%; height: 100%; alignment: center;
         spacing: 16px; padding: 24px;
         Text {
-            text: root.load-error == "" ? "Завантаження Braccato…" : root.load-error;
+            text: root.load-error == "" ? I18n.tr("Завантаження Braccato…") : root.load-error;
             color: Tokens.ink-200; font-size: 16px;
             horizontal-alignment: center; wrap: word-wrap;
         }
         if root.load-error != "": HorizontalLayout {
             alignment: center;
-            Action { text: "Спробувати знову"; outlined: true; clicked => { root.retry(); } }
+            Action { text: I18n.tr("Спробувати знову"); outlined: true; clicked => { root.retry(); } }
         }
     }
     if !root.external-view: ScrollView {
@@ -95,21 +98,28 @@ export component BraccatoLyrics inherits Rectangle {
                     spacing: 6px;
                     alignment: center;
 
-                    if line.instrumental || line.words.length == 0 || root.disable-richsync: Text {
+                    if line.instrumental || line.words.length == 0 || root.disable-richsync || !root.word-timed: Text {
                         horizontal-alignment: root.stage ? center : line.rtl ? right : left;
-                        text: line.instrumental ? "♪  Інструментальна пауза" : line.text;
+                        text: line.instrumental ? I18n.tr("♪  Інструментальна пауза") : line.text;
                         color: lyric-card.is-active ? #ffffff : Tokens.ink-200;
                         font-size: lyric-card.text-size;
                         font-weight: lyric-card.is-active ? 800 : root.lyric-weight;
                         wrap: word-wrap;
                     }
-                    if !line.instrumental && line.words.length > 0 && !root.disable-richsync: StyledText {
+                    if !line.instrumental && line.words.length > 0 && !root.disable-richsync && root.word-timed: StyledText {
                         horizontal-alignment: line.rtl ? right : root.stage ? center : left;
                         default-font-size: lyric-card.text-size;
                         default-color: root.lyric-inactive;
                         text: line.rendered;
                     }
-                    if line.background-text != "": StyledText {
+                    if line.background-text != "" && line.words.length == 0: Text {
+                        horizontal-alignment: root.stage ? center : line.rtl ? right : left;
+                        text: line.background-text;
+                        color: lyric-card.is-active ? root.lyric-active : root.lyric-inactive;
+                        font-size: 16px;
+                        wrap: word-wrap;
+                    }
+                    if line.background-text != "" && line.words.length > 0: StyledText {
                         horizontal-alignment: root.stage ? center : line.rtl ? right : left;
                         text: line.background-rendered;
                         default-color: Tokens.ink-200;
@@ -138,13 +148,13 @@ export component BraccatoLyrics inherits Rectangle {
                 }
             }
             if root.credits != "" && !root.stage: Text {
-                text: "Автори: " + root.credits; color: Tokens.ink-300; font-size: 12px; wrap: word-wrap;
+                text: I18n.tr("Автори: ") + root.credits; color: Tokens.ink-300; font-size: 12px; wrap: word-wrap;
             }
         }
 
     }
     if root.user-scrolling && !root.external-view: Action {
         x: (root.width - self.width) / 2; y: root.height - 44px;
-        text: "Повернутися до слів"; primary: true; clicked => { root.resume(); }
+        text: I18n.tr("Повернутися до слів"); primary: true; clicked => { root.resume(); }
     }
 }

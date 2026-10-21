@@ -1,0 +1,37 @@
+[package]
+name = "yt-rust"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "A provider-oriented Rust library for YouTube video and music discovery"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["youtube-data"]
+youtube-data = ["dep:reqwest"]
+youtube-music = ["dep:reqwest"]
+full = ["youtube-data", "youtube-music"]
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+url = "2"
+
+[dependencies.tokio]
+version = "1"
+features = ["macros", "rt-multi-thread"]
+
+[dev-dependencies]
+wiremock = "0.6"
+
+[[example]]
+name = "youtube_music_search"
+required-features = ["youtube-music"]
+
+[ lints.rust ]
+unsafe_code = "forbid"
+
+[ lints.clippy ]
+all = "warn"

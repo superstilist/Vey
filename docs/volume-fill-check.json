@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-20",
+  "version": "0.1.7",
+  "change": "Explicit left anchor for volume fill",
+  "nativeRenderedVolumes": [
+    0,
+    25,
+    50,
+    75,
+    100
+  ],
+  "renderedPixelChecks": "passed",
+  "visualReview": [
+    25,
+    50,
+    75
+  ],
+  "wasmBuild": "passed",
+  "apk": {
+    "sha256": "26e33fb3e48c020e7edd07d26fff171007596b282c59d9e3e0d68c711c3a951f",
+    "signature": "passed",
+    "manifest": "passed",
+    "path": "dist/Vey-0.1.7-android-arm64.apk",
+    "alignment16KiB": "passed"
+  },
+  "androidDeviceRuntime": "not tested"
+}

@@ -19,3 +19,9 @@ live-ytm.txt
 
 /.reference/
 /tools/braccato-widget/node_modules/
+
+/.claude/
+*.pid
+*.keystore
+*.jks
+*.tmp

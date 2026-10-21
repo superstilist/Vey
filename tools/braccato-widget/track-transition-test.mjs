@@ -62,7 +62,7 @@ try {
   const start=await frame.evaluate(()=>({count:window.framesSent,pixels:window.lastPixels}));
   await page.waitForTimeout(800);
   const middle=await frame.evaluate(()=>({count:window.framesSent,pixels:window.lastPixels}));
-  assert.ok(middle.count>start.count+5,'paused host continues scheduling the color morph');
+  assert.ok(middle.count>start.count+5,`paused host continues scheduling the color morph (${middle.count-start.count} frames)`);
   assert.notEqual(start.pixels,middle.pixels,'paused next-song palette progresses');
   await page.waitForTimeout(2200);
   const settled=await frame.evaluate(()=>window.framesSent);
@@ -165,7 +165,7 @@ try {
       clipped:getComputedStyle(element.parentElement).overflow};
   });
   assert.equal(movingHost.animations,1,'one camera animation moves the complete lyric host');
-  assert.equal(movingHost.easing,'cubic-bezier(0.42, 0, 0.58, 1)','the browser host uses the shared ease-in-out curve');
+  assert.equal(movingHost.easing,'cubic-bezier(0.45, 0, 0.55, 1)','the browser host uses the shared ease-in-out curve');
   assert.equal(movingHost.clipped,'hidden','the shared stage clips the moving host');
   directions.push('northeast');
   await page.waitForTimeout(500);

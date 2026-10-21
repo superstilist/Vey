@@ -108,6 +108,31 @@ try {
   assert.equal(morph.missing,0,'loading cover does not flash the default palette');
   assert.equal(morph.replacement,0,'replacement cover continues without a jump');
   assert.equal(morph.reduced,0,'reduced motion applies the final palette immediately');
+  const bright = await page.evaluate(() => {
+    let result;
+    const receive = event => {
+      if (event.detail.type === 'ambient') result = Uint8Array.from(atob(event.detail.pixels), c => c.charCodeAt(0));
+    };
+    addEventListener('playervf:braccato-message', receive);
+    const art = new Uint8Array(64 * 64 * 4).fill(255);
+    window.PlayerVFBraccato.update({ambient:{source:btoa(String.fromCharCode(...art)),time:2,reduced:true}});
+    removeEventListener('playervf:braccato-message', receive);
+    const mean = [0,0,0];
+    for (let i=0;i<result.length;i+=4) for (let channel=0;channel<3;channel++) mean[channel]+=result[i+channel]/(result.length/4);
+    return mean;
+  });
+  assert.ok(bright.every(channel => channel > 100 && channel < 180), 'white artwork is dimmed for lyric readability');
+  assert.ok(Math.max(...bright)-Math.min(...bright)<2, 'neutral artwork has no added color tint');
+  const undimmed=await page.evaluate(()=>{
+    let pixels;
+    const receive=event=>{if(event.detail.type==='ambient')pixels=Uint8Array.from(atob(event.detail.pixels),c=>c.charCodeAt(0));};
+    addEventListener('playervf:braccato-message',receive);
+    window.PlayerVFBraccato.update({ambient:{time:2,reduced:true,options:{dimBright:false}}});
+    removeEventListener('playervf:braccato-message',receive);
+    let sum=0;for(let i=0;i<pixels.length;i+=4)sum+=(pixels[i]+pixels[i+1]+pixels[i+2])/3;
+    return sum/(pixels.length/4);
+  });
+  assert.ok(undimmed>230,'turning dimming off updates the same paused artwork without needing a new cover');
   assert.deepEqual(errors, []);
   console.log('PASS: Kawarp output, native backdrop, smooth paused morphs, rapid skips, loading-cover grace and reduced motion',morph);
 } finally { await browser.close(); }

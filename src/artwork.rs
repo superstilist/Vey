@@ -37,13 +37,28 @@ pub fn cached(path: &Path) -> Option<RgbaImage> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub fn store_image(key: &str, image: &RgbaImage) {
+    use sha1::{Digest, Sha1};
+    let dir = crate::storage::data_dir().join("artwork");
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let path = dir.join(format!("{:x}.png", Sha1::digest(key.as_bytes())));
+        let _ = image.save_with_format(path, image::ImageFormat::Png);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn local(path: &str) -> Option<Vec<u8>> {
     use lofty::{file::TaggedFileExt, probe::Probe};
     if let Ok(file) = Probe::open(path).and_then(|p| p.read()) {
-        for tag in file.tags() {
-            for picture in tag.pictures() {
-                if picture.data().len() <= MAX_BYTES && decode(picture.data()).is_ok() {
-                    return Some(picture.data().to_vec());
+        for front in [true, false] {
+            for tag in file.tags() {
+                for picture in tag.pictures() {
+                    if (picture.pic_type() == lofty::picture::PictureType::CoverFront) != front {
+                        continue;
+                    }
+                    if picture.data().len() <= MAX_BYTES && decode(picture.data()).is_ok() {
+                        return Some(picture.data().to_vec());
+                    }
                 }
             }
         }
@@ -54,7 +69,9 @@ pub fn local(path: &str) -> Option<Vec<u8>> {
             let file = parent.join(format!("{name}.{ext}"));
             if std::fs::metadata(&file).is_ok_and(|m| m.len() <= MAX_BYTES as u64) {
                 if let Ok(bytes) = std::fs::read(file) {
-                    return Some(bytes);
+                    if decode(&bytes).is_ok() {
+                        return Some(bytes);
+                    }
                 }
             }
         }

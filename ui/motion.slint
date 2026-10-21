@@ -1,0 +1,11 @@
+// Shared semantic motion values; all decorative animation observes one switch.
+export global Motion {
+    in-out property <bool> reduced: false;
+    out property <duration> feedback: reduced ? 0ms : 120ms;
+    out property <duration> panel: reduced ? 0ms : 180ms;
+    out property <duration> sheet: reduced ? 0ms : 220ms;
+    out property <duration> palette: reduced ? 0ms : 1000ms;
+    out property <int> navigation-min: reduced ? 0 : 240;
+    out property <int> navigation-max: reduced ? 0 : 520;
+    out property <int> navigation-distance: reduced ? 0 : 140;
+}

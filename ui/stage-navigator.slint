@@ -1,3 +1,4 @@
+import { I18n } from "i18n.slint";
 // Gestures are confined to this pad, preserving list scrolling and lyric input.
 export component StageNavigator inherits Rectangle {
     in property <int> stage-column;
@@ -13,7 +14,7 @@ export component StageNavigator inherits Rectangle {
     horizontal-stretch: 0;
     border-radius: 12px;
     background: #ffffff08;
-    for name[index] in ["Пошук", "Налаштування", "Програвач", "Черга", "Головна", "Огляд", "Список відтворення", "Сподобалось", "Бібліотека"]: Rectangle {
+    for name[index] in [I18n.tr("Пошук"), I18n.tr("Налаштування"), I18n.tr("Програвач"), I18n.tr("Черга"), I18n.tr("Головна"), I18n.tr("Огляд"), I18n.tr("Список відтворення"), I18n.tr("Сподобалось"), I18n.tr("Бібліотека")]: Rectangle {
         property <int> stage-column: mod(index, 3) - 1;
         property <int> stage-row: floor(index / 3) - 1;
         property <bool> selected: self.stage-column == root.stage-column && self.stage-row == root.stage-row;
@@ -21,7 +22,7 @@ export component StageNavigator inherits Rectangle {
         y: (self.stage-row + 1) * root.height / 3;
         width: root.width / 3; height: root.height / 3;
         accessible-role: button;
-        accessible-label: "Перейти: " + name;
+        accessible-label: I18n.tr("Перейти: ") + name;
         accessible-action-default => { root.navigate(self.stage-column, self.stage-row); }
         Rectangle {
             width: parent.selected ? 9px : 5px; height: self.width;

@@ -13,13 +13,19 @@ card. Loaded images have no colored placeholder below them. Selected tabs use fi
 pills, and playback buttons change between circular and rounded-square shapes.
 
 `src/material.rs` samples a bounded number of pixels on artwork changes,
-picks a chromatic hue and produces dark tonal roles. Neutral or transparent
-artwork uses the lime seed. While artwork is loading, the previous palette
+picks a dominant hue and produces dark tonal roles. Neutral artwork produces a
+neutral dynamic palette; transparent artwork uses the lime seed. While artwork is loading, the previous palette
 stays in place. Palette extraction does not run on playback ticks or frames.
 This is a cover-derived palette, independent of operating-system wallpaper.
 
+Version 0.1.9 adds persistent Dynamic, Static and Background-only modes under
+Settings → Вигляд. Palettes fade over one second rather than jumping; six fixed
+hues support static accents. Reduced motion applies changes immediately. See
+[appearance behavior](APPEARANCE.md) for mode boundaries and animation details.
+
 The native lyric backdrop receives the same surface color as Slint and uses
-the same subtle 6% ambient texture. The camera and mounted pages remain intact.
+the same 28% ambient texture. Bright covers are dimmed without adding a color tint.
+The camera and mounted pages remain intact.
 Tonal sliders retain the standard widget's pointer, keyboard and accessibility
 behavior beneath their custom appearance. Standard form controls use dark mode.
 

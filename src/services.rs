@@ -12,6 +12,8 @@ pub struct Track {
     pub album: String,
     pub duration_secs: f64,
     pub video_id: Option<String>,
+    /// Paired music-video ID used for the visual clip while `video_id` stays the audio source.
+    pub clip_video_id: Option<String>,
     pub thumbnail_url: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -38,23 +40,112 @@ pub struct History {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub language: String,
+    pub kawarp: KawarpSettings,
     pub volume: f32,
+    pub color_mode: ColorMode,
+    pub color_hue: u16,
+    // Retained internally for audio/lyric clocks; removed user preference.
+    #[serde(skip, default = "normal_playback_rate")]
     pub rate: f32,
     pub art_mode: String,
+    pub download_badge_shown: bool,
+    pub download_badge_style: String,
+    pub download_badge_position: String,
     pub lyrics_provider: String,
+    pub lyrics_romanization: bool,
+    pub lyrics_translation: bool,
+    pub lyrics_translation_language: String,
     pub lyrics_stage: bool,
     pub lyrics_reduced_motion: bool,
     pub lyrics_passive_scroll: bool,
     pub shuffle: bool,
     pub repeat: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct KawarpSettings {
+    pub opacity: f32,
+    pub warp: f32,
+    pub blur: u32,
+    pub saturation: f32,
+    pub dithering: f32,
+    pub dim_bright: bool,
+}
+impl Default for KawarpSettings {
+    fn default() -> Self {
+        Self {
+            opacity: 0.28,
+            warp: 1.,
+            blur: 15,
+            saturation: 1.5,
+            dithering: 0.02,
+            dim_bright: true,
+        }
+    }
+}
+impl KawarpSettings {
+    pub fn normalized(mut self) -> Self {
+        let finite = |value: f32, fallback: f32, max: f32| {
+            if value.is_finite() {
+                value.clamp(0., max)
+            } else {
+                fallback
+            }
+        };
+        self.opacity = finite(self.opacity, 0.28, 1.);
+        self.warp = finite(self.warp, 1., 1.);
+        self.blur = self.blur.clamp(1, 40);
+        self.saturation = finite(self.saturation, 1.5, 2.);
+        self.dithering = finite(self.dithering, 0.02, 0.05);
+        self
+    }
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorMode {
+    Static,
+    Background,
+    #[default]
+    #[serde(other)]
+    Dynamic,
+}
+impl ColorMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Static => "static",
+            Self::Background => "background",
+            Self::Dynamic => "dynamic",
+        }
+    }
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "static" => Self::Static,
+            "background" => Self::Background,
+            _ => Self::Dynamic,
+        }
+    }
+}
+fn normal_playback_rate() -> f32 {
+    1.
+}
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            language: "uk".into(),
+            kawarp: KawarpSettings::default(),
             volume: 1.,
+            color_mode: ColorMode::Dynamic,
+            color_hue: 85,
             rate: 1.,
             art_mode: "cover".into(),
+            download_badge_shown: true,
+            download_badge_style: "triangle".into(),
+            download_badge_position: "bottom-right".into(),
             lyrics_provider: "auto".into(),
+            lyrics_romanization: true,
+            lyrics_translation: true,
+            lyrics_translation_language: "auto".into(),
             lyrics_stage: false,
             lyrics_reduced_motion: false,
             lyrics_passive_scroll: false,
@@ -71,6 +162,21 @@ pub struct CachedLyrics {
     pub alternatives: Vec<crate::lyrics::LyricsAlternative>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LyricsChoice {
+    pub provider: String,
+    pub format: String,
+    pub sync_type: crate::lyrics::LyricsSyncType,
+    pub fingerprint: String,
+}
+fn lyrics_fingerprint(alt: &crate::lyrics::LyricsAlternative) -> String {
+    use sha1::{Digest, Sha1};
+    format!(
+        "{:x}",
+        Sha1::digest(serde_json::to_vec(alt).unwrap_or_default())
+    )
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Store {
     pub version: u32,
@@ -84,6 +190,10 @@ pub struct Store {
     pub offsets: BTreeMap<String, i64>,
     pub legacy: BTreeMap<String, Value>,
     pub lyrics_cache: BTreeMap<String, CachedLyrics>,
+    /// Public track key -> complete permanent local file, never the stream cache.
+    pub downloads: BTreeMap<String, String>,
+    pub lyrics_choices: BTreeMap<String, LyricsChoice>,
+    pub lyrics_enrichment: BTreeMap<String, crate::lyrics_translation::Enrichment>,
 }
 impl Default for Store {
     fn default() -> Self {
@@ -99,6 +209,9 @@ impl Default for Store {
             offsets: BTreeMap::new(),
             legacy: BTreeMap::new(),
             lyrics_cache: BTreeMap::new(),
+            downloads: BTreeMap::new(),
+            lyrics_choices: BTreeMap::new(),
+            lyrics_enrichment: BTreeMap::new(),
         }
     }
 }
@@ -159,6 +272,66 @@ pub fn normalize_sources(sources: Vec<Source>) -> Vec<Source> {
         .collect()
 }
 impl Store {
+    fn lyrics_choice_key(&self, track: &Track) -> String {
+        if let Some(id) = &track.video_id {
+            return format!("yt://{id}");
+        }
+        self.downloads
+            .iter()
+            .find(|(_, p)| normalize_path(p) == normalize_path(&track.path))
+            .map(|(key, _)| key.clone())
+            .unwrap_or_else(|| track.path.clone())
+    }
+    pub fn remember_lyrics_choice(
+        &mut self,
+        track: &Track,
+        alt: &crate::lyrics::LyricsAlternative,
+    ) {
+        let key = self.lyrics_choice_key(track);
+        self.lyrics_choices.insert(
+            key,
+            LyricsChoice {
+                provider: alt.provider.clone(),
+                format: alt.format.clone(),
+                sync_type: alt.sync_type,
+                fingerprint: lyrics_fingerprint(alt),
+            },
+        );
+    }
+    pub fn preferred_lyrics_index(
+        &self,
+        track: &Track,
+        alts: &[crate::lyrics::LyricsAlternative],
+    ) -> usize {
+        let Some(choice) = self.lyrics_choices.get(&self.lyrics_choice_key(track)) else {
+            return 0;
+        };
+        alts.iter()
+            .position(|alt| lyrics_fingerprint(alt) == choice.fingerprint)
+            .or_else(|| {
+                alts.iter().position(|alt| {
+                    alt.provider.eq_ignore_ascii_case(&choice.provider)
+                        && alt.format.eq_ignore_ascii_case(&choice.format)
+                        && alt.sync_type == choice.sync_type
+                })
+            })
+            .or_else(|| {
+                alts.iter()
+                    .position(|alt| alt.provider.eq_ignore_ascii_case(&choice.provider))
+            })
+            .unwrap_or(0)
+    }
+    pub fn lyrics_request_provider(&self, track: &Track) -> String {
+        // A saved song choice takes precedence over the default provider filter.
+        if self
+            .lyrics_choices
+            .contains_key(&self.lyrics_choice_key(track))
+        {
+            "auto".into()
+        } else {
+            self.settings.lyrics_provider.clone()
+        }
+    }
     pub fn remember(&mut self, track: Track) {
         if let Some(t) = self.tracks.iter_mut().find(|t| t.path == track.path) {
             *t = track;
@@ -450,6 +623,24 @@ mod tests {
         assert!(s.migrate("{}").is_err());
     }
     #[test]
+    fn track_clip_identity_is_optional_and_backward_compatible() {
+        let legacy: Track =
+            serde_json::from_str(r#"{"path":"yt://audio-id","title":"Song","videoId":"audio-id"}"#)
+                .unwrap();
+        assert_eq!(legacy.video_id.as_deref(), Some("audio-id"));
+        assert_eq!(legacy.clip_video_id, None);
+
+        let paired = Track {
+            clip_video_id: Some("clip-id".into()),
+            ..legacy
+        };
+        let restored: Track =
+            serde_json::from_str(&serde_json::to_string(&paired).unwrap()).unwrap();
+        assert_eq!(restored.video_id.as_deref(), Some("audio-id"));
+        assert_eq!(restored.clip_video_id.as_deref(), Some("clip-id"));
+    }
+
+    #[test]
     fn queue_repeat_and_end() {
         let mut q = Queue::default();
         let t = Track {
@@ -464,6 +655,7 @@ mod tests {
         assert!(q.advance(false, true).is_some());
         assert_eq!(q.index, Some(0));
     }
+
     #[test]
     fn history_and_playlists_deduplicate() {
         let mut s = Store::default();

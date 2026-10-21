@@ -34,6 +34,14 @@ State lives in `%APPDATA%\PlayerVF-Rust\state.json` on Windows,
 app's internal data directory on Android. `PLAYERVF_DATA_DIR` overrides the location.
 Unreadable state is copied to a timestamped backup before recovery.
 
+## Latest release
+
+Version 0.1.12 adds permanent local downloads and cover tools, local-cover marks,
+per-song lyric source selection, automatic translation and romanization in the
+player tools menu. See [release notes](docs/RELEASE.md) and
+[lyric controls](docs/LYRICS-PREFERENCES.md).
+Windows x64 ZIP and Android ARM64 APK are available on the GitHub Releases page.
+
 ## Responsiveness
 
 Pages stay mounted for fast returns and use one shared, interruptible camera.
@@ -66,6 +74,12 @@ support on web**. The Braccato lyric surface and highlighted editor use DOM.
 See the [Slint web documentation](https://docs.slint.dev/latest/docs/slint/guide/platforms/web/).
 Browser files must be selected again after a reload; the file identities used
 by likes and local playlists remain stable when the same files are reselected.
+
+## Android
+
+An ARM64 APK can be built with `./scripts/build-android.ps1`. See
+[Android build and signing notes](docs/ANDROID-BUILD.md) for toolchain setup,
+package verification and the current Android runtime limitations.
 
 ## Data migration
 

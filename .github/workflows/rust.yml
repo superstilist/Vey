@@ -31,7 +31,7 @@ jobs:
         with:
           targets: aarch64-linux-android
       - uses: android-actions/setup-android@v3
-      - run: sdkmanager 'ndk;28.2.13676358'
+      - run: sdkmanager 'ndk;28.2.13676358' 'platforms;android-35' 'build-tools;35.0.0'
       - uses: Swatinem/rust-cache@v2
       - run: |
           export CC_aarch64_linux_android="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"

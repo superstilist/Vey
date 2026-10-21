@@ -7064,7 +7064,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vey"
-version = "0.1.4"
+version = "0.1.12"
 dependencies = [
  "arboard",
  "axum",
@@ -7072,9 +7072,11 @@ dependencies = [
  "console_error_panic_hook",
  "html-escape",
  "image",
+ "jni 0.21.1",
  "js-sys",
  "lofty",
  "opus-pure",
+ "raw-window-handle",
  "regex",
  "reqwest",
  "rfd",
@@ -7096,6 +7098,7 @@ dependencies = [
  "web-sys",
  "web-time",
  "wry",
+ "yt-rust",
 ]
 
 [[package]]
@@ -8395,6 +8398,18 @@ dependencies = [
  "quote",
  "syn 3.0.9",
  "synstructure",
+]
+
+[[package]]
+name = "yt-rust"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
 ]
 
 [[package]]

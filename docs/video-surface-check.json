@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "scenarios": [
+    "muted",
+    "paused frame",
+    "seek",
+    "play",
+    "rate",
+    "pause",
+    "hidden suspension",
+    "error fallback",
+    "resource disposal"
+  ]
+}

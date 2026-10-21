@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "checks": [
+    "actual playlist destinations",
+    "desktop selection persists the track",
+    "long list scroll reaches the final playlist",
+    "create from picker adds the current track",
+    "320px picker selection",
+    "no browser errors"
+  ]
+}
