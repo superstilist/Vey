@@ -4,6 +4,13 @@ Source inspection snapshot: 2026-10-20. Start with `project.md` for the file map
 
 ## Native runtime
 
+Native audio follows the current OS default output. Its dedicated worker checks
+the route/configuration every second and retries missing/failed outputs; Windows
+also compares WASAPI endpoint identities. Reconnection restores the source at its
+held position with volume, speed and requested play/pause state. Only configurations
+of the system-selected device are tried. Missing output returns a load error without
+terminating the worker. Hardware switching still requires runtime acceptance.
+
 `src/main.rs` dispatches helper/server/auth modes or calls `playervf::run()`.
 `src/lib.rs` includes compiled Slint modules and gates native, WASM and Android
 modules. `build.rs` compiles `ui/main.slint`; changes to shared UI properties

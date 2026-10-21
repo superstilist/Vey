@@ -513,19 +513,119 @@ fn audio_thread(
     status_arc: Arc<Mutex<SharedStatus>>,
     level_arc: Arc<Mutex<LevelMeter>>,
 ) {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
     use rodio::{OutputStreamBuilder, Sink};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
 
-    let stream = match OutputStreamBuilder::open_default_stream() {
-        Ok(stream) => stream,
-        Err(_) => return,
-    };
-    let mut sink = Sink::connect_new(stream.mixer());
+    // Keep the command worker alive even when the OS has no audio device.
+    // Never fall back to an arbitrary physical output: follow the OS default.
+    let mut stream: Option<rodio::OutputStream> = None;
+    let (mut sink, _) = Sink::new();
+    let mut output_name = None;
+    #[cfg(target_os = "windows")]
+    let mut output_device: Option<rodio::Device> = None;
+    let failed = Arc::new(AtomicBool::new(false));
+    let mut next_output_check = Instant::now();
+    let mut wants_playback = false;
+    let mut output_error: Option<String> = None;
     let mut volume: f32 = 1.0;
     let mut rate: f32 = 1.0;
     let mut current_path: Option<String> = None;
     let mut duration_secs: f64 = 0.0;
+    let mut position_offset = Duration::ZERO;
+    let mut held_position: Option<Duration> = None;
 
     loop {
+        if Instant::now() >= next_output_check {
+            next_output_check = Instant::now() + Duration::from_secs(1);
+            let device = rodio::cpal::default_host().default_output_device();
+            let name = device.as_ref().and_then(|device| {
+                device
+                    .name()
+                    .ok()
+                    .map(|name| format!("{name}:{:?}", device.default_output_config().ok()))
+            });
+            let route_changed = name != output_name;
+            #[cfg(target_os = "windows")]
+            #[allow(unreachable_patterns)]
+            let route_changed = route_changed
+                || match (device.as_ref(), output_device.as_ref()) {
+                    (Some(current), Some(previous)) => {
+                        match (current.as_inner(), previous.as_inner()) {
+                            (
+                                rodio::cpal::platform::DeviceInner::Wasapi(current),
+                                rodio::cpal::platform::DeviceInner::Wasapi(previous),
+                            ) => current != previous,
+                            _ => false,
+                        }
+                    }
+                    (None, None) => false,
+                    _ => true,
+                };
+            if stream.is_none() || route_changed || failed.swap(false, Ordering::AcqRel) {
+                // Freeze position during unplug/recovery. Rebuild only on a
+                // routing change, never on the UI or the real-time callback.
+                sink.pause();
+                let position = held_position.unwrap_or(position_offset + sink.get_pos());
+                let has_track =
+                    current_path.is_some() && (held_position.is_some() || !sink.empty());
+                if has_track {
+                    held_position = Some(position);
+                }
+                stream.take();
+                failed.store(false, Ordering::Release);
+                let failure_flag = Arc::clone(&failed);
+                let recovered = (|| -> Result<_, String> {
+                    let device = device.clone().ok_or("No system audio output available")?;
+                    let mut output = OutputStreamBuilder::from_device(device)
+                        .map_err(|error| error.to_string())?
+                        .with_error_callback(move |error| {
+                            eprintln!("[audio-output] {error}");
+                            failure_flag.store(true, Ordering::Release);
+                        })
+                        .open_stream_or_fallback()
+                        .map_err(|error| error.to_string())?;
+                    output.log_on_drop(false);
+                    let next_sink = Sink::connect_new(output.mixer());
+                    next_sink.pause();
+                    if has_track {
+                        let (mut source, _) = decode_track(current_path.as_deref().unwrap())?;
+                        source
+                            .try_seek(position)
+                            .map_err(|error| error.to_string())?;
+                        next_sink.append(MeteredSource::new(source, Arc::clone(&level_arc)));
+                    }
+                    next_sink.set_volume(volume);
+                    next_sink.set_speed(rate);
+                    if wants_playback {
+                        next_sink.play();
+                    }
+                    Ok((output, next_sink))
+                })();
+                match recovered {
+                    Ok((output, next_sink)) => {
+                        sink.stop();
+                        sink = next_sink;
+                        stream = Some(output);
+                        output_name = name;
+                        #[cfg(target_os = "windows")]
+                        {
+                            output_device = device;
+                        }
+                        position_offset = if has_track { position } else { Duration::ZERO };
+                        held_position = None;
+                        output_error = None;
+                    }
+                    Err(error) => {
+                        if output_error.as_ref() != Some(&error) {
+                            eprintln!("[audio-output] {error}; retrying system output");
+                        }
+                        output_error = Some(error);
+                    }
+                }
+            }
+        }
         // Wake periodically so the UI receives a new position while audio plays.
         let command = match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(command) => Some(command),
@@ -540,12 +640,20 @@ fn audio_thread(
                     autoplay,
                     reply,
                 } => {
-                    let result = match decode_track(&path) {
-                        Ok((source, track_duration_secs)) => {
+                    let result = match stream
+                        .as_ref()
+                        .ok_or_else(|| {
+                            output_error
+                                .clone()
+                                .unwrap_or_else(|| "System audio output unavailable".into())
+                        })
+                        .and_then(|output| decode_track(&path).map(|decoded| (output, decoded)))
+                    {
+                        Ok((output, (source, track_duration_secs))) => {
                             // Replace the sink only after decoding succeeds, so a bad file
                             // cannot interrupt the song that was already playing.
                             sink.stop();
-                            let next_sink = Sink::connect_new(stream.mixer());
+                            let next_sink = Sink::connect_new(output.mixer());
                             next_sink.append(MeteredSource::new(source, Arc::clone(&level_arc)));
                             next_sink.set_volume(volume);
                             next_sink.set_speed(rate);
@@ -557,22 +665,44 @@ fn audio_thread(
                             sink = next_sink;
                             current_path = Some(path);
                             duration_secs = track_duration_secs;
+                            position_offset = Duration::ZERO;
+                            held_position = None;
+                            wants_playback = autoplay;
                             Ok(())
                         }
                         Err(error) => Err(error),
                     };
                     let _ = reply.send(result);
                 }
-                AudioCmd::Play => sink.play(),
-                AudioCmd::Pause => sink.pause(),
+                AudioCmd::Play => {
+                    wants_playback = true;
+                    if stream.is_some() {
+                        sink.play();
+                    }
+                }
+                AudioCmd::Pause => {
+                    wants_playback = false;
+                    sink.pause();
+                }
                 AudioCmd::Stop => {
                     sink.stop();
-                    sink.clear();
                     current_path = None;
+                    wants_playback = false;
                     duration_secs = 0.0;
+                    position_offset = Duration::ZERO;
+                    held_position = None;
                 }
                 AudioCmd::Seek(secs) => {
-                    let _ = sink.try_seek(Duration::from_secs_f64(secs.max(0.0)));
+                    if stream.is_some() {
+                        if sink
+                            .try_seek(Duration::from_secs_f64(secs.max(0.0)))
+                            .is_ok()
+                        {
+                            position_offset = Duration::ZERO;
+                        }
+                    } else if held_position.is_some() && secs.is_finite() {
+                        held_position = Some(Duration::from_secs_f64(secs.max(0.0)));
+                    }
                 }
                 AudioCmd::Volume(v) => {
                     volume = v.clamp(0.0, 1.0);
@@ -586,15 +716,17 @@ fn audio_thread(
         }
 
         // Update shared status
-        let empty = sink.empty();
+        let empty = held_position.is_none() && sink.empty();
         let state = if empty || (current_path.is_none()) {
             PlaybackState::Stopped
-        } else if sink.is_paused() {
+        } else if stream.is_none() || sink.is_paused() {
             PlaybackState::Paused
         } else {
             PlaybackState::Playing
         };
-        let pos = sink.get_pos().as_secs_f64();
+        let pos = held_position
+            .unwrap_or(position_offset + sink.get_pos())
+            .as_secs_f64();
         let pos = if duration_secs > 0.0 {
             pos.min(duration_secs)
         } else {
