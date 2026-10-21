@@ -1,0 +1,32 @@
+name: Linux release packages
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing Vey release tag to build
+        required: true
+        type: string
+permissions:
+  contents: write
+jobs:
+  linux-x64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native build and packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libasound2-dev libfontconfig1-dev libfreetype-dev libxkbcommon-dev libxkbcommon-x11-dev libdbus-1-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev libegl-dev libgl-dev dpkg-dev
+      - name: Build optimized native application
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: cargo build --locked --release --bin vey
+      - name: Package Linux tarball and Debian package
+        run: bash scripts/build-linux.sh --skip-build
+      - name: Attach packages and SHA-256 files to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" dist/Vey-*-linux-x64.tar.gz dist/Vey-*-linux-x64.tar.gz.sha256 dist/Vey-*-linux-x64.deb dist/Vey-*-linux-x64.deb.sha256
