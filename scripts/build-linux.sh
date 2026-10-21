@@ -8,7 +8,7 @@ case $(uname -m) in
   aarch64) arch=arm64; deb_arch=arm64 ;;
   *) echo 'Unsupported Linux architecture.' >&2; exit 1 ;;
 esac
-version=$(sed -n 's/^version = "\([0-9.]*\)"/\1/p' Cargo.toml | head -1)
+version=$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)
 [[ -n "$version" ]] || { echo 'Missing Cargo version.' >&2; exit 1; }
 if [[ ${1:-} != --skip-build ]]; then
   cargo build --locked --release --bin vey
