@@ -88,9 +88,9 @@ view.addEventListener('braccato:lyrics-loaded', () => {
   renderer.scheduleLyricPositionUpdate(() => state.visible && state.mode !== 'editor',tick);
 });
 scroller.appendChild(view);
-for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) {
-  scroller.addEventListener(type, () => view.renderer?.noteUserScroll(), { passive: true });
-}
+// Pause autoscroll only after the lyrics actually move. A touch/pointer down
+// also happens on taps, which used to suspend following playback for 25 sec.
+scroller.addEventListener('scroll', () => view.renderer?.noteUserScroll(), { passive: true });
 resume.addEventListener('click', () => view.renderer?.resumeAutoscroll());
 
 function tick() {

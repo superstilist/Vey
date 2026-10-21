@@ -786,22 +786,10 @@ pub fn run() -> Result<(), slint::PlatformError> {
         w.set_status(format!("Помилка читання даних: {e}. Оригінальний файл збережено.").into());
     }
     macro_rules! bind {($method:ident, |$ui:ident,$state:ident $(,$arg:ident)*| $body:block)=>{{let weak=w.as_weak();let shared=a.clone();w.$method(move|$($arg),*|{if let Some($ui)=weak.upgrade(){let $state=&shared;$body}});}};}
-    let search_timer = Rc::new(slint::Timer::default());
-    let edit_timer = Rc::clone(&search_timer);
-    bind!(on_search_edited, |ui, _state, query| {
-        let weak = ui.as_weak();
-        let query = query.to_string();
-        edit_timer.start(
-            slint::TimerMode::SingleShot,
-            Duration::from_millis(300),
-            move || {
-                if let Some(ui) = weak.upgrade() {
-                    ui.invoke_search(query.clone().into());
-                }
-            },
-        );
+    bind!(on_search_edited, |_ui, state, _query| {
+        // Do not navigate or rebuild results while the TextInput is active.
+        state.borrow_mut().search_generation += 1;
     });
-    let submit_timer = Rc::clone(&search_timer);
     bind!(on_navigate, |ui, state, view| {
         ui.set_status("".into());
         state.borrow_mut().search_generation += 1;
@@ -820,7 +808,6 @@ pub fn run() -> Result<(), slint::PlatformError> {
         browse(state, &ui, None, false);
     });
     bind!(on_search, |ui, state, query| {
-        submit_timer.stop();
         ui.set_active_view("search".into());
         let needle = query.trim().to_lowercase();
         {
