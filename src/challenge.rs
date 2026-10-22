@@ -78,6 +78,8 @@ pub fn run_helper() -> Result<(), String> {
     let prompt = crate::i18n::translate(&locale, "Перевірка доступу до слів пісень");
     let builder = WindowBuilder::new()
         .with_visible(!silent)
+        .with_focused(!silent)
+        .with_focusable(!silent)
         .with_title(format!("Vey — {prompt}"))
         .with_inner_size(tao::dpi::LogicalSize::new(500., 360.));
     eprintln!("[lyrics-auth] starting browser host");
@@ -88,6 +90,7 @@ pub fn run_helper() -> Result<(), String> {
     let mut context =
         wry::WebContext::new(Some(std::env::temp_dir().join("playervf-lyrics-challenge")));
     let webview = wry::WebViewBuilder::new_with_web_context(&mut context)
+        .with_focused(!silent)
         .with_html(&html)
         .with_navigation_handler(|url| {
             let allowed = navigation_allowed(&url);

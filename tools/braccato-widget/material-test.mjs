@@ -87,7 +87,7 @@ try {
   assert.deepEqual(await pixel(),blue,'navigation preserves the cover palette');
   await page.setViewportSize({width:390,height:844});await page.waitForTimeout(500);
   await shot('43-material-mobile-home');
-  await page.mouse.click(180,728);await page.waitForTimeout(700);
+  await page.mouse.click(180,752);await page.waitForTimeout(700);
   await shot('44-material-mobile-player');
   const phoneBackground=await pixel(20,600);
   assert.ok(phoneBackground[2]>phoneBackground[0]+12,`mobile player retains the blue artwork background: ${phoneBackground}`);

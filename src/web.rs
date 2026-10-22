@@ -530,7 +530,7 @@ pub fn run() -> Result<(), JsValue> {
         let height = browser.inner_height()?.as_f64().unwrap_or(768.);
         w.window()
             .set_size(slint::LogicalSize::new(width as f32, height as f32));
-        w.set_mobile(width < 800.);
+        w.set_mobile(width < 800. || height < 500.);
     }
 
     let store = web_sys::window()
@@ -1091,7 +1091,7 @@ pub fn run() -> Result<(), JsValue> {
                     {
                         w.window()
                             .set_size(slint::LogicalSize::new(width as f32, height as f32));
-                        w.set_mobile(width < 800.);
+                        w.set_mobile(width < 800. || height < 500.);
                         apply_viewport_insets(&w);
                     }
                 }

@@ -3,6 +3,10 @@ import { Motion } from "motion.slint";
 import { Slider } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 
+export global TouchStyle {
+    in-out property <bool> mobile;
+}
+
 export global CoverBadges {
     in-out property <bool> shown: true;
     in-out property <string> style: "triangle";
@@ -34,7 +38,7 @@ export component Action inherits Rectangle {
     in property <bool> primary;
     in property <bool> selected;
     in property <bool> outlined;
-    in property <bool> comfortable;
+    in property <bool> comfortable: TouchStyle.mobile;
     in property <bool> wide;
     callback clicked();
     horizontal-stretch: wide ? 1 : 0;
@@ -44,7 +48,7 @@ export component Action inherits Rectangle {
     height: comfortable ? 44px : chip ? 32px : 36px;
     border-width: 0px;
     border-color: Tokens.neutral-300;
-    background: primary ? (touch.has-hover ? Tokens.brand-300 : Tokens.brand-500) : selected ? Tokens.primary-container : touch.has-hover ? Tokens.neutral-200 : chip || (outlined && text != "") ? Tokens.neutral-150 : transparent;
+    background: primary ? ((touch.has-hover || touch.pressed) ? Tokens.brand-300 : Tokens.brand-500) : selected ? Tokens.primary-container : (touch.has-hover || touch.pressed) ? Tokens.neutral-200 : chip ? Tokens.neutral-150 : transparent;
     border-radius: Tokens.radius-pill;
     animate background { duration: Motion.feedback; }
     animate border-color { duration: Motion.feedback; }
@@ -61,7 +65,7 @@ export component Action inherits Rectangle {
                 source: root.icon;
                 width: 18px;
                 height: 18px;
-                colorize: root.primary ? Tokens.brand-ink : root.selected ? Tokens.brand-300 : touch.has-hover ? Tokens.ink-100 : Tokens.ink-200;
+                colorize: root.primary ? Tokens.brand-ink : root.selected ? Tokens.brand-300 : (touch.has-hover || touch.pressed) ? Tokens.ink-100 : Tokens.ink-200;
             }
         }
         if root.text != "": Text {
@@ -112,7 +116,7 @@ export component NavItem inherits Rectangle {
     callback clicked();
     height: 44px;
     border-radius: 24px;
-    background: selected ? Tokens.primary-container : touch.has-hover ? Tokens.neutral-150 : transparent;
+    background: selected ? Tokens.primary-container : (touch.has-hover || touch.pressed) ? Tokens.neutral-150 : transparent;
     border-width: 0px;
     border-color: #ffffff14;
     animate background { duration: Motion.feedback; }
@@ -122,7 +126,7 @@ export component NavItem inherits Rectangle {
         y: 12px;
         width: 20px;
         height: 20px;
-        colorize: root.selected ? Tokens.brand-300 : touch.has-hover ? Tokens.ink-100 : Tokens.ink-200;
+        colorize: root.selected ? Tokens.brand-300 : (touch.has-hover || touch.pressed) ? Tokens.ink-100 : Tokens.ink-200;
     }
     if !root.collapsed: Text {
         x: 52px;
@@ -130,7 +134,7 @@ export component NavItem inherits Rectangle {
         width: max(0px, root.width - 60px);
         height: 44px;
         text: root.text;
-        color: root.selected ? Tokens.brand-300 : touch.has-hover ? Tokens.ink-100 : Tokens.ink-150;
+        color: root.selected ? Tokens.brand-300 : (touch.has-hover || touch.pressed) ? Tokens.ink-100 : Tokens.ink-150;
         font-size: 14px;
         font-weight: root.selected ? 700 : 500;
         vertical-alignment: center;
@@ -161,7 +165,7 @@ export component Artwork inherits Rectangle {
         border-bottom-left-radius: root.border-bottom-left-radius;
         border-bottom-right-radius: root.border-bottom-right-radius;
         clip: true;
-        background: root.art.width > 0 ? transparent : Math.mod(root.tone, 3) == 0 ? Tokens.primary-container : Math.mod(root.tone, 3) == 1 ? Tokens.secondary-container : Tokens.tertiary-container;
+        background: root.art.width > 0 ? transparent : Tokens.neutral-150;
         if root.art.width == 0: Image {
             source: @image-url("../assets/icons/Music2.svg");
             width: root.width * 0.32; height: root.height * 0.32;
@@ -206,22 +210,22 @@ export component SongRow inherits Rectangle {
     callback download-clicked();
     callback remove-clicked();
     callback mark-clicked();
-    height: root.mobile ? 68px : 72px;
+    height: root.mobile ? 60px : 72px;
     border-radius: 14px;
-    background: root.current ? Tokens.primary-container.with-alpha(0.5) : row-touch.has-hover ? Tokens.neutral-150 : root.filled ? Tokens.neutral-100 : transparent;
+    background: root.current ? Tokens.primary-container.with-alpha(0.5) : (row-touch.has-hover || row-touch.pressed) ? Tokens.neutral-150 : root.filled ? Tokens.neutral-100 : transparent;
     animate background { duration: Motion.feedback; }
     row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
     HorizontalLayout {
-        padding: 10px; spacing: 14px;
-        Artwork { art: root.art; downloaded: root.downloaded; tone: root.tone; width: root.mobile ? 48px : 52px; height: self.width; border-radius: 12px; mark-clicked => { root.mark-clicked(); } }
+        padding: root.mobile ? 8px : 10px; spacing: root.mobile ? 10px : 14px;
+        Artwork { art: root.art; downloaded: root.downloaded; tone: root.tone; width: root.mobile ? 44px : 52px; height: self.width; border-radius: 12px; mark-clicked => { root.mark-clicked(); } }
         VerticalLayout {
             spacing: 4px; alignment: center; horizontal-stretch: 1;
             Text { text: root.title; color: root.current ? Tokens.brand-300 : Tokens.ink-100; font-size: 14px; font-weight: 600; overflow: elide; }
-            Text { text: root.artist + (!root.album-column && root.album != "" ? (root.artist != "" ? " · " : "") + root.album : ""); color: Tokens.ink-300; font-size: 12px; overflow: elide; }
+            Text { text: root.artist + (!root.mobile && !root.album-column && root.album != "" ? (root.artist != "" ? " · " : "") + root.album : ""); color: Tokens.ink-300; font-size: 12px; overflow: elide; }
         }
         if root.album-column: Text { text: root.album; width: 180px; color: Tokens.ink-300; font-size: 12px; vertical-alignment: center; overflow: elide; }
         if !root.mobile: Text { text: root.duration; color: Tokens.ink-300; width: 42px; font-size: 12px; vertical-alignment: center; horizontal-alignment: right; }
-        if root.actions: Action { icon: @image-url("../assets/icons/Heart.svg"); label: I18n.tr("Подобається"); selected: root.liked; clicked => { root.like-clicked(); } }
+        if root.actions: Action { comfortable: root.mobile; icon: @image-url("../assets/icons/Heart.svg"); label: I18n.tr("Подобається"); selected: root.liked; clicked => { root.like-clicked(); } }
         if root.actions && !root.mobile: Rectangle {
             width: 36px; height: 36px;
             if !root.downloaded: Action { icon: root.downloading ? @image-url("../assets/icons/MoreHorizontal.svg") : @image-url("../assets/icons/Download.svg"); label: root.downloading ? I18n.tr("Завантаження файлу…") : I18n.tr("Завантажити"); clicked => { root.download-clicked(); } }
@@ -236,11 +240,11 @@ export component Transport inherits Rectangle {
     in property <bool> playing;
     in property <bool> brand;
     callback clicked();
-    width: brand ? 42px : 58px;
-    height: brand ? 42px : 58px;
+    width: brand ? (TouchStyle.mobile ? 44px : 42px) : 58px;
+    height: brand ? (TouchStyle.mobile ? 44px : 42px) : 58px;
     border-radius: root.playing ? (root.brand ? 15px : 20px) : self.width / 2;
     animate border-radius { duration: Motion.feedback; }
-    background: touch.has-hover ? Tokens.brand-300 : Tokens.brand-500;
+    background: (touch.has-hover || touch.pressed) ? Tokens.brand-300 : Tokens.brand-500;
     animate background { duration: Motion.feedback; }
     Image {
         source: root.playing ? @image-url("../assets/icons/Pause.svg") : @image-url("../assets/icons/Play.svg");
@@ -265,7 +269,7 @@ export component SeekBar inherits Rectangle {
     private property <float> ratio: root.duration > 0 ? clamp(root.position / root.duration, 0, 1) : 0;
     Rectangle {
         y: (root.height - self.height) / 2;
-        height: touch.has-hover ? 8px : 6px;
+        height: (touch.has-hover || touch.pressed) ? 8px : 6px;
         width: 100%;
         border-radius: 3px;
         background: Tokens.neutral-200;
@@ -402,12 +406,12 @@ export component MobileNavItem inherits Rectangle {
         width: min(52px, root.width - 4px); height: 28px;
         x: (root.width - self.width) / 2; y: root.height < 60px ? 1px : 7px;
         border-radius: 16px;
-        background: root.selected ? Tokens.primary-container : transparent;
+        background: touch.pressed ? Tokens.neutral-150 : transparent;
         animate background { duration: Motion.feedback; }
         Image { source: root.icon; width: 20px; height: 20px; x: (parent.width - 20px) / 2; y: 4px; colorize: root.selected ? Tokens.brand-300 : Tokens.ink-200; }
     }
     Text { text: root.text; x: 1px; y: root.height < 60px ? 29px : 39px; width: root.width - 2px; height: 18px; font-size: 10px; font-weight: root.selected ? 700 : 500; color: root.selected ? Tokens.brand-300 : Tokens.ink-200; horizontal-alignment: center; overflow: elide; }
-    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
     accessible-role: button; accessible-label: text;
     accessible-action-default => { root.clicked(); }
 }
@@ -419,10 +423,10 @@ export component SettingsTile inherits Rectangle {
     callback clicked();
     height: 80px;
     border-radius: 24px;
-    background: touch.has-hover ? Tokens.neutral-150 : Tokens.neutral-100;
+    background: (touch.has-hover || touch.pressed) ? Tokens.neutral-150 : transparent;
     HorizontalLayout {
         padding: 16px; spacing: 14px;
-        Rectangle { width: 44px; height: 44px; border-radius: 16px; background: Tokens.primary-container;
+        Rectangle { width: 44px; height: 44px; border-radius: 0px; background: transparent;
             Image { source: root.icon; width: 22px; height: 22px; x: 11px; y: 11px; colorize: Tokens.brand-300; }
         }
         VerticalLayout { alignment: center; spacing: 5px; horizontal-stretch: 1;

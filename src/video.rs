@@ -218,6 +218,7 @@ mod platform {
     #[derive(Default)]
     pub struct Surface {
         view: Option<wry::WebView>,
+        visible: bool,
         retry_at: Option<std::time::Instant>,
         events: Option<std::sync::mpsc::Receiver<serde_json::Value>>,
     }
@@ -303,7 +304,12 @@ mod platform {
                 state["bounds"]["y"] = 0.into();
                 let _ = view
                     .evaluate_script(&format!("window.updateVideo&&window.updateVideo({state})"));
-                let _ = view.set_visible(visible);
+                // ShowWindow(SW_SHOW) is not a playback tick operation.
+                if visible != self.visible
+                    && crate::windows_webview::set_visible(view, visible).is_ok()
+                {
+                    self.visible = visible;
+                }
             }
             if let Some(events) = &self.events {
                 if let Some(sample) = events.try_iter().last() {

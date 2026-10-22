@@ -29,7 +29,7 @@ try {
   assert.notDeepEqual(warm,cool,'dynamic mode follows cover colors');
   assert.notDeepEqual(fading.accent,warm.accent,'palette makes intermediate progress');
   assert.notDeepEqual(fading.accent,cool.accent,'palette does not jump to the destination');
-  await page.mouse.click(90,290);await page.waitForTimeout(650);await page.mouse.click(700,564);await page.waitForTimeout(400);
+  await page.mouse.click(90,290);await page.waitForTimeout(650);await page.mouse.click(700,470);await page.waitForTimeout(400);
   await screenshot('appearance-dynamic');
   await page.mouse.click(700,288);await page.waitForTimeout(1300);assert.equal((await pref()).color_mode,'static');const fixed=await colors();
   await switchTrack();assert.deepEqual(await colors(),fixed,'static mode ignores cover changes');
@@ -48,7 +48,7 @@ try {
   assert.equal((await pref()).color_mode,'static');assert.equal((await pref()).color_hue,210);
   assert.deepEqual((await colors()).surface,selected.surface,'selected colors restore after reload');
   await page.setViewportSize({width:390,height:844});await page.waitForTimeout(400);
-  await page.mouse.click(340,804);await page.waitForTimeout(600);await page.mouse.click(180,560);await page.waitForTimeout(400);
+  await page.mouse.click(340,804);await page.waitForTimeout(600);await page.mouse.click(180,458);await page.waitForTimeout(400);
   await screenshot('appearance-phone');
   assert.deepEqual(errors,[]);
   const report={passed:true,checks:['intermediate color fade','dynamic covers','static covers stay fixed','background-only preserves accent','color selection persists','reload restores mode and color','phone layout','no browser errors']};

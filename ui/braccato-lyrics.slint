@@ -54,7 +54,7 @@ export component BraccatoLyrics inherits Rectangle {
         width: 100%; height: 100%; alignment: center;
         spacing: 16px; padding: 24px;
         Text {
-            text: root.load-error == "" ? I18n.tr("Завантаження Braccato…") : root.load-error;
+            text: root.load-error == "" ? I18n.tr("Завантаження слів…") : root.load-error;
             color: Tokens.ink-200; font-size: 16px;
             horizontal-alignment: center; wrap: word-wrap;
         }
@@ -67,7 +67,7 @@ export component BraccatoLyrics inherits Rectangle {
         width: 100%; height: 100%;
         content-width: self.width;
         content-height: stage ? max(self.height, lyric-layout.preferred-height) : lyric-layout.preferred-height;
-        scrolled => { root.manual-y = self.content-y; root.user-scroll(); }
+        scrolled => { if !resume-guard.running { root.manual-y = self.content-y; root.user-scroll(); } }
         content-y: root.stage ? 0px : root.user-scrolling ? root.manual-y : root.lyrics-timed || root.passive ? -clamp(root.scroll-target * 1px, 0px, max(0px, self.content-height - self.height)) : 0px;
         animate content-y { duration: root.reduced-motion ? 0ms : root.scroll-duration-ms * 1ms; easing: ease-in-out; }
         lyric-layout := VerticalLayout {
@@ -82,12 +82,12 @@ export component BraccatoLyrics inherits Rectangle {
                 height: root.stage && line.stage-role == 0 ? 0px : max(root.mobile ? 86px : 100px, lyric-stack.preferred-height);
                 visible: !root.stage || line.stage-role != 0;
                 // Keep lyric geometry stable while playback advances; animate color only.
-                property <length> text-size: (line.instrumental ? 18 : (root.mobile ? min(root.lyric-size, 26) : max(root.lyric-size, 48))) * 1px;
+                property <length> text-size: (line.instrumental ? 18 : (root.mobile ? clamp(root.lyric-size, 28, 32) : clamp(root.lyric-size, 40, 56))) * 1px;
                 border-radius: 16px;
                 background: lyric-touch.has-hover ? #ffffff08 : transparent;
                 border-width: 0px;
                 border-color: #ffffff1e;
-                opacity: !root.lyrics-timed || self.is-active ? 1.0 : lyric-touch.has-hover ? 0.85 : 0.65;
+                opacity: !root.lyrics-timed || self.is-active ? 1.0 : lyric-touch.has-hover ? 0.95 : 0.85;
                 animate opacity, background { duration: root.reduced-motion ? 0ms : 120ms; }
 
                 lyric-stack := VerticalLayout {
@@ -101,9 +101,9 @@ export component BraccatoLyrics inherits Rectangle {
                     if line.instrumental || line.words.length == 0 || root.disable-richsync || !root.word-timed: Text {
                         horizontal-alignment: root.stage ? center : line.rtl ? right : left;
                         text: line.instrumental ? I18n.tr("♪  Інструментальна пауза") : line.text;
-                        color: lyric-card.is-active ? #ffffff : Tokens.ink-200;
+                        color: !root.lyrics-timed || lyric-card.is-active ? root.lyric-active : root.lyric-inactive;
                         font-size: lyric-card.text-size;
-                        font-weight: lyric-card.is-active ? 800 : root.lyric-weight;
+                        font-weight: root.lyric-weight;
                         wrap: word-wrap;
                     }
                     if !line.instrumental && line.words.length > 0 && !root.disable-richsync && root.word-timed: StyledText {
@@ -153,8 +153,9 @@ export component BraccatoLyrics inherits Rectangle {
         }
 
     }
+    resume-guard := Timer { interval: 1000ms; }
     if root.user-scrolling && !root.external-view: Action {
         x: (root.width - self.width) / 2; y: root.height - 44px;
-        text: I18n.tr("Повернутися до слів"); primary: true; clicked => { root.resume(); }
+        text: I18n.tr("Повернутися до слів"); primary: true; clicked => { resume-guard.start(); root.resume(); }
     }
 }

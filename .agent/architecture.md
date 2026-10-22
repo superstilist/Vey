@@ -158,6 +158,10 @@ through the web host; native lyric background paints the matching surface crop.
 Dominant hue families use circular averaging and artwork chroma; grayscale
 covers keep dynamic themes neutral. Kawarp uses 0.28 opacity, warp 1, 15 blur
 passes, 1.5 saturation, 0.02 dithering and no tint, with bright-cover dimming.
+The browser texture and native fallback add slow clock-driven rotation with
+overscan. Native bilinear sampling lives in `src/ambient_motion.rs`; pause and
+reduced motion stop continuous work. Mobile `TouchStyle` gives shared actions
+44 px targets and pressed feedback without extra persistent backgrounds.
 Theme and texture transitions both use one-second smootherstep fades. Keep
 the native backdrop opacity aligned with Slint; see `docs/APPEARANCE.md`.
 Desktop page surfaces stay mounted in a compass grid; one interruptible camera
@@ -238,3 +242,15 @@ to browser HTML video, Windows WebView2, Android TextureView/MediaPlayer or
 Linux FFmpeg frames. Empty/failing sources reveal the art slot. Android Java
 source is compiled to embedded DEX by `build.rs` (JDK and Android SDK required).
 See `docs/PLAYER-REFINEMENT.md` for contracts, dependencies and validation limits.
+
+Native lyric requests start on track selection independently of audio loading.
+`lyrics_service::fetch_with_progress` publishes normalized alternatives as each
+provider completes, then caches the final quality order. Track generations and
+one cancellable lyric task suppress stale/duplicate requests; explicit imports
+cancel pending requests. Shared auth renewal outlives track cancellation. Cache-write failures must not hide fetched lyrics.
+
+Windows WebView hosts install an idempotent shell pointer/focus bridge on the
+Slint HWND. Pointer presses on the shell restore native keyboard focus; hiding
+a focused child releases it. Do not move focus on playback timers. Silent auth
+hosts must be non-focusable before attachment (Android) and never request focus
+(Windows). Search input stays mounted with stable clear-action geometry.

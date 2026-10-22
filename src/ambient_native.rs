@@ -20,7 +20,7 @@ pub fn install(w: &MainWindow) -> slint::Timer {
     let mut last = Instant::now();
     timer.start(
         slint::TimerMode::Repeated,
-        Duration::from_millis(64),
+        Duration::from_millis(33),
         move || {
             let Some(w) = weak.upgrade() else {
                 return;
@@ -28,7 +28,10 @@ pub fn install(w: &MainWindow) -> slint::Timer {
             let now = Instant::now();
             let elapsed = now.duration_since(last).as_secs_f32().min(0.2);
             last = now;
-            if w.window().is_minimized() || w.get_color_mode() == "static" {
+            if w.window().is_minimized()
+                || w.get_color_mode() == "static"
+                || w.get_ambient_opacity() <= 0.001
+            {
                 return;
             }
             let next = w.get_current_art();
@@ -54,12 +57,17 @@ pub fn install(w: &MainWindow) -> slint::Timer {
                     from = shown.clone();
                     started = now;
                     art = next;
-                    options = config;
+                    options = config.clone();
                     settled = false;
                 }
             }
-            if target.is_empty() {
-                return;
+            if target.is_empty() || (empty && config != options) {
+                let fallback = image::RgbaImage::from_fn(64, 64, |x, y| {
+                    image::Rgba([(40 + x * 2) as u8, (45 + y) as u8, (110 + y * 2) as u8, 255])
+                });
+                target = prepare(&fallback, &config);
+                options = config.clone();
+                started = now;
             }
             let reduced = w.get_lyrics_reduced_motion();
             if reduced != last_reduced {
@@ -79,26 +87,16 @@ pub fn install(w: &MainWindow) -> slint::Timer {
                 phase += elapsed * 0.24;
             }
             let mix = t * t * t * (t * (t * 6. - 15.) + 10.);
-            shown.resize(target.len(), 0);
-            for y in 0..H as usize {
-                let shift = if !reduced {
-                    ((y as f32 / 24. + phase).sin() * options.warp * 10.) as i32
-                } else {
-                    0
-                };
-                for x in 0..W as usize {
-                    let sample = (x as i32 + shift).clamp(0, W as i32 - 1) as usize;
-                    for c in 0..4 {
-                        let i = (y * W as usize + x) * 4 + c;
-                        let value = target[(y * W as usize + sample) * 4 + c];
-                        shown[i] = if from.len() == target.len() && t < 1. {
-                            (from[i] as f32 + (value as f32 - from[i] as f32) * mix).round() as u8
-                        } else {
-                            value
-                        };
-                    }
-                }
-            }
+            crate::ambient_motion::compose(
+                &target,
+                &from,
+                &mut shown,
+                (W as usize, H as usize),
+                phase,
+                options.warp,
+                reduced,
+                mix,
+            );
             settled = !moving && t >= 1.;
             w.set_ambient_frame(slint::Image::from_rgba8(
                 slint::SharedPixelBuffer::clone_from_slice(&shown, W, H),

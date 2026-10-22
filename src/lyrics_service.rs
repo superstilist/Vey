@@ -148,6 +148,13 @@ static AUTH_REFRESH: tokio::sync::Mutex<RefreshResult> =
         result: None,
     });
 async fn renew_jwt(rejected: Option<String>) -> Result<String, String> {
+    // Track cancellation must not release the shared renewal lock while a
+    // browser challenge is still running. Other tracks reuse that one renewal.
+    tokio::spawn(renew_jwt_shared(rejected))
+        .await
+        .map_err(|_| "Не вдалося перевірити доступ до слів".to_owned())?
+}
+async fn renew_jwt_shared(rejected: Option<String>) -> Result<String, String> {
     let requested = std::time::Instant::now();
     let mut refresh = AUTH_REFRESH.lock().await;
     let mut cached = JwtCache::load();
@@ -403,6 +410,18 @@ pub async fn fetch(
     refresh: bool,
     jwt: Option<String>,
 ) -> Result<Vec<LyricsAlternative>, String> {
+    fetch_with_progress(track, provider, refresh, jwt, |_| {}).await
+}
+
+/// Publish usable results as providers finish; authentication cannot hold back
+/// public lyrics, and the final quality order still includes every provider.
+pub async fn fetch_with_progress(
+    track: &Track,
+    provider: &str,
+    refresh: bool,
+    jwt: Option<String>,
+    progress: impl FnMut(Vec<LyricsAlternative>) + Send,
+) -> Result<Vec<LyricsAlternative>, String> {
     if !refresh {
         if let Some(c) = load_cache(track) {
             return Ok(c);
@@ -429,49 +448,35 @@ pub async fn fetch(
         })
         .as_ref()
         .map_err(Clone::clone)?;
-    let mut found = Vec::new();
-    let mut errors = Vec::new();
-    let (primary, unison, lrclib) = tokio::join!(
-        async {
-            if provider == "auto" || provider == "dacubeking" {
-                fetch_primary(track, jwt).await
-            } else {
-                (vec![], vec![])
-            }
-        },
-        async {
-            if provider == "auto" || provider == "unison" {
-                fetch_unison(track, &client).await
-            } else {
-                (vec![], vec![])
-            }
-        },
-        async {
-            if provider == "auto" || provider == "lrclib" {
-                fetch_lrclib(track, &client).await
-            } else {
-                (vec![], vec![])
-            }
-        },
-    );
-    for (alternatives, failures) in [primary, unison, lrclib] {
-        found.extend(alternatives);
-        errors.extend(failures);
-    }
+    let primary = async {
+        if provider == "auto" || provider == "dacubeking" {
+            fetch_primary(track, jwt).await
+        } else {
+            (vec![], vec![])
+        }
+    };
+    let unison = async {
+        if provider == "auto" || provider == "unison" {
+            fetch_unison(track, &client).await
+        } else {
+            (vec![], vec![])
+        }
+    };
+    let lrclib = async {
+        if provider == "auto" || provider == "lrclib" {
+            fetch_lrclib(track, &client).await
+        } else {
+            (vec![], vec![])
+        }
+    };
+    let (mut found, mut errors) =
+        collect_provider_results(primary, unison, lrclib, track.duration_secs, progress).await;
     if found.is_empty() && (provider == "auto" || provider == "youtube") {
         let (alternatives, failures) = fetch_captions(track).await;
         found.extend(alternatives);
         errors.extend(failures);
     }
-    for alt in &mut found {
-        if alt.sync_type != LyricsSyncType::Plain {
-            complete_timing(
-                &mut alt.lyrics,
-                (track.duration_secs.max(0.) * 1000.) as u64,
-            );
-        }
-    }
-    crate::braccato::providers::normalize_alternatives(&mut found);
+    prepare_alternatives(&mut found, track.duration_secs);
     if found.is_empty() {
         return Err(if errors.is_empty() {
             "Слова не знайдено. Можна вставити власні.".into()
@@ -479,8 +484,49 @@ pub async fn fetch(
             errors.join(" · ")
         });
     }
-    save_cache(track, &found)?;
+    // A full/read-only cache must not discard successfully downloaded lyrics.
+    let _ = save_cache(track, &found);
     Ok(found)
+}
+
+type ProviderResult = (Vec<LyricsAlternative>, Vec<String>);
+
+async fn collect_provider_results(
+    primary: impl std::future::Future<Output = ProviderResult>,
+    unison: impl std::future::Future<Output = ProviderResult>,
+    lrclib: impl std::future::Future<Output = ProviderResult>,
+    duration_secs: f64,
+    mut progress: impl FnMut(Vec<LyricsAlternative>),
+) -> ProviderResult {
+    let mut found = Vec::new();
+    let mut errors = Vec::new();
+    tokio::pin!(primary, unison, lrclib);
+    let mut done = [false; 3];
+    while done.iter().any(|finished| !finished) {
+        let (index, (alternatives, failures)) = tokio::select! {
+            value = &mut primary, if !done[0] => (0, value),
+            value = &mut unison, if !done[1] => (1, value),
+            value = &mut lrclib, if !done[2] => (2, value),
+        };
+        done[index] = true;
+        errors.extend(failures);
+        if !alternatives.is_empty() {
+            found.extend(alternatives);
+            prepare_alternatives(&mut found, duration_secs);
+            progress(found.clone());
+        }
+    }
+    (found, errors)
+}
+
+fn prepare_alternatives(found: &mut Vec<LyricsAlternative>, duration_secs: f64) {
+    for alt in found.iter_mut() {
+        alt.sync_type = crate::braccato::effective_sync_type(alt);
+        if alt.sync_type != LyricsSyncType::Plain {
+            complete_timing(&mut alt.lyrics, (duration_secs.max(0.) * 1000.) as u64);
+        }
+    }
+    crate::braccato::providers::normalize_alternatives(found);
 }
 
 async fn fetch_primary(
@@ -708,6 +754,39 @@ async fn fetch_captions(track: &Track) -> (Vec<LyricsAlternative>, Vec<String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn public_lyrics_arrive_before_auth_and_upgrade_when_ready() {
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let mut release = Some(release);
+        let primary = async {
+            gate.await.unwrap();
+            (
+                vec![alternative("primary", "[00:01.00]Timed line").unwrap()],
+                vec![],
+            )
+        };
+        let public = async { (vec![alternative("public", "Plain line").unwrap()], vec![]) };
+        let unavailable = async { (vec![], vec!["unavailable".into()]) };
+        let mut modes = Vec::new();
+        let (found, errors) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            collect_provider_results(primary, public, unavailable, 10., |alts| {
+                modes.push(alts[0].sync_type);
+                // Authentication can only finish after the public result is shown.
+                if let Some(release) = release.take() {
+                    release.send(()).unwrap();
+                }
+            }),
+        )
+        .await
+        .expect("public lyrics must not wait for authentication");
+        assert_eq!(modes, [LyricsSyncType::Plain, LyricsSyncType::Synced]);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].provider, "primary");
+        assert_eq!(found[0].lyrics.lines[0].duration_ms, 9000);
+        assert_eq!(errors, ["unavailable"]);
+    }
+
     #[test]
     fn refresh_result_shares_waiters_and_cools_down_failures() {
         let started = std::time::Instant::now();

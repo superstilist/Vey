@@ -64,14 +64,14 @@ try {
   assert.ok(await page.evaluate(()=>JSON.parse(localStorage.getItem('playervf.rust.v1')).tracks.some(t=>t.title==='Phone preview')),'local file import updates the library');
   await shot('48-phone-library');
   await tapTab(4);await nav('settings','library');await tapTab(4);await nav('settings');
-  await page.touchscreen.tap(180,372);await nav('settings','lyrics');
-  await page.touchscreen.tap(180,304);await page.waitForTimeout(100);
+  await page.touchscreen.tap(180,466);await nav('settings','appearance');
+  await page.touchscreen.tap(180,428);await page.waitForTimeout(100);
   assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('playervf.rust.v1')).settings.lyrics_reduced_motion),true,'reduced motion setting persists');
-  await page.touchscreen.tap(180,304);await page.waitForTimeout(100);
+  await page.touchscreen.tap(180,428);await page.waitForTimeout(100);
   await page.touchscreen.tap(46,106);await nav('settings');
   for(const [width,height] of [[320,640],[360,740],[430,932]]){
     await page.setViewportSize({width,height});await page.waitForTimeout(450);
-    await page.touchscreen.tap(140,466);await nav('settings','data');
+    await page.touchscreen.tap(140,372);await nav('settings','data');
     await shot(`49-phone-data-${width}`);
     await page.mouse.move(width/2,440);await page.mouse.wheel(0,500);await page.waitForTimeout(200);
     await shot(`50-phone-data-bottom-${width}`);
@@ -79,10 +79,10 @@ try {
     const clip={x:8,y:64,width:width-16,height:height-224};
     const underlay=await page.screenshot({clip});
     const cameraCount=await frame.evaluate(()=>window.cameras.length);
-    await page.touchscreen.tap(width/2,height-116);await nav('lyrics');
+    await page.touchscreen.tap(width/2,height-92);await nav('lyrics');
     assert.equal(await frame.evaluate(()=>window.cameras.length),cameraCount,'mobile player opens without a page camera transition');
     await shot(`51-phone-player-overlay-${width}`);
-    await page.touchscreen.tap(44,38);await nav('settings','data');
+    await page.touchscreen.tap(44,68);await nav('settings','data');
     assert.ok(underlay.equals(await page.screenshot({clip})),'closing the overlay preserves the scrolled settings page exactly');
     assert.equal(await frame.evaluate(()=>window.cameras.length),cameraCount,'closing the mobile player does not move the page');
     if(width===320) {
@@ -109,6 +109,7 @@ try {
   await writeFile(new URL('../../docs/phone-check.json',import.meta.url),JSON.stringify(report,null,2)+'\n');
   console.log(JSON.stringify(report,null,2));
 } catch(error) {
+  console.error(error);
   if(page){await page.screenshot({path:fileURLToPath(new URL('../../docs/screenshots/phone-test-failure.png',import.meta.url))});console.error(await page.evaluate(()=>history.state));}
   throw error;
 } finally {await browser.close();}

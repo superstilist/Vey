@@ -26,6 +26,12 @@ evidence; **documentation** = inconsistent descriptions. Suggested priorities in
 
 These are historical fixes, not newly discovered open bugs:
 
+- 2026-10-22 search input: native Windows WebView-to-shell clicks left Win32
+  keyboard focus in the child. Pointer focus handoff and hidden-child release
+  now have a real WebView regression fixture. Shared search input and Android
+  silent-auth focus handling were hardened; device IME acceptance remains open.
+  See `docs/SEARCH-INPUT.md`.
+
 - 2026-10-21 syllable timing: real adjacent timed parts such as Sin + gle now
   retain RichSync through import/provider/cache display, native rows and the
   Braccato document. Lead/backing/romanization are checked independently; no

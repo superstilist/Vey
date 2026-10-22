@@ -24,6 +24,7 @@ public final class VeyBridge {
     private static final ConcurrentLinkedQueue<String> messages = new ConcurrentLinkedQueue<>();
     private static WebView auth;
     private static Dialog dialog;
+    private static java.lang.ref.WeakReference<View> authReturnFocus = new java.lang.ref.WeakReference<>(null);
     private static volatile int authSession;
     private static TextureView texture;
     private static MediaPlayer player;
@@ -51,6 +52,7 @@ public final class VeyBridge {
     private static void challenge(Activity activity,JSONObject request) throws Exception {
         closeAuth(); messages.clear();
         final int session=authSession;
+        authReturnFocus=new java.lang.ref.WeakReference<>(activity.getCurrentFocus());
         auth=new WebView(activity);
         WebSettings settings=auth.getSettings();
         settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
@@ -77,8 +79,11 @@ public final class VeyBridge {
         if(request.optBoolean("silent")) {
             float density=activity.getResources().getDisplayMetrics().density;
             FrameLayout.LayoutParams params=new FrameLayout.LayoutParams((int)(480*density),(int)(360*density));
+            auth.setTranslationX(-10000); auth.setAlpha(0.01f);
+            auth.setFocusable(false); auth.setFocusableInTouchMode(false);
+            auth.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
+            auth.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
             ((ViewGroup)activity.findViewById(android.R.id.content)).addView(auth,params);
-            auth.setTranslationX(-10000); auth.setAlpha(0.01f); auth.setFocusable(false);
         } else {
             dialog=new Dialog(activity); dialog.setContentView(auth);
             dialog.setOnCancelListener(d->{messages.offer("{\"type\":\"turnstile-error\",\"error\":\"cancelled\"}");closeAuth();});
@@ -88,9 +93,16 @@ public final class VeyBridge {
         auth.loadDataWithBaseURL("https://lyrics.api.dacubeking.com/",bootstrap+request.getString("html"),"text/html","UTF-8",null);
     }
     private static void closeAuth() {
+        final boolean restore=auth!=null&&auth.hasFocus();
+        final View previous=authReturnFocus.get();
+        authReturnFocus.clear();
         authSession++;
         if(dialog!=null){dialog.dismiss();dialog=null;}
         if(auth!=null){if(auth.getParent() instanceof ViewGroup)((ViewGroup)auth.getParent()).removeView(auth);auth.removeJavascriptInterface("VeyAuth");auth.stopLoading();auth.destroy();auth=null;}
+        if(restore&&previous!=null)previous.post(()->{
+            View current=previous.getRootView().findFocus();
+            if(previous.isAttachedToWindow()&&previous.hasWindowFocus()&&(current==null||current==previous||current==previous.getRootView()))previous.requestFocus();
+        });
     }
     private static void closeVideo() {
         prepared=false;

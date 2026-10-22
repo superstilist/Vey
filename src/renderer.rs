@@ -52,7 +52,9 @@ pub fn install(w: &MainWindow) {
     });
     let state = view.clone();
     w.on_lyric_resume(move || {
-        state.borrow_mut().scroll.resume();
+        let mut view = state.borrow_mut();
+        view.scroll.resume();
+        view.geometry_dirty = true;
     });
     let weak = w.as_weak();
     let owner: Rc<RefCell<Option<slint::Timer>>> = Rc::new(RefCell::new(None));

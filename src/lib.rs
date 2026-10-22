@@ -1,3 +1,5 @@
+#[cfg(any(test, all(not(target_arch = "wasm32"), not(target_os = "windows"))))]
+mod ambient_motion;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
 mod ambient_native;
 #[cfg(not(target_arch = "wasm32"))]

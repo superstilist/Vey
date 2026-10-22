@@ -1,5 +1,5 @@
 //! Native Slint layout smoke with synthetic Android bars/cutouts; no device claim.
-use playervf::{MainWindow, PlaylistRow, TrackRow};
+use playervf::{LyricRow, MainWindow, PlaylistRow, TrackRow};
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::{cell::Cell, rc::Rc, time::Duration};
 
@@ -43,14 +43,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_library_page_tracks(rows.clone());
     window.set_home_page_tracks(rows.clone());
     window.set_explore_page_tracks(rows.clone());
+    window.set_search_page_tracks(rows.clone());
     window.set_liked_page_tracks(rows);
+    window.set_lyric_lines(
+        Rc::new(VecModel::from(vec![
+            LyricRow {
+                text: "Коли місто засинає".into(),
+                active: true,
+                start_ms: 0,
+                end_ms: 4000,
+                ..Default::default()
+            },
+            LyricRow {
+                text: "Музика залишається з нами".into(),
+                start_ms: 4000,
+                end_ms: 8000,
+                ..Default::default()
+            },
+            LyricRow {
+                text: "І веде крізь ніч".into(),
+                start_ms: 8000,
+                end_ms: 12000,
+                ..Default::default()
+            },
+        ]))
+        .into(),
+    );
+    window.set_lyrics_timed(true);
+    window.set_active_lyric_index(0);
+    window.set_duration(180.);
+    window.set_position(2.);
     let cases = [
         ("home", "home", "", 390., 844., 32., 24., 0., 0.),
         ("library", "library", "", 390., 844., 32., 24., 0., 0.),
         (
             "settings", "settings", "library", 320., 640., 40., 32., 0., 0.,
         ),
+        ("search", "search", "", 390., 844., 32., 24., 0., 0.),
+        ("search-narrow", "search", "", 320., 640., 40., 32., 0., 0.),
+        ("search-wide", "search", "", 430., 932., 32., 24., 0., 0.),
+        (
+            "search-landscape",
+            "search",
+            "",
+            844.,
+            390.,
+            0.,
+            24.,
+            44.,
+            0.,
+        ),
         ("player", "lyrics", "", 390., 844., 32., 24., 0., 0.),
+        ("player-narrow", "lyrics", "", 320., 640., 40., 32., 0., 0.),
+        ("player-desktop", "lyrics", "", 1440., 900., 0., 0., 0., 0.),
         ("dialog", "library", "", 320., 640., 40., 32., 0., 0.),
         ("landscape", "library", "", 844., 390., 0., 24., 44., 0.),
         (
@@ -115,6 +160,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .global::<playervf::I18n>()
                     .set_language(if name == "language" { "ja" } else { "uk" }.into());
                 window.set_dialog("".into());
+                window.set_search_query(
+                    if view == "search" {
+                        "Вечірня музика"
+                    } else {
+                        ""
+                    }
+                    .into(),
+                );
                 window.set_safe_top(top);
                 window.set_safe_bottom(bottom);
                 window.set_safe_left(left);
@@ -167,6 +220,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "incorrect responsive mode: {name}"
                 );
                 let image = window.window().take_snapshot().unwrap();
+                if window.get_mobile() && view != "lyrics" && window.get_dialog().is_empty() {
+                    let reserve = if height - top - bottom < 500. {
+                        112.
+                    } else {
+                        120.
+                    };
+                    let dock_top = height - bottom - reserve;
+                    let scale = window.window().scale_factor();
+                    let pixel = |y: f32| {
+                        let x = ((left + 10.) * scale).round() as usize;
+                        let y = (y * scale).round() as usize;
+                        let offset = (y * image.width() as usize + x) * 4;
+                        image.as_bytes()[offset..offset + 4].to_vec()
+                    };
+                    let color = window.global::<playervf::Tokens>().get_neutral_100();
+                    let expected = vec![color.red(), color.green(), color.blue(), color.alpha()];
+                    assert_eq!(
+                        pixel(dock_top + 54.),
+                        expected,
+                        "transport must fill the joined dock: {name}"
+                    );
+                    assert_eq!(
+                        pixel(dock_top + 58.),
+                        expected,
+                        "navigation must fill the joined dock: {name}"
+                    );
+                }
                 std::fs::create_dir_all("docs/screenshots").unwrap();
                 image::save_buffer(
                     format!("docs/screenshots/android-insets-{name}.png"),

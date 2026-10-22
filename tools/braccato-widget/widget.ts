@@ -162,7 +162,7 @@ export function update(next: any) {
   const layout = state.stage && state.timed !== false ? 'stage' : 'scroll';
   if (view.layout !== layout) view.layout = layout;
   const requestedSize = Number.isFinite(state.size) ? state.size : 48;
-  const size = state.mobile ? Math.min(Math.max(requestedSize, 22), 26) : Math.max(requestedSize, 48);
+  const size = state.mobile ? Math.min(Math.max(requestedSize, 28), 32) : Math.min(Math.max(requestedSize, 40), 56);
   const disableRichsync = !!state.disableRichsync;
   const config = JSON.stringify([size, state.reduced, state.passiveSeconds, state.scrollRatio, state.lookahead, state.scrollDuration, disableRichsync, state.richsyncOffset, state.lineOffset]);
   if (config !== themeKey) {

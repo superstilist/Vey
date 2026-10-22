@@ -16,6 +16,7 @@
     "test:stability": "node stability-test.mjs",
     "test:material": "node material-test.mjs",
     "test:phone": "node phone-test.mjs",
+    "test:search": "node search-input-test.mjs",
     "test:playlists": "node playlist-test.mjs",
     "test:appearance": "node appearance-test.mjs",
     "test:video": "node video-test.mjs",

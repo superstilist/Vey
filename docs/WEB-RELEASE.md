@@ -1,4 +1,4 @@
-# Vey 0.1.15 — Web
+# Vey 0.1.16 — Web
 
 This archive contains the optimized WebAssembly application, JavaScript bindings,
 original Braccato widget, styles and logos. Extract it before use. Serve `web/`

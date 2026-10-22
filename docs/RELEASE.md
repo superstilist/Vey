@@ -1,4 +1,13 @@
-# Vey 0.1.15
+# Vey 0.1.16
+
+This release fixes search focus during playback, refines compact mobile navigation,
+and improves automatic lyrics and return-to-current-line scrolling. The open dark
+interface includes restrained colors, larger mobile controls and rotating artwork
+backgrounds. Appearance includes Calm and Expressive background presets.
+
+Android packages passed packaging checks; physical-device acceptance remains
+unverified. Browser and native layout evidence is recorded in PHONE-VERIFICATION.md.
+
 
 ## Downloads
 
@@ -20,7 +29,7 @@ remembered lyric providers and variants; automatic translation and romanization;
 and synchronized lyric display. Translation and reading controls remain in the
 player tools menu. Untimed generated lyrics do not claim word-level timing.
 
-Windows, Linux, Android and Web packages are built from tag v0.1.15. Linux
+Windows, Linux, Android and Web packages are built from tag v0.1.16. Linux
 packages target Mint 22.3 / Ubuntu 24.04 x64. Android APKs use the existing
 Vey development signing key to permit compatible updates. Web assets require
 HTTP(S); full online playback and lyric services need a same-origin Vey backend.

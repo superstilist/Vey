@@ -100,19 +100,19 @@ fn palette(h: f32) -> Palette {
         color(h, 0.50, 0.84),
         color(h, 0.28, 0.53),
         color(h, 0.45, 0.09),
-        color(h, 0.25, 0.22),
-        color(h + 35., 0.10, 0.22),
-        color(h + 115., 0.13, 0.23),
-        color(h, 0.10, 0.065),
-        color(h, 0.11, 0.09),
-        color(h, 0.11, 0.12),
-        color(h, 0.11, 0.16),
-        color(h, 0.10, 0.21),
-        color(h, 0.08, 0.30),
-        color(h, 0.18, 0.92),
-        color(h, 0.14, 0.83),
-        color(h, 0.12, 0.74),
-        color(h, 0.10, 0.64),
+        color(h, 0.15, 0.18),
+        color(h, 0.02, 0.16),
+        color(h, 0.02, 0.16),
+        color(h, 0.02, 0.065),
+        color(h, 0.02, 0.09),
+        color(h, 0.02, 0.12),
+        color(h, 0.02, 0.16),
+        color(h, 0.02, 0.21),
+        color(h, 0.02, 0.30),
+        color(h, 0.02, 0.94),
+        color(h, 0.02, 0.83),
+        color(h, 0.02, 0.74),
+        color(h, 0.02, 0.64),
     ])
 }
 fn target_palette(mode: ColorMode, seed: f32, cover: Option<f32>) -> Palette {
@@ -336,10 +336,10 @@ mod tests {
         assert!((hue(&[255, 128, 0, 255]) - 30.).abs() < 1.);
         for h in (0..360).step_by(15) {
             let h = h as f32;
-            let text =
-                (luminance(rgb(h, 0.45, 0.73)) + 0.05) / (luminance(rgb(h, 0.45, 0.09)) + 0.05);
-            let surface =
-                (luminance(rgb(h, 0.18, 0.92)) + 0.05) / (luminance(rgb(h, 0.25, 0.22)) + 0.05);
+            let roles = palette(h).0;
+            let lum = |c: slint::Color| luminance([c.red(), c.green(), c.blue()]);
+            let text = (lum(roles[0]) + 0.05) / (lum(roles[3]) + 0.05);
+            let surface = (lum(roles[13]) + 0.05) / (lum(roles[4]) + 0.05);
             assert!(text >= 4.5 && surface >= 4.5, "hue {h}: {text}, {surface}");
         }
     }

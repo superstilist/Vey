@@ -12,6 +12,10 @@ let pixels = new Uint8Array(width * height * 4);
 let upright = new Uint8Array(pixels.length);
 const warped = new Uint8Array(pixels.length);
 let renderedTime = NaN;
+let renderedReduced = false;
+let motionIntensity = 1;
+let rotationSource: HTMLCanvasElement;
+let rotationTarget: HTMLCanvasElement;
 let encodedFrame = '';
 let frameSettled = false;
 let revision = 0;
@@ -33,12 +37,17 @@ export function renderAmbient(state: any, send: (message: object) => void) {
       canvas.width = width; canvas.height = height;
       renderer = new Kawarp(canvas, { warpIntensity: 1, blurPasses: 15,
         saturation: 1.5, dithering: 0.02, tintIntensity: 0, transitionDuration: 0, scale: 1.15 });
+      rotationSource = document.createElement('canvas');
+      rotationTarget = document.createElement('canvas');
+      rotationSource.width = rotationTarget.width = width;
+      rotationSource.height = rotationTarget.height = height;
       renderer.loadGradient(['#273c59', '#73516d', '#ae785b', '#243848']);
     }
     const nextOptions = JSON.stringify(state.options || {});
     if (nextOptions !== optionsKey) {
       const options = state.options || {};
       renderer.setOptions({warpIntensity: options.warpIntensity ?? 1, blurPasses: Math.round(options.blurPasses ?? 15), saturation: options.saturation ?? 1.5, dithering: options.dithering ?? 0.02});
+      motionIntensity = Math.max(0, Math.min(1, options.warpIntensity ?? 1));
       dimBright = options.dimBright !== false;
       optionsKey = nextOptions;
       pendingSource = lastSource; pendingAt = 0; renderedTime = NaN; frameSettled = false;
@@ -77,16 +86,30 @@ export function renderAmbient(state: any, send: (message: object) => void) {
     if (state.reduced) morphStarted = -Infinity;
     // Paused palette morphs share one GPU target. Keep it separate from the
     // displayed blend so intermediate frames never require another readback.
-    const targetChanged = renderedTime !== state.time;
+    const time = state.reduced ? 0 : state.time;
+    const reduced = state.reduced === true;
+    const targetChanged = renderedTime !== time || renderedReduced !== reduced;
     if (targetChanged) {
-      renderer.renderFrame(state.time);
+      renderer.renderFrame(time);
       const gl = canvas.getContext('webgl')!;
       gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       const stride = width * 4;
       for (let y = 0; y < height; y++) {
         warped.set(pixels.subarray(y * stride, (y + 1) * stride), (height - y - 1) * stride);
       }
-      renderedTime = state.time;
+      if (!reduced && motionIntensity > 0) {
+        // Rotate the small Kawarp texture in normalized space. Overscan keeps
+        // the portrait and landscape corners covered for the entire turn.
+        rotationSource.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(warped.buffer), width, height), 0, 0);
+        const context = rotationTarget.getContext('2d', {willReadFrequently:true})!;
+        context.setTransform(width, 0, 0, height, width / 2, height / 2);
+        context.rotate(-time * 0.12 * motionIntensity);
+        context.scale(1 / 0.68, 1 / 0.68);
+        context.drawImage(rotationSource, -0.5, -0.5, 1, 1);
+        warped.set(context.getImageData(0, 0, width, height).data);
+      }
+      renderedTime = time;
+      renderedReduced = reduced;
     }
     const t = Math.min(1, Math.max(0, (now - morphStarted) / Math.max(1,state.duration ?? 1000)));
     if (!targetChanged && t === 1 && frameSettled) {

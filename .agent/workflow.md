@@ -26,6 +26,7 @@ Run commands from the project root in PowerShell unless stated otherwise.
 | Browser backend | `cargo run --bin vey -- --web-server` (http://127.0.0.1:4173) |
 | Native fixture screenshots | `cargo run --bin vey -- --screenshots` |
 | Android bars/cutout layout fixtures (native simulation) | `cargo run --locked --example android_layout` |
+| Windows search focus regression (generated video fixture required) | `cargo run --locked --example search_input` |
 | Volume fill pixel regression | `cargo run --locked --example volume_fill` |
 | Output-device smoke | `cargo test --test native_services native_audio -- --ignored` |
 | Live lyric auth check | `cargo run --bin vey -- --lyrics-auth-check` |
@@ -37,7 +38,7 @@ Widget commands run in `tools/braccato-widget/`: `npm ci` for dependency setup,
 server, then in another terminal `npm test` or the relevant `npm run test:app`,
 `test:clock`, `test:ambient`, `test:transitions`, `test:recovery`,
 `test:stability`, `test:material`, `test:appearance`, `test:phone`, `test:playlists`, `test:sync`,
-`test:video`, `test:syllables` or `test:refinement` script. Syllable checks run a
+`test:video`, `test:search`, `test:syllables` or `test:refinement` script. Syllable checks run a
 Rust example to generate the actual display document. Video/refinement checks generate a
 small fixture with the FFmpeg executable; run `test:video` first. Check script setup
 before running; application checks can also require the built WASM/backend.

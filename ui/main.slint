@@ -14,7 +14,7 @@ export { Motion } from "motion.slint";
 export { Tokens } from "tokens.slint";
 export { CoverBadges } from "controls.slint";
 import { StageNavigator } from "stage-navigator.slint";
-import { CoverBadges, Action, SongRow, NavItem, Artwork, Transport, SeekBar, TonalSlider, MobileNavItem, SettingsTile, PlaylistChoice } from "controls.slint";
+import { TouchStyle, CoverBadges, Action, SongRow, NavItem, Artwork, Transport, SeekBar, TonalSlider, MobileNavItem, SettingsTile, PlaylistChoice } from "controls.slint";
 
 export struct TrackRow { title: string, artist: string, album: string, duration: string, path: string, art: image, liked: bool, downloaded: bool, downloading: bool }
 export struct PlaylistRow { id: string, name: string, detail: string }
@@ -22,7 +22,7 @@ export struct PlaylistRow { id: string, name: string, detail: string }
 
 export component MainWindow inherits Window {
     title: "Vey";
-    init => { Palette.color-scheme = ColorScheme.dark; }
+    init => { Palette.color-scheme = ColorScheme.dark; TouchStyle.mobile = root.mobile; }
     icon: @image-url("../assets/vey-logo-transparent.png");
     preferred-width: 1440px;
     preferred-height: 900px;
@@ -111,6 +111,7 @@ export component MainWindow inherits Window {
         else if root.active-view == "settings" { root.settings-page-tracks = root.tracks; }
     }
     changed active-view => {
+        root.search-focus-pending = root.active-view == "search";
         root.player-tools = false;
         if root.mobile && root.active-view == "lyrics" {
             root.camera-target-x = root.page-column(root.mobile-underlay);
@@ -169,6 +170,12 @@ export component MainWindow inherits Window {
     }
     Timer { interval: Motion.panel; running: root.settings-phase == 1; triggered => { root.commit-settings(); } }
     in-out property <string> search-query;
+    private property <bool> search-focus-pending;
+    Timer {
+        interval: 16ms;
+        running: root.search-focus-pending && !root.immersive && root.dialog == "";
+        triggered => { root.search-focus-pending = false; search-input.focus(); }
+    }
     in-out property <string> current-track-key;
     in-out property <string> current-video-id;
     in-out property <string> current-clip-video-id;
@@ -311,6 +318,9 @@ export component MainWindow inherits Window {
         return floor(max(0, seconds) / 60) + ":" + (Math.mod(floor(max(0, seconds)), 60) < 10 ? "0" : "") + Math.mod(floor(max(0, seconds)), 60);
     }
 
+    private property <length> bottom-dock-height: root.mobile ? (root.compact-height ? 104px : 112px) : 72px;
+    private property <length> bottom-reserve: root.bottom-dock-height + 8px;
+    private property <length> page-viewport-height: root.height - (root.compact-height ? 52px : 64px) - root.bottom-reserve - (root.compact-height ? 4px : 8px) - (root.safe-top + root.safe-bottom) * 1px;
     private property <bool> compact-height: root.height - (root.safe-top + root.safe-bottom) * 1px < 500px;
     in property <bool> android-platform: false;
     in-out property <bool> mobile: root.width - (root.safe-left + root.safe-right) * 1px < 800px || (root.android-platform && root.height < 600px);
@@ -321,6 +331,7 @@ export component MainWindow inherits Window {
     in-out property <float> safe-left: root.safe-area-insets.left / 1px;
     in-out property <float> safe-right: root.safe-area-insets.right / 1px;
     changed mobile => {
+        TouchStyle.mobile = root.mobile;
         if root.active-view == "lyrics" {
             if root.mobile {
                 root.camera-target-x = root.page-column(root.mobile-underlay);
@@ -390,23 +401,23 @@ export component MainWindow inherits Window {
 
     // Top Navigation Bar
     Rectangle {
-        x: root.safe-left * 1px; y: root.safe-top * 1px; height: 64px; width: root.width - (root.safe-left + root.safe-right) * 1px;
+        x: root.safe-left * 1px; y: root.safe-top * 1px; height: root.compact-height ? 52px : 64px; width: root.width - (root.safe-left + root.safe-right) * 1px;
         visible: !root.immersive;
         background: Tokens.neutral-0;
 
         HorizontalLayout {
             x: 0px; y: 0px; width: 100%; height: 100%;
-            padding-left: 16px; padding-right: 16px; padding-top: 10px; padding-bottom: 10px;
+            padding-left: root.mobile ? 12px : 16px; padding-right: root.mobile ? 12px : 16px; padding-top: root.compact-height ? 4px : 10px; padding-bottom: root.compact-height ? 4px : 10px;
             spacing: 12px;
             if !root.mobile: Action {
                 icon: @image-url("../assets/icons/Menu.svg");
                 label: I18n.tr("Меню");
                 clicked => { root.sidebar-collapsed = !root.sidebar-collapsed; }
             }
-            HorizontalLayout {
+            if !root.mobile: HorizontalLayout {
                 spacing: 10px;
                 alignment: start;
-                width: root.mobile ? 32px : (root.sidebar-collapsed ? 110px : 184px);
+                width: root.sidebar-collapsed ? 110px : 184px;
                 VerticalLayout {
                     alignment: center;
                     Rectangle {
@@ -428,14 +439,25 @@ export component MainWindow inherits Window {
             Rectangle {
                 horizontal-stretch: 1;
                 max-width: root.mobile ? root.width : 560px;
-                height: 42px;
-                border-radius: 21px;
+                forward-focus: search-input;
+                TouchArea {
+                    mouse-cursor: text;
+                    clicked => { search-input.focus(); }
+                }
+                height: root.mobile ? 44px : 42px;
+                border-radius: root.mobile ? 16px : 21px;
                 background: Tokens.neutral-100;
                 border-width: 0px;
                 border-color: #ffffff18;
                 HorizontalLayout {
-                    padding-left: 16px; padding-right: 6px; spacing: 10px;
-                    VerticalLayout {
+                    padding-left: root.mobile ? 0px : 16px; padding-right: root.mobile ? 0px : 6px; spacing: root.mobile ? 0px : 10px;
+                    if root.mobile: Action {
+                        comfortable: true;
+                        icon: @image-url("../assets/icons/Search.svg");
+                        label: I18n.tr("Пошук музики");
+                        clicked => { root.search(root.search-query); }
+                    }
+                    if !root.mobile: VerticalLayout {
                         alignment: center;
                         Image {
                             source: @image-url("../assets/icons/Search.svg");
@@ -450,26 +472,31 @@ export component MainWindow inherits Window {
                             color: Tokens.ink-300;
                             width: 100%; height: 100%;
                             vertical-alignment: center;
-                            font-size: 14px;
+                            font-size: root.mobile ? 16px : 14px;
                             overflow: elide;
                         }
-                        TextInput {
+                        search-input := TextInput {
+                            accessible-label: I18n.tr("Пошук музики");
                             text <=> root.search-query;
                             width: 100%; height: 100%;
                             color: Tokens.ink-100;
-                            font-size: 14px;
+                            font-size: root.mobile ? 16px : 14px;
                             vertical-alignment: center;
                             single-line: true;
                             edited => { root.search-edited(self.text); }
                             accepted => { root.search(self.text); }
                         }
                     }
-                    if root.search-query != "": VerticalLayout {
+                    // Keep the input's width and IME geometry stable on the first key.
+                    VerticalLayout {
+                        width: root.mobile ? 44px : 36px;
                         alignment: center;
                         Action {
+                            comfortable: root.mobile;
+                            visible: root.search-query != "";
                             icon: @image-url("../assets/icons/X.svg");
                             label: I18n.tr("Очистити пошук");
-                            clicked => { root.search-query = ""; root.search(""); }
+                            clicked => { root.search-query = ""; root.search(""); search-input.focus(); }
                         }
                     }
                 }
@@ -552,8 +579,8 @@ export component MainWindow inherits Window {
         x: 8px + root.safe-left * 1px + (root.immersive || root.mobile ? 0px : root.sidebar-collapsed ? 72px : 240px);
         y: root.safe-top * 1px + (root.immersive ? 8px : root.compact-height ? 52px : 64px);
         width: root.width - self.x - 8px - root.safe-right * 1px;
-        height: (root.immersive ? root.height - 16px : root.height - (root.compact-height ? 128px : 152px) - (root.mobile ? (root.compact-height ? 56px : 72px) : 0px)) - (root.safe-top + root.safe-bottom) * 1px;
-        border-radius: root.mobile ? 20px : 28px;
+        height: root.immersive ? root.height - 16px - (root.safe-top + root.safe-bottom) * 1px : root.page-viewport-height;
+        border-radius: 0px;
         clip: true;
         background: Tokens.neutral-0;
 
@@ -562,7 +589,7 @@ export component MainWindow inherits Window {
         ambient-surface := Rectangle {
             x: -content.x; y: -content.y;
             width: root.width; height: root.height;
-            background: Tokens.neutral-50;
+            background: Tokens.neutral-0;
             Image { source: root.ambient-frame; width: 100%; height: 100%; image-fit: fill; opacity: root.ambient-opacity; }
 
         }
@@ -579,7 +606,7 @@ export component MainWindow inherits Window {
             y: (root.mobile-sheet ? 56px : 0px) + (self.warming ? 0px : (root.page-row(self.route) - root.camera-y) * self.height);
             opacity: self.warming ? 0.003922 : 1;
             clip: true;
-            width: 100%; height: root.mobile ? root.height - (root.compact-height ? 184px : 224px) - (root.safe-top + root.safe-bottom) * 1px : content.height;
+            width: 100%; height: root.mobile ? root.page-viewport-height : content.height;
             cache-rendering-hint: true;
             if page-layer.route == "settings": Rectangle {
                 x: root.mobile ? 16px : 40px; y: root.mobile ? 12px : 24px;
@@ -599,18 +626,18 @@ export component MainWindow inherits Window {
             content-width: self.width;
             content-height: page-layer.route == "home" || page-layer.route == "settings" ? max(self.height, page-layout.preferred-height) : max(self.height, page-layout.min-height);
             page-layout := VerticalLayout {
-                padding-left: root.mobile ? 16px : max(40px, (content.width - 1440px) / 2);
-                padding-right: root.mobile ? 16px : max(40px, (content.width - 1440px) / 2);
-                padding-top: page-layer.route == "settings" ? 0px : root.mobile ? 20px : 32px;
+                padding-left: root.mobile ? (page-layer.route == "search" ? 12px : 16px) : max(40px, (content.width - 1440px) / 2);
+                padding-right: root.mobile ? (page-layer.route == "search" ? 12px : 16px) : max(40px, (content.width - 1440px) / 2);
+                padding-top: page-layer.route == "settings" ? 0px : root.mobile ? (page-layer.route == "search" ? 12px : 20px) : 32px;
                 padding-bottom: 24px;
                 spacing: page-layer.route == "home" ? 22px : 16px;
 
                 if (page-layer.route == "home" || page-layer.route == "explore") && !root.compact-height: ScrollView {
-                    height: 36px;
-                    content-height: 36px;
+                    height: root.mobile ? 44px : 36px;
+                    content-height: self.height;
                     content-width: max(self.width, chips-row.preferred-width);
                     chips-row := HorizontalLayout {
-                        height: 36px; spacing: 8px; alignment: start;
+                        height: root.mobile ? 44px : 36px; spacing: 8px; alignment: start;
                         for chip in ["all", "for-you", "focus", "relax", "energy"]: Action {
                             text: root.chip-label(chip);
                             chip: true;
@@ -628,9 +655,8 @@ export component MainWindow inherits Window {
                     spacing: 14px;
                     Rectangle {
                         horizontal-stretch: 1;
-                        border-radius: 32px;
-                        border-bottom-right-radius: 64px;
-                        background: Tokens.primary-container;
+                        border-radius: 0px;
+                        background: transparent;
                         HorizontalLayout {
                             padding: root.mobile ? 22px : 28px; spacing: 20px;
                             VerticalLayout {
@@ -642,13 +668,13 @@ export component MainWindow inherits Window {
                                     Action { text: root.duration > 0 ? I18n.tr("Продовжити") : I18n.tr("Слухати"); primary: true; icon: @image-url("../assets/icons/Play.svg"); clicked => { if root.duration > 0 { root.navigate("lyrics"); } else { root.select-track(0); } } }
                                 }
                             }
-                            if !root.mobile && content.width > 800px: Artwork { art: root.current-art; downloaded: root.current-downloaded; mark-clicked => { root.status = I18n.tr("Доступно локально"); } width: 140px; height: 140px; border-radius: 44px; border-top-right-radius: 70px; }
+                            if !root.mobile && content.width > 800px: Artwork { art: root.current-art; downloaded: root.current-downloaded; mark-clicked => { root.status = I18n.tr("Доступно локально"); } width: 140px; height: 140px; border-radius: 16px; }
                         }
                     }
                     if !root.mobile: VerticalLayout {
                         width: content.width > 900px ? 208px : 168px; spacing: 14px;
                         Rectangle {
-                            background: Tokens.secondary-container; border-radius: 28px;
+                            background: transparent; border-radius: 0px;
                             HorizontalLayout {
                                 padding: 20px; spacing: 14px;
                                 Image { source: @image-url("../assets/icons/Heart.svg"); width: 26px; height: 26px; colorize: Tokens.brand-300; }
@@ -660,7 +686,7 @@ export component MainWindow inherits Window {
                             accessible-role: button; accessible-label: I18n.tr("Улюблене"); accessible-action-default => { root.navigate("liked"); }
                         }
                         Rectangle {
-                            background: Tokens.tertiary-container; border-radius: 28px; border-top-left-radius: 44px;
+                            background: transparent; border-radius: 0px;
                             HorizontalLayout {
                                 padding: 20px; spacing: 14px;
                                 Image { source: @image-url("../assets/icons/Compass.svg"); width: 26px; height: 26px; colorize: Tokens.ink-150; }
@@ -675,7 +701,7 @@ export component MainWindow inherits Window {
                 }
 
                 if page-layer.route != "settings": HorizontalLayout {
-                    height: page-layer.route == "home" && !root.mobile ? 48px : 44px;
+                    height: root.mobile && page-layer.route == "search" ? 36px : page-layer.route == "home" && !root.mobile ? 48px : 44px;
                     spacing: 10px;
                     if page-layer.route == "settings" && root.settings-section != "": Action {
                         icon: @image-url("../assets/icons/ChevronLeft.svg"); label: I18n.tr("Назад до налаштувань"); comfortable: true;
@@ -690,7 +716,7 @@ export component MainWindow inherits Window {
                               page-layer.route == "playlist" ? root.playlist-title :
                               page-layer.route == "queue" ? I18n.tr("Черга відтворення") : I18n.tr("Результати пошуку");
                         color: Tokens.ink-100;
-                        font-size: root.mobile ? 24px : page-layer.route == "home" ? 24px : 30px;
+                        font-size: root.mobile ? (page-layer.route == "search" ? 22px : 24px) : page-layer.route == "home" ? 24px : 30px;
                         font-weight: 700;
                         horizontal-stretch: 1;
                         vertical-alignment: center;
@@ -753,7 +779,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.settings-section == "appearance": Rectangle {
-                            background: Tokens.neutral-100; border-radius: 24px;
+                            background: transparent; border-radius: 0px;
                             VerticalLayout { padding: root.mobile ? 16px : 24px; spacing: 14px;
                                 Text { text: I18n.tr("Кольори інтерфейсу"); color: Tokens.ink-100; font-size: 18px; font-weight: 600; }
                                 Action { text: I18n.tr("Динамічні"); comfortable: true; wide: true; selected: root.color-mode == "dynamic"; outlined: true; clicked => { root.color-mode = "dynamic"; root.appearance-changed(root.color-mode, root.color-hue); } }
@@ -777,7 +803,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.settings-section == "appearance": Rectangle {
-                            background: Tokens.neutral-100; border-radius: 24px;
+                            background: transparent; border-radius: 0px;
                             VerticalLayout {
                                 padding: root.mobile ? 16px : 24px; spacing: 12px;
                                 HorizontalLayout {
@@ -805,9 +831,15 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.settings-section == "appearance": Rectangle {
-                            background: Tokens.neutral-100; border-radius: 24px;
+                            background: transparent; border-radius: 0px;
                             VerticalLayout { padding: root.mobile ? 16px : 24px; spacing: 8px;
                                 Text { text: I18n.tr("Фон обкладинки"); color: Tokens.ink-100; font-size: 18px; font-weight: 600; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Action { text: I18n.tr("Спокійний"); comfortable: true; wide: true; selected: root.kawarp-warp < 0.6; clicked => { root.kawarp-opacity = 0.22; root.kawarp-warp = 0.4; root.kawarp-blur = 22; root.kawarp-saturation = 1; root.kawarp-dithering = 0.01; root.kawarp-dim = true; root.preferences-changed(); } }
+                                    Action { text: I18n.tr("Виразний"); comfortable: true; wide: true; selected: root.kawarp-warp >= 0.6; clicked => { root.kawarp-opacity = 0.36; root.kawarp-warp = 0.85; root.kawarp-blur = 18; root.kawarp-saturation = 1.3; root.kawarp-dithering = 0.015; root.kawarp-dim = true; root.preferences-changed(); } }
+                                }
+
                                 Text { text: I18n.tr("Непрозорість") + " · " + round(root.kawarp-opacity * 100) / 100; color: Tokens.ink-200; font-size: 13px; }
                                 TonalSlider { height: 44px; minimum: 0; maximum: 1; value: root.kawarp-opacity; label: I18n.tr("Непрозорість"); changed(value) => { root.kawarp-opacity = value; root.preferences-changed(); } }
                                 Text { text: I18n.tr("Інтенсивність") + " · " + round(root.kawarp-warp * 100) / 100; color: Tokens.ink-200; font-size: 13px; }
@@ -823,7 +855,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.settings-section == "audio": Rectangle {
-                            background: Tokens.neutral-100; border-radius: 24px;
+                            background: transparent; border-radius: 0px;
                             VerticalLayout { padding: root.mobile ? 16px : 24px; spacing: 16px;
                                 HorizontalLayout {
                                     Text { text: I18n.tr("Гучність"); color: Tokens.ink-100; font-size: 16px; font-weight: 600; horizontal-stretch: 1; }
@@ -833,7 +865,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.settings-section == "library": Rectangle {
-                            background: Tokens.neutral-100; border-radius: 24px;
+                            background: transparent; border-radius: 0px;
                             VerticalLayout { padding: root.mobile ? 16px : 24px; spacing: 14px;
                                 Text { text: I18n.tr("Джерела музики"); color: Tokens.ink-100; font-size: 18px; font-weight: 600; }
                                 Text { text: I18n.tr("Додайте файли або вкажіть папку з музикою."); color: Tokens.ink-200; wrap: word-wrap; }
@@ -852,7 +884,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.settings-section == "data": Rectangle {
-                            background: Tokens.neutral-100; border-radius: 24px;
+                            background: transparent; border-radius: 0px;
                             VerticalLayout { padding: root.mobile ? 16px : 24px; spacing: 14px;
                                 Text { text: I18n.tr("Підключення"); color: Tokens.ink-100; font-size: 18px; font-weight: 600; }
                                 Action { text: I18n.tr("Відкрити YouTube Music"); comfortable: true; wide: true; primary: true; clicked => { root.open-login(); } }
@@ -888,11 +920,11 @@ export component MainWindow inherits Window {
                                 width: root.mobile ? 148px : max(156px, min(204px, (content.width - 152px) / 5));
                                 visible: index < 8;
                                 border-radius: 20px;
-                                background: card-touch.has-hover ? Tokens.neutral-200 : Tokens.neutral-100;
+                                background: card-touch.has-hover ? Tokens.neutral-150 : transparent;
                                 animate background { duration: Motion.feedback; }
                                 VerticalLayout {
                                     spacing: 8px; padding: 8px;
-                                    Artwork { art: track.art; downloaded: track.downloaded; mark-clicked => { root.status = I18n.tr("Доступно локально"); } height: self.width; tone: index; border-radius: mod(index, 3) == 1 ? self.width / 2 : 28px; border-top-right-radius: mod(index, 3) == 2 ? 64px : self.border-radius; }
+                                    Artwork { art: track.art; downloaded: track.downloaded; mark-clicked => { root.status = I18n.tr("Доступно локально"); } height: self.width; tone: index; border-radius: 12px; }
                                     Text { text: track.title; color: track.path == root.current-track-key ? Tokens.brand-300 : Tokens.ink-100; font-size: 14px; font-weight: 600; overflow: elide; }
                                     Text { text: I18n.tr("Пісня · ") + track.artist; color: Tokens.ink-200; font-size: 12px; overflow: elide; }
                                     Rectangle { vertical-stretch: 1; }
@@ -1107,7 +1139,7 @@ export component MainWindow inherits Window {
             // Main Split Stage: Left Hero Vinyl/Cover Card + Right Synchronized Lyrics & Queue
             HorizontalLayout {
                 vertical-stretch: 1;
-                spacing: root.immersive ? 64px : 40px;
+                spacing: root.immersive ? 48px : 24px;
 
                 // Left Column: Album Art Showcase + Track Metadata + Full Studio Transport Deck
                 if !root.mobile: Rectangle {
@@ -1276,57 +1308,8 @@ export component MainWindow inherits Window {
                     border-width: 0px;
                     border-color: transparent;
                     VerticalLayout {
-                    padding: root.mobile ? 0px : 18px;
-                    spacing: 14px;
-
-                    // Compact Mobile Now-Playing Header + Transport Card
-                    if root.mobile: Rectangle {
-                        height: 158px;
-                        border-radius: 28px;
-                        background: transparent;
-                        border-width: 0px;
-                        border-color: #ffffff1c;
-                        VerticalLayout {
-                            padding: 12px; spacing: 8px;
-                            HorizontalLayout {
-                                spacing: 12px;
-                                MediaSlot { cover: root.current-art; frame: root.video-frame; active: root.art-mode == "clip" && root.player-on-stage; width: root.art-mode == "clip" ? 100px : 56px; height: 56px; border-radius: 10px;
-                                    geometry(x,y,width,height) => { root.video-x=x; root.video-y=y; root.video-width=width; root.video-height=height; }
-                                }
-                                VerticalLayout {
-                                    alignment: center; horizontal-stretch: 1; spacing: 3px;
-                                    Text { text: root.current-title; color: Tokens.ink-100; font-size: 16px; font-weight: 700; overflow: elide; }
-                                    HorizontalLayout {
-                                        spacing: 4px;
-                                        Text { text: root.width < 380px ? root.clock(root.position) + " / " + root.clock(root.duration) : root.current-artist; color: Tokens.ink-200; font-size: 13px; overflow: elide; horizontal-stretch: 1; }
-                                    }
-                                }
-                                VerticalLayout {
-                                    alignment: center;
-                                    Action { icon: @image-url("../assets/icons/Heart.svg"); selected: root.current-liked; clicked => { root.toggle-like(-1); } }
-                                }
-                            }
-                            SeekBar {
-                                position: root.position;
-                                duration: root.duration;
-                                accent: true;
-                                seek(value) => { root.seek-to(round(value * 1000)); }
-                            }
-                            HorizontalLayout {
-                                height: 42px; alignment: space-between;
-                                if root.width >= 380px: Text { text: root.clock(root.position); color: Tokens.ink-300; font-size: 11px; vertical-alignment: center; width: 38px; }
-                                HorizontalLayout {
-                                    spacing: 10px; alignment: center;
-                                    Action { icon: @image-url("../assets/icons/Shuffle.svg"); selected: root.shuffle; clicked => { root.toggle-shuffle(); } }
-                                    Action { icon: @image-url("../assets/icons/SkipBack.svg"); clicked => { root.previous-track(); } }
-                                    Transport { playing: root.player-state == "playing"; brand: true; clicked => { root.play-toggle(); } }
-                                    Action { icon: @image-url("../assets/icons/SkipForward.svg"); clicked => { root.next-track(); } }
-                                    Action { icon: @image-url("../assets/icons/Repeat.svg"); selected: root.repeat-mode != "off"; clicked => { root.toggle-repeat(); } }
-                                }
-                                if root.width >= 380px: Text { text: root.clock(root.duration); color: Tokens.ink-300; font-size: 11px; vertical-alignment: center; horizontal-alignment: right; width: 38px; }
-                            }
-                        }
-                    }
+                    padding: root.mobile ? 0px : 12px;
+                    spacing: root.mobile ? 8px : 14px;
 
                     // Pill Tab Switcher (ТЕКСТ ПІСНІ / ДАЛІ В ЧЕРЗІ / ПОВ’ЯЗАНІ) + Provider Badge
                     HorizontalLayout {
@@ -1347,7 +1330,7 @@ export component MainWindow inherits Window {
                                     Text {
                                         text: root.mobile ? I18n.tr("СЛОВА") : I18n.tr("ТЕКСТ ПІСНІ");
                                         color: root.player-tab == "lyrics" ? Tokens.ink-100 : Tokens.ink-300;
-                                        font-size: 12px; font-weight: 700; letter-spacing: 0.8px;
+                                        font-size: 12px; font-weight: 700; letter-spacing: 0px;
                                         width: 100%; height: 100%;
                                         horizontal-alignment: center; vertical-alignment: center;
                                     }
@@ -1362,7 +1345,7 @@ export component MainWindow inherits Window {
                                     Text {
                                         text: root.mobile ? I18n.tr("ЧЕРГА") : I18n.tr("ДАЛІ В ЧЕРЗІ");
                                         color: root.player-tab == "queue" ? Tokens.ink-100 : Tokens.ink-300;
-                                        font-size: 12px; font-weight: 700; letter-spacing: 0.8px;
+                                        font-size: 12px; font-weight: 700; letter-spacing: 0px;
                                         width: 100%; height: 100%;
                                         horizontal-alignment: center; vertical-alignment: center;
                                     }
@@ -1376,7 +1359,7 @@ export component MainWindow inherits Window {
                                     Text {
                                         text: I18n.tr("РАДІО ТРЕКУ");
                                         color: Tokens.ink-300;
-                                        font-size: 12px; font-weight: 700; letter-spacing: 0.8px;
+                                        font-size: 12px; font-weight: 700; letter-spacing: 0px;
                                         width: 100%; height: 100%;
                                         horizontal-alignment: center; vertical-alignment: center;
                                     }
@@ -1427,8 +1410,8 @@ export component MainWindow inherits Window {
                             Text { text: I18n.tr(root.lyrics-status); color: Tokens.ink-200; font-size: 14px; wrap: word-wrap; horizontal-alignment: center; }
                             HorizontalLayout {
                                 alignment: center; spacing: 10px;
+                                Action { text: I18n.tr("Оновити"); icon: @image-url("../assets/icons/RefreshCw.svg"); primary: true; clicked => { root.refresh-lyrics(); } }
                                 Action { text: I18n.tr("Вставити слова"); outlined: true; clicked => { root.dialog = "paste"; } }
-                                Action { text: I18n.tr("Оновити"); icon: @image-url("../assets/icons/RefreshCw.svg"); outlined: true; clicked => { root.refresh-lyrics(); } }
                             }
                         }
                     }
@@ -1474,9 +1457,62 @@ export component MainWindow inherits Window {
                         seek-to(position) => { root.seek-to(position); }
                     }
 
+                    // Compact Mobile Now-Playing Header + Transport Card
+                    if root.mobile: Rectangle {
+                        height: 162px;
+                        border-radius: 28px;
+                        background: transparent;
+                        border-width: 0px;
+                        border-color: #ffffff1c;
+                        VerticalLayout {
+                            padding: 4px; spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                MediaSlot { cover: root.current-art; frame: root.video-frame; active: root.art-mode == "clip" && root.player-on-stage; width: root.art-mode == "clip" ? 100px : 56px; height: 56px; border-radius: 10px;
+                                    geometry(x,y,width,height) => { root.video-x=x; root.video-y=y; root.video-width=width; root.video-height=height; }
+                                }
+                                VerticalLayout {
+                                    alignment: center; horizontal-stretch: 1; spacing: 3px;
+                                    Text { text: root.current-title; color: Tokens.ink-100; font-size: 16px; font-weight: 700; overflow: elide; }
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        Text { text: root.current-artist; color: Tokens.ink-200; font-size: 13px; overflow: elide; horizontal-stretch: 1; }
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Action { comfortable: true; label: I18n.tr("Подобається"); icon: @image-url("../assets/icons/Heart.svg"); selected: root.current-liked; clicked => { root.toggle-like(-1); } }
+                                }
+                            }
+                            SeekBar {
+                                position: root.position;
+                                duration: root.duration;
+                                accent: true;
+                                seek(value) => { root.seek-to(round(value * 1000)); }
+                            }
+                            HorizontalLayout {
+                                height: 14px;
+                                Text { text: root.clock(root.position); color: Tokens.ink-200; font-size: 11px; }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text { text: root.clock(root.duration); color: Tokens.ink-200; font-size: 11px; horizontal-alignment: right; }
+                            }
+                            HorizontalLayout {
+                                height: 48px; alignment: center;
+                                HorizontalLayout {
+                                    spacing: 6px; alignment: center;
+                                    Action { comfortable: true; label: I18n.tr("Перемішати"); icon: @image-url("../assets/icons/Shuffle.svg"); selected: root.shuffle; clicked => { root.toggle-shuffle(); } }
+                                    Action { comfortable: true; label: I18n.tr("Попередня композиція"); icon: @image-url("../assets/icons/SkipBack.svg"); clicked => { root.previous-track(); } }
+                                    Transport { playing: root.player-state == "playing"; brand: true; clicked => { root.play-toggle(); } }
+                                    Action { comfortable: true; label: I18n.tr("Наступна композиція"); icon: @image-url("../assets/icons/SkipForward.svg"); clicked => { root.next-track(); } }
+                                    Action { comfortable: true; label: I18n.tr("Повтор"); icon: @image-url("../assets/icons/Repeat.svg"); selected: root.repeat-mode != "off"; clicked => { root.toggle-repeat(); } }
+                                }
+                            }
+                        }
+                    }
+
                     // Keep errors and nonzero offsets; omit routine provider/status captions.
                     HorizontalLayout {
-                        height: 28px;
+                        height: root.lyrics-renderer-error != "" || root.lyrics-offset != 0 ? 28px : 0px;
                         spacing: 10px;
                         Rectangle {
                             height: 26px;
@@ -1595,29 +1631,21 @@ export component MainWindow inherits Window {
         }
     }
 
-    // Reachable bottom tabs, with a separate mini-player above them.
-    if root.mobile && !root.immersive: Rectangle {
-        x: 8px + root.safe-left * 1px; y: root.height - (root.compact-height ? 56px : 72px) - root.safe-bottom * 1px; height: root.compact-height ? 48px : 64px; width: root.width - 16px - (root.safe-left + root.safe-right) * 1px;
-        border-radius: 24px; background: Tokens.neutral-100;
-        HorizontalLayout { padding-left: 4px; padding-right: 4px; spacing: 0px;
-            MobileNavItem { height: root.compact-height ? 48px : 64px; text: I18n.tr("Головна"); icon: @image-url("../assets/icons/House.svg"); selected: root.active-view == "home"; clicked => { root.navigate("home"); } }
-            MobileNavItem { height: root.compact-height ? 48px : 64px; text: I18n.tr("Огляд"); icon: @image-url("../assets/icons/Compass.svg"); selected: root.active-view == "explore"; clicked => { root.navigate("explore"); } }
-            MobileNavItem { height: root.compact-height ? 48px : 64px; text: I18n.tr("Бібліотека"); icon: @image-url("../assets/icons/Library.svg"); selected: root.active-view == "library"; clicked => { root.navigate("library"); } }
-            MobileNavItem { height: root.compact-height ? 48px : 64px; text: I18n.tr("Улюблене"); icon: @image-url("../assets/icons/Heart.svg"); selected: root.active-view == "liked"; clicked => { root.navigate("liked"); } }
-            MobileNavItem { height: root.compact-height ? 48px : 64px; text: I18n.tr("Параметри"); icon: @image-url("../assets/icons/Settings.svg"); selected: root.active-view == "settings"; clicked => { root.navigate-settings(); } }
-        }
-    }
-
-    // Persistent Bottom Player Bar
+    // Mobile playback and page selection share one safe-area-aware dock.
     Rectangle {
         x: 8px + root.safe-left * 1px;
-        y: root.height - (root.mobile ? (root.compact-height ? 128px : 152px) : 80px) - root.safe-bottom * 1px;
+        y: root.height - root.bottom-reserve - root.safe-bottom * 1px;
         width: root.width - 16px - (root.safe-left + root.safe-right) * 1px;
-        height: 72px;
+        height: root.bottom-dock-height;
         visible: !root.immersive;
         background: Tokens.neutral-100;
         border-radius: 24px;
         clip: true;
+        if root.mobile: TouchArea {
+            x: 0px; y: 3px; width: 100%; height: 53px;
+            mouse-cursor: pointer;
+            clicked => { root.player-tab = "lyrics"; root.navigate("lyrics"); root.request-lyrics(); }
+        }
         // Interactive Top Progress Track
         Rectangle {
             x: 24px; y: 0px;
@@ -1648,11 +1676,11 @@ export component MainWindow inherits Window {
             }
         }
         HorizontalLayout {
-            x: 0px; y: 3px; width: 100%; height: parent.height - 3px;
+            x: 0px; y: 3px; width: 100%; height: root.mobile ? 53px : 69px;
             padding-left: root.mobile ? 10px : 20px;
             padding-right: root.mobile ? 10px : 20px;
             spacing: root.mobile ? 8px : 14px;
-            padding-top: 12px; padding-bottom: 12px;
+            padding-top: root.mobile ? 4px : 12px; padding-bottom: root.mobile ? 4px : 12px;
 
             if !root.mobile: Action { icon: @image-url("../assets/icons/SkipBack.svg"); label: I18n.tr("Попередня композиція"); clicked => { root.previous-track(); } }
             Transport { playing: root.player-state == "playing"; brand: true; clicked => { root.play-toggle(); } }
@@ -1670,7 +1698,7 @@ export component MainWindow inherits Window {
                 TouchArea { mouse-cursor: pointer; clicked => { root.player-tab = "lyrics"; root.navigate("lyrics"); root.request-lyrics(); } }
             }
 
-            Action { icon: @image-url("../assets/icons/Heart.svg"); label: I18n.tr("Подобається"); selected: root.current-liked; clicked => { root.toggle-like(-1); } }
+            if !root.mobile: Action { icon: @image-url("../assets/icons/Heart.svg"); label: I18n.tr("Подобається"); selected: root.current-liked; clicked => { root.toggle-like(-1); } }
             if !root.mobile: Action { icon: @image-url("../assets/icons/Captions.svg"); label: I18n.tr("Слова пісні"); selected: root.displayed-view == "lyrics"; clicked => { root.player-tab = "lyrics"; root.navigate("lyrics"); root.request-lyrics(); } }
             if !root.mobile && root.width >= 1040px: Action { icon: @image-url("../assets/icons/ListMusic.svg"); label: I18n.tr("Черга відтворення"); selected: root.displayed-view == "queue"; clicked => { root.navigate("queue"); } }
             if !root.mobile && root.width >= 1040px: Action { icon: @image-url("../assets/icons/Plus.svg"); label: I18n.tr("Додати до списку"); clicked => { root.dialog = "add"; } }
@@ -1678,12 +1706,28 @@ export component MainWindow inherits Window {
             if !root.mobile: TonalSlider { label: I18n.tr("Гучність"); width: root.width < 1040px ? 64px : 84px; minimum: 0; maximum: 1; value <=> root.volume; changed(value) => { root.volume-changed(value); } }
             if !root.mobile && root.width >= 960px: Action { icon: @image-url("../assets/icons/Repeat.svg"); label: I18n.tr("Повтор"); selected: root.repeat-mode != "off"; clicked => { root.toggle-repeat(); } }
             if !root.mobile && root.width >= 960px: Action { icon: @image-url("../assets/icons/Shuffle.svg"); label: I18n.tr("Перемішати"); selected: root.shuffle; clicked => { root.toggle-shuffle(); } }
-            Action {
+            if !root.mobile: Action {
                 icon: root.displayed-view == "lyrics" ? @image-url("../assets/icons/ChevronDown.svg") : @image-url("../assets/icons/ChevronUp.svg");
                 label: I18n.tr("Розгорнути програвач");
                 clicked => {
                     if root.displayed-view == "lyrics" { root.close-player(); } else { root.player-tab = "lyrics"; root.navigate("lyrics"); root.request-lyrics(); }
                 }
+            }
+        }
+        if root.mobile: Rectangle {
+            x: 12px; y: 55px; width: parent.width - 24px; height: 1px;
+            background: Tokens.neutral-300.with-alpha(0.5);
+        }
+        if root.mobile: Rectangle {
+            x: 0px; y: 56px;
+            width: 100%; height: root.compact-height ? 48px : 56px;
+            background: transparent;
+            HorizontalLayout { padding-left: 4px; padding-right: 4px; spacing: 0px;
+                MobileNavItem { height: root.compact-height ? 48px : 56px; text: I18n.tr("Головна"); icon: @image-url("../assets/icons/House.svg"); selected: root.active-view == "home"; clicked => { root.navigate("home"); } }
+                MobileNavItem { height: root.compact-height ? 48px : 56px; text: I18n.tr("Огляд"); icon: @image-url("../assets/icons/Compass.svg"); selected: root.active-view == "explore"; clicked => { root.navigate("explore"); } }
+                MobileNavItem { height: root.compact-height ? 48px : 56px; text: I18n.tr("Бібліотека"); icon: @image-url("../assets/icons/Library.svg"); selected: root.active-view == "library"; clicked => { root.navigate("library"); } }
+                MobileNavItem { height: root.compact-height ? 48px : 56px; text: I18n.tr("Улюблене"); icon: @image-url("../assets/icons/Heart.svg"); selected: root.active-view == "liked"; clicked => { root.navigate("liked"); } }
+                MobileNavItem { height: root.compact-height ? 48px : 56px; text: I18n.tr("Параметри"); icon: @image-url("../assets/icons/Settings.svg"); selected: root.active-view == "settings"; clicked => { root.navigate-settings(); } }
             }
         }
     }

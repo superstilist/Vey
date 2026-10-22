@@ -9,6 +9,12 @@ try {
   await page.waitForFunction(() => !!window.PlayerVFBraccato);
   await page.evaluate(() => {
     window.ambientReadbacks = 0;
+    window.ambientRotations = [];
+    const rotate = CanvasRenderingContext2D.prototype.rotate;
+    CanvasRenderingContext2D.prototype.rotate = function(angle) {
+      window.ambientRotations.push(angle);
+      return rotate.call(this, angle);
+    };
     const original = WebGLRenderingContext.prototype.readPixels;
     WebGLRenderingContext.prototype.readPixels = function (...args) {
       window.ambientReadbacks++;
@@ -38,6 +44,9 @@ try {
   assert.notDeepEqual(frames[2], frames[3], 'artwork changes the background');
   assert.equal(await page.evaluate(() => window.ambientReadbacks), 3,
     'duplicate frozen frames reuse the GPU target');
+  const rotations = await page.evaluate(() => window.ambientRotations);
+  assert.deepEqual(rotations.map(angle => angle || 0), [0, -0.24], 'rotation follows the shared clock; frozen/reduced frames do not rotate');
+  assert.ok(frames.every(frame => frame.every((value, index) => index % 4 !== 3 || value === 255)), 'rotation covers every texture corner');
   const backdrop = await page.evaluate(() => {
     const geometry = {content:{x:248,y:64,width:1184,height:744},viewport:{x:776,y:210,width:598,height:524}};
     window.PlayerVFBraccato.update({visible:true,mode:'lyrics',nativeBackdrop:geometry});

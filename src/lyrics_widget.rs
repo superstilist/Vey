@@ -556,7 +556,7 @@ pub fn install(w: &MainWindow) -> Option<slint::Timer> {
             clip_native_view(&h.view, bounds, &state["overlay"], &state["stageBounds"], scale);
             h.clip_key = clip_key;
         }
-        if visible != h.visible {let _=h.view.set_visible(visible);h.visible=visible;}
+        if visible != h.visible && crate::windows_webview::set_visible(&h.view, visible).is_ok() { h.visible=visible; }
         let json = state.to_string();
         if json != h.bridge.last_state {
             let _=h.view.evaluate_script(&format!("window.PlayerVFBraccato.update({json})"));

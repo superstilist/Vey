@@ -44,6 +44,9 @@ pub fn validate(reference: &str, lyrics: &[Lyric], threshold: f64) -> bool {
 }
 pub fn normalize_alternatives(alternatives: &mut Vec<LyricsAlternative>) {
     alternatives.retain(|a| !a.lyrics.lines.is_empty());
+    for alternative in alternatives.iter_mut() {
+        alternative.sync_type = crate::braccato::effective_sync_type(alternative);
+    }
     // The rendering mode "richsync" covers both words and syllables. Prefer
     // actual syllable cues within that mode, without trusting provider labels.
     alternatives.sort_by_key(|a| {

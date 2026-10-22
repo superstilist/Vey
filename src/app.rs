@@ -30,6 +30,7 @@ struct App {
     permission_wait_started: Option<Instant>,
     search_generation: u64,
     lyric_generation: u64,
+    lyric_task: Option<tokio::task::JoinHandle<()>>,
     loaded_path: String,
     ended: bool,
     load_generation: Arc<std::sync::atomic::AtomicU64>,
@@ -55,6 +56,7 @@ enum Event {
     Loaded(u64, String, Result<String, String>),
     Downloaded(Track, Result<Option<String>, String>),
     Lyrics(String, u64, Result<Vec<LyricsAlternative>, String>),
+    LyricsPreview(String, u64, Vec<LyricsAlternative>),
     Enriched(
         String,
         Result<crate::lyrics_translation::Enrichment, String>,
@@ -481,6 +483,7 @@ fn load_art(a: &mut App, track: &Track) {
     });
 }
 fn start(a: &Shared, w: &MainWindow, track: Track) {
+    let shared = a.clone();
     let mut a = a.borrow_mut();
     if a.store
         .downloads
@@ -500,6 +503,9 @@ fn start(a: &Shared, w: &MainWindow, track: Track) {
     a.ended = false;
     a.loaded_path.clear();
     a.lyric_generation += 1;
+    if let Some(task) = a.lyric_task.take() {
+        task.abort();
+    }
     a.alternatives.clear();
     a.current = Some(track.clone());
     refresh_media_rows(w, &a);
@@ -567,12 +573,24 @@ fn start(a: &Shared, w: &MainWindow, track: Track) {
         };
         let _ = tx.send(Event::Loaded(serial, track.path, result));
     }));
+    drop(a);
+    lyrics_request(&shared, w, false);
 }
 fn lyrics_request(a: &Shared, w: &MainWindow, force: bool) {
     let mut a = a.borrow_mut();
     let Some(track) = a.current.clone() else {
         return;
     };
+    if !force
+        && a.lyric_task
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+    {
+        return;
+    }
+    if let Some(task) = a.lyric_task.take() {
+        task.abort();
+    }
     a.lyric_generation += 1;
     let generation = a.lyric_generation;
     if !force {
@@ -590,10 +608,15 @@ fn lyrics_request(a: &Shared, w: &MainWindow, force: bool) {
     let provider = a.store.lyrics_request_provider(&track);
     let jwt = ls::JwtCache::load().token();
     w.set_lyrics_status("Шукаємо слова пісні…".into());
-    a.rt.spawn(async move {
-        let result = ls::fetch(&track, &provider, force, jwt).await;
+    a.lyric_task = Some(a.rt.spawn(async move {
+        let preview_tx = tx.clone();
+        let path = track.path.clone();
+        let result = ls::fetch_with_progress(&track, &provider, force, jwt, move |alts| {
+            let _ = preview_tx.send(Event::LyricsPreview(path.clone(), generation, alts));
+        })
+        .await;
         let _ = tx.send(Event::Lyrics(track.path, generation, result));
-    });
+    }));
 }
 fn show_preferred_lyrics(w: &MainWindow, a: &App) {
     let index = a
@@ -743,6 +766,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         permission_wait_started: None,
         search_generation: 0,
         lyric_generation: 0,
+        lyric_task: None,
         loaded_path: String::new(),
         ended: false,
         load_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -1138,6 +1162,9 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     );
                 }
                 a.lyric_generation += 1;
+                if let Some(task) = a.lyric_task.take() {
+                    task.abort();
+                }
                 a.alternatives = vec![LyricsAlternative {
                     provider: "Власні слова".into(),
                     sync_type,
@@ -1602,20 +1629,47 @@ pub fn run() -> Result<(), slint::PlatformError> {
                                     persist(&w, &a);
                                     w.set_status("".into());
                                     drop(a);
-                                    lyrics_request(&shared, &w, false);
+                                    // Lyrics already start independently of audio loading.
                                 }
                                 Err(e) => {
                                     w.set_status(e.into());
                                     if let Some((t, p)) = a.last_playing.clone() {
                                         a.current = Some(t.clone());
                                         a.loaded_path = p;
-                                        w.set_current_title(t.title.into());
-                                        w.set_current_artist(t.artist.into());
+                                        w.set_current_track_key(t.path.clone().into());
+                                        w.set_current_title(t.title.clone().into());
+                                        w.set_current_artist(t.artist.clone().into());
+                                        w.set_current_album(t.album.clone().into());
+                                        w.set_current_art(art_image(&a, &t));
+                                        w.set_current_liked(a.store.likes.contains(&t.path));
+                                        w.set_current_video_id(
+                                            t.video_id.clone().unwrap_or_default().into(),
+                                        );
+                                        w.set_current_clip_video_id(
+                                            t.clip_video_id.clone().unwrap_or_default().into(),
+                                        );
+                                        w.set_lyrics_offset(a.store.offset_for(&t) as i32);
+                                        if let Some(task) = a.lyric_task.take() {
+                                            task.abort();
+                                        }
+                                        a.alternatives.clear();
+                                        w.set_lyric_lines(model(vec![]));
+                                        w.set_lyrics_document("".into());
+                                        drop(a);
+                                        lyrics_request(&shared, &w, false);
                                     } else {
                                         w.set_player_state("stopped".into());
                                     }
                                 }
                             }
+                        }
+                    }
+                    Event::LyricsPreview(path, generation, alts) => {
+                        if generation == a.lyric_generation
+                            && a.current.as_ref().is_some_and(|t| t.path == path)
+                        {
+                            a.alternatives = alts;
+                            show_preferred_lyrics(&w, &a);
                         }
                     }
                     Event::Lyrics(path, generation, result) => {
@@ -1626,6 +1680,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                         if a.current.as_ref().is_some_and(|t| t.path == path)
                             && generation == a.lyric_generation
                         {
+                            a.lyric_task.take();
                             match result {
                                 Ok(alts) => {
                                     a.store.cache_lyrics(path, alts.clone());

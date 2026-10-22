@@ -36,7 +36,7 @@ Unreadable state is copied to a timestamped backup before recovery.
 
 ## Latest release
 
-Version 0.1.15 improves mobile lyrics scrolling and player gestures, and keeps
+Version 0.1.16 improves mobile lyrics scrolling and player gestures, and keeps
 search input responsive while entering or editing a query. It includes the local
 downloads, artwork, lyric source selection, translation and romanization features
 from previous releases. See [release notes](docs/RELEASE.md) and
