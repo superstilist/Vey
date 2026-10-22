@@ -1,0 +1,68 @@
+name: macOS release packages
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to build
+        required: true
+        type: string
+permissions:
+  contents: write
+jobs:
+  macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: arm64
+          - target: x86_64-apple-darwin
+            arch: x64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-${{ matrix.target }}
+      - name: Compile native macOS app
+        run: cargo build --locked --release --bin vey --target ${{ matrix.target }}
+      - name: Package application bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)
+          name="Vey-$version-macos-${{ matrix.arch }}"
+          mkdir -p "dist/$name/Vey.app/Contents/MacOS"
+          cp "target/${{ matrix.target }}/release/vey" "dist/$name/Vey.app/Contents/MacOS/vey"
+          cat > "dist/$name/Vey.app/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>CFBundleExecutable</key><string>vey</string>
+          <key>CFBundleIdentifier</key><string>app.vey.player</string>
+          <key>CFBundleName</key><string>Vey</string>
+          <key>CFBundlePackageType</key><string>APPL</string>
+          <key>CFBundleShortVersionString</key><string>$version</string>
+          <key>CFBundleVersion</key><string>$version</string>
+          <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          PLIST
+          plutil -lint "dist/$name/Vey.app/Contents/Info.plist"
+          codesign --force --deep --sign - "dist/$name/Vey.app"
+          codesign --verify --deep --strict "dist/$name/Vey.app"
+          file "dist/$name/Vey.app/Contents/MacOS/vey"
+          otool -L "dist/$name/Vey.app/Contents/MacOS/vey"
+          cp web/braccato/LICENSES.txt "dist/$name/THIRD-PARTY-LICENSES.txt"
+          printf 'Native macOS ${{ matrix.arch }} build. Ad hoc signed; not notarized. Device playback and UI acceptance remain unverified.\n' > "dist/$name/README.txt"
+          git rev-parse HEAD > "dist/$name/SOURCE-COMMIT.txt"
+          ditto -c -k --sequesterRsrc --keepParent "dist/$name" "dist/$name.zip"
+          (cd dist && shasum -a 256 "$name.zip" > "$name.zip.sha256")
+      - name: Upload release packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" dist/Vey-*-macos-${{ matrix.arch }}.zip dist/Vey-*-macos-${{ matrix.arch }}.zip.sha256
