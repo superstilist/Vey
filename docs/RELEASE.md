@@ -1,4 +1,11 @@
-# Vey 0.1.21
+# Vey 0.1.22
+
+Normal native lyrics now include subtle whole-word wobble. Timed syllables
+share a motion interval and transform origin, retaining their original fill
+clocks. Motion settles before the cue/fragment ends; short cues move less.
+Letter waves work independently and return to one shaped run at rest. Reduced
+motion disables both. Custom CSS supports `--blyrics-wobble-duration` and
+`--vey-word-wobble-strength` (0–2), plus the existing wobble on/off switch.
 
 Native line transitions now accelerate and settle softly. Retained focus
 crossfades use 180ms to sharpen and 280ms to blur, with aligned paint and one
@@ -11,7 +18,7 @@ fill pass, instantiate word views only near the viewport and use a soft
 Long hyphenated chants now wrap at hyphens; oversized tokens wrap at complete
 Unicode graphemes. Timed syllables stay together when their word fits. Fill and
 scroll follow wrapped cue fragments continuously without changing source timings.
-The fill has a gentle wave and scrolling uses a smoother ease-out curve.
+The fill has a gentle wave and scrolling uses a soft-start/stop curve.
 Normal mode waits for supplied cue starts, with no default camera lead or
 future-line grouping. Sung focus never uses a future scroll cue; native stage
 also waits for actual line starts and preserves genuine vocal overlaps.

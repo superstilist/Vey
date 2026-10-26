@@ -83,6 +83,9 @@ fn word(p: braccato_slint::LyricWord) -> BraccatoWord {
         duration_ms: p.duration_ms,
         cue_offset: p.cue_offset,
         cue_span: p.cue_span,
+        motion_start_ms: p.motion_start_ms,
+        motion_duration_ms: p.motion_duration_ms,
+        motion_origin_em: p.motion_origin_em,
         source_part: p.source_part,
         font_family: family.into(),
         glow_wide: p.glow_wide,
@@ -170,7 +173,7 @@ fn styled_layout(
         },
         |text, size| fonts::measure_with(text, size, &style.family, weight as u16),
     );
-    let rows = (0..wrapped.rows.row_count())
+    let mut rows = (0..wrapped.rows.row_count())
         .filter_map(|i| wrapped.rows.row_data(i))
         .map(|r| {
             let family = fonts::family_for(&r.text, &style.family);
@@ -217,6 +220,24 @@ fn styled_layout(
             }
         })
         .collect::<Vec<_>>();
+    for row in &mut rows {
+        if row.parts.row_count() == 0 {
+            continue;
+        }
+        let font_size = size
+            * if row.secondary {
+                0.48
+            } else if row.parts.row_data(0).is_some_and(|p| p.background) {
+                0.72
+            } else {
+                1.
+            };
+        let mut parts = (0..row.parts.row_count())
+            .filter_map(|i| row.parts.row_data(i))
+            .collect::<Vec<_>>();
+        plan_word_motion(&mut parts, font_size, weight as u16);
+        row.parts = model(parts);
+    }
     let mut offset = 0.;
     let offsets = rows
         .iter()
@@ -250,6 +271,69 @@ fn styled_layout(
         })
         .collect();
     (rows, offsets)
+}
+
+// Presentation-only groups: separately timed syllables share one word transform.
+// Canonical cue times and fill fragments are deliberately not rewritten.
+fn plan_word_motion(parts: &mut [BraccatoWord], size: f32, weight: u16) {
+    let boundary = |text: &str| {
+        text.ends_with(|c: char| {
+            c.is_whitespace() || matches!(c, '-' | '\u{2010}' | '\u{00ad}' | '\u{200b}')
+        })
+    };
+    let mut first = 0;
+    while first < parts.len() {
+        if parts[first].text.chars().all(char::is_whitespace) {
+            first += 1;
+            continue;
+        }
+        let mut end = first + 1;
+        while end < parts.len()
+            && !boundary(&parts[end - 1].text)
+            && !parts[end].text.starts_with(char::is_whitespace)
+            && parts[end].background == parts[first].background
+        {
+            end += 1;
+        }
+        let group = &mut parts[first..end];
+        if group.iter().all(|p| p.duration_ms > 0.) {
+            let start = group
+                .iter()
+                .map(|p| p.start_ms + p.duration_ms * p.cue_offset)
+                .fold(f32::INFINITY, f32::min);
+            let until = group
+                .iter()
+                .map(|p| {
+                    p.start_ms
+                        + p.duration_ms
+                            * (p.cue_offset + if p.cue_span > 0. { p.cue_span } else { 1. })
+                })
+                .fold(start, f32::max);
+            let measure = |p: &BraccatoWord, text: &str| {
+                fonts::measure_with(
+                    text,
+                    size,
+                    &p.font_family,
+                    if p.background { 500 } else { weight },
+                )
+            };
+            let widths = group
+                .iter()
+                .map(|p| measure(p, &p.text))
+                .collect::<Vec<_>>();
+            let last = group.last().unwrap();
+            let trailing = widths.last().unwrap() - measure(last, last.text.trim_end());
+            let center = (widths.iter().sum::<f32>() - trailing) / 2.;
+            let mut offset = 0.;
+            for (part, width) in group.iter_mut().zip(widths) {
+                part.motion_start_ms = start;
+                part.motion_duration_ms = (until - start).max(0.);
+                part.motion_origin_em = (center - offset) / size.max(1.);
+                offset += width;
+            }
+        }
+        first = end;
+    }
 }
 
 /// Install once per native window; the browser retains its upstream iframe.
@@ -690,6 +774,52 @@ pub fn install(w: &MainWindow) {
 mod tests {
     use super::*;
     use crate::lyrics::LyricsAlternative;
+    #[test]
+    fn word_motion_groups_syllables_without_touching_their_cues() {
+        let mut parts = vec![
+            BraccatoWord {
+                text: "Il".into(),
+                start_ms: 1000.,
+                duration_ms: 200.,
+                cue_span: 1.,
+                ..Default::default()
+            },
+            BraccatoWord {
+                text: "luminate\u{a0}".into(),
+                start_ms: 1200.,
+                duration_ms: 600.,
+                cue_span: 1.,
+                ..Default::default()
+            },
+            BraccatoWord {
+                text: "next".into(),
+                start_ms: 2000.,
+                duration_ms: 400.,
+                cue_span: 1.,
+                ..Default::default()
+            },
+        ];
+        plan_word_motion(&mut parts, 48., 700);
+        for p in &parts[..2] {
+            assert_eq!((p.motion_start_ms, p.motion_duration_ms), (1000., 800.));
+        }
+        assert_eq!(
+            (parts[2].motion_start_ms, parts[2].motion_duration_ms),
+            (2000., 400.)
+        );
+        assert!(parts[0].motion_origin_em > parts[1].motion_origin_em);
+        assert_eq!((parts[0].start_ms, parts[0].duration_ms), (1000., 200.));
+        assert_eq!((parts[1].start_ms, parts[1].duration_ms), (1200., 600.));
+        // A continuation starts moving only as the actual fill reaches it.
+        parts[0].cue_offset = 0.5;
+        parts[0].cue_span = 0.5;
+        parts.truncate(1);
+        plan_word_motion(&mut parts, 48., 700);
+        assert_eq!(
+            (parts[0].motion_start_ms, parts[0].motion_duration_ms),
+            (1100., 100.)
+        );
+    }
 
     #[test]
     fn display_spaces_keep_word_gaps_without_separating_syllables() {

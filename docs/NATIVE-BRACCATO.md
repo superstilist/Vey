@@ -456,3 +456,69 @@ EXE SHA-256: `fcbc8aa0befb3f3bf4d6bb7d98504acd539b1ad3b393ff00d34bbe73f9b0b16f`.
 Local ZIP: `dist/Vey-0.1.21-windows-x64.zip`, SHA-256
 `16f696c24f1afe950addf39bd5e7d02ef31706dae4365bad243e099b64894f9d`.
 This is a local Windows build; no tag or cross-platform publication was performed.
+
+## 0.1.22 whole-word wobble and settled letter motion, 2026-10-26
+
+The previous working state was checkpointed as `1ab1037` before refinement.
+Normal native lyrics now enable a restrained word wobble (0.05em translation,
+1.025 horizontal peak scale). Layout-only motion intervals/origins group timed
+syllables under one transform, preserving canonical text, timestamps and the
+independent fill clock. Wrapped fragments start moving at their measured fill
+entry. Untimed parts do not acquire motion timing.
+
+The host opts into `settled-word-motion`: smooth attack/return, peak at 22% and
+rest by 85% of a period bounded by the actual cue/fragment. Cues shorter than
+240ms have proportionally smaller motion. CSS can disable wobble with
+`--blyrics-animate-word-wobble:0`, set `--blyrics-wobble-duration`, or tune native
+`--vey-word-wobble-strength` from 0 to 2. Whole-word wobble uses the shaped text
+run and does not request glyph plans or per-frame rasterization.
+
+Letter waves are independent of word wobble. Their presentation clock fits the
+wave plan inside the real fragment interval; fill still uses the original cue
+clock. Waves return continuously to the baseline and instantiate glyph bodies
+only inside their motion window, using one shaped run before/afterward. Reduced
+motion disables both effects. In the backing-fill fixture, moving letter bases
+are checked against the measured dim-color ceiling; static cases retain exact
+pixel checks. This distinguishes actual early highlight from moving gray ink.
+
+Focused checks passed 20 native tests, five theme tests and all 10 copied Slint
+tests. The new seven-phase native wobble fixture recorded 3328 changed motion
+pixels, a shared global syllable origin, zero early movement in the following
+word, exact resting/reduced-motion pixels and independent letter waves.
+Whole-run and letter deadline cases recorded 596 / 4167 changed pixels and zero
+late pixels. Wrapped boundary checks retained 991 completed first-row cores and
+1213 continuation cores, with no late/premature fill. All four backing cases
+passed, including moving letters. Focus/fade pixel checks, 60 continuous camera
+samples, 2x grouped/retarget playback, reference-style effect frames and imported
+font/custom-theme checks also passed.
+
+The 14-phase renderer, desktop/mobile/stage overflow and actual wheel/resume
+fixtures passed; canonical source reads remained zero in the playback check.
+Fresh wobble/letter-wave and mobile backing frames were visually inspected.
+
+The same 300-line / 2400-word synthetic development workload was measured with
+word wobble off/on, 80 samples each:
+
+| Measurement | Off | On |
+| --- | ---: | ---: |
+| Timer median / p95, ms | 18.37 / 85.50 | 18.16 / 99.72 |
+| Snapshot median / p95, ms | 70.91 / 76.98 | 77.10 / 86.37 |
+| Word-model reads | 1624 | 2572 |
+
+Raw reports: `target/native-lyrics-check/performance-wobble-{off,on}-0.1.22.json`.
+Timer samples include synchronous GPU snapshot readback and synthetic media
+sampling; worker readiness/cue exposure can vary between runs. These are bounded
+workload measurements, not playback FPS or a claim that motion has zero cost.
+
+WASM compilation, formatting and whitespace checks passed. The optimized
+Windows build completed in 5m20s.
+
+The final backing fixture also passed its dim-base-ceiling assertion. The
+packaged EXE passed isolated `--screenshots` with exit code 0 and matches the
+release build byte-for-byte. Desktop/mobile packaged frames under
+`target/release-0.1.22-ui-check/docs/screenshots/` were inspected.
+
+EXE SHA-256: `5f4b0b05278592eb832a079bb10d2ee81c21e22549e97ab15f6886739c697566`.
+Local ZIP: `dist/Vey-0.1.22-windows-x64.zip`, SHA-256
+`68a3d83f6019c13df896ebb2eeb1b7a0c14ce8ae933c056614f7a5ef9696d367`.
+This is a local Windows build; no tag or cross-platform publication was performed.

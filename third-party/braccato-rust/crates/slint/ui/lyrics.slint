@@ -26,6 +26,9 @@ export struct LyricWord {
     duration-ms: float,
     cue-offset: float,
     cue-span: float,
+    motion-start-ms: float,
+    motion-duration-ms: float,
+    motion-origin-em: float,
     source-part: int,
     font-family: string,
     glow-wide: image,
@@ -229,6 +232,12 @@ component LyricWordView inherits Rectangle {
     in property <string> motion: "stretch";
     in property <int> font-weight: 700;
     in property <bool> word-wobble: true;
+    in property <bool> settled-word-motion: false;
+    in property <float> wobble-strength: 1;
+    in property <float> wobble-elapsed-ms: root.elapsed-ms;
+    in property <float> wobble-cue-duration-ms: root.cue-duration-ms;
+    in property <float> wobble-origin-em: 0;
+    in property <bool> grouped-wobble: false;
     in property <float> wobble-duration-ms: 1000;
     in property <float> wobble-peak-offset: 0.125;
     in property <float> wobble-settle-offset: 0.75;
@@ -292,12 +301,20 @@ component LyricWordView inherits Rectangle {
     private property <brush> glow-highlight: root.glow-color;
     // inject.ts splits every non-joining timed word, including short syllables. The long-word
     // threshold controls emphasis scaling only, never the existence of letter masks or floats.
+    private property <float> letter-elapsed-ms: root.elapsed-ms - (root.settled-word-motion ? root.cue-duration-ms * root.cue-offset : 0);
+    private property <float> letter-plan-ms: root.glyphs.length > 0 ? root.glyphs[root.glyphs.length - 1].delay-ms + root.glyphs[root.glyphs.length - 1].wave-ms : 0;
+    private property <float> letter-window-ms: root.settled-word-motion ? min(root.letter-plan-ms,root.cue-duration-ms * root.fragment-span) : root.letter-plan-ms;
+    private property <float> letter-motion-ms: root.settled-word-motion ? root.letter-elapsed-ms * root.letter-plan-ms / max(1,root.letter-window-ms) : root.letter-elapsed-ms;
+    private property <float> letter-amount: root.settled-word-motion ? min(1,max(0,root.cue-duration-ms * root.fragment-span / 240)) : 1;
     private property <bool> lettered: root.letter-wave && root.glyphs.length > 0
-        && root.cue-duration-ms > 0 && root.motion != "karaoke";
-    private property <float> wobble-phase: root.ease-progress(root.wobble-duration-ms > 0 ? min(1, max(0, root.elapsed-ms / root.wobble-duration-ms)) : 1, root.wobble-easing);
+        && root.cue-duration-ms > 0 && root.motion != "karaoke"
+        && (!root.settled-word-motion || (root.letter-elapsed-ms >= 0 && root.letter-elapsed-ms < root.letter-window-ms));
+    private property <float> wobble-period: root.settled-word-motion ? min(root.wobble-duration-ms,root.wobble-cue-duration-ms) : root.wobble-duration-ms;
+    private property <float> wobble-amount: root.wobble-strength * (root.settled-word-motion ? min(1,max(0,root.wobble-cue-duration-ms / 240)) : 1);
+    private property <float> wobble-phase: root.ease-progress(root.wobble-period > 0 ? min(1, max(0, root.wobble-elapsed-ms / root.wobble-period)) : 1, root.wobble-easing);
     private property <int> wobble-segment: root.wobble-phase <= root.wobble-peak-offset ? 0 : root.wobble-phase <= root.wobble-settle-offset ? 1 : 2;
     private property <float> wobble-local: root.wobble-segment == 0
-        ? root.wobble-phase / max(0.0001, root.wobble-peak-offset)
+        ? (root.settled-word-motion ? root.ease-progress(root.wobble-phase / max(0.0001, root.wobble-peak-offset), "smooth") : root.wobble-phase / max(0.0001, root.wobble-peak-offset))
         : root.wobble-segment == 1
             ? root.ease-progress((root.wobble-phase - root.wobble-peak-offset) / max(0.0001, root.wobble-settle-offset - root.wobble-peak-offset), root.wobble-peak-easing)
             : (root.wobble-phase - root.wobble-settle-offset) / max(0.0001, 1 - root.wobble-settle-offset);
@@ -313,7 +330,7 @@ component LyricWordView inherits Rectangle {
     private property <float> wobble-scale-y: root.wobble-segment == 0 ? root.mix(root.wobble-from.scale-y, root.wobble-peak.scale-y, root.wobble-local)
         : root.wobble-segment == 1 ? root.mix(root.wobble-peak.scale-y, root.wobble-settle.scale-y, root.wobble-local)
         : root.mix(root.wobble-settle.scale-y, root.wobble-to.scale-y, root.wobble-local);
-    private property <bool> wobble-enabled: root.word-wobble && root.elapsed-ms >= 0 && root.motion != "none" && root.motion != "karaoke";
+    private property <bool> wobble-enabled: root.word-wobble && root.wobble-amount > 0 && root.wobble-elapsed-ms >= 0 && (!root.settled-word-motion || root.wobble-cue-duration-ms > 0) && root.motion != "none" && root.motion != "karaoke";
     private property <float> karaoke-lift-phase: root.elapsed-ms < 160
         ? root.ease-progress(min(1, max(0, root.elapsed-ms / 160)), "ease-in-out")
         : 1 - root.ease-progress(min(1, max(0, (root.elapsed-ms - 160) / 360)), "ease-in-out");
@@ -339,6 +356,7 @@ component LyricWordView inherits Rectangle {
         root.bezier-y(t4, y1, y2)
     }
     public pure function ease-progress(progress: float, curve: string) -> float {
+        if curve == "smooth" { let t = min(1,max(0,progress)); return t * t * (3 - 2 * t); }
         if curve == "linear" { return min(1, max(0, progress)); }
         if curve == "ease-in" { return root.cubic-bezier-progress(progress, 0.42, 0, 1, 1); }
         if curve == "ease-out" { return root.cubic-bezier-progress(progress, 0, 0, 0.58, 1); }
@@ -353,14 +371,14 @@ component LyricWordView inherits Rectangle {
     height: word.preferred-height;
     private property <length> mask-y: (root.height - (word.font-metrics.ascent - word.font-metrics.descent)) / 2 - root.font-size * root.glow-padding / 64;
     Rectangle {
-    x: root.wobble-enabled ? root.font-size * root.wobble-x-em : 0px;
-    y: root.motion-y + (root.wobble-enabled ? root.font-size * root.wobble-y-em : 0px);
+    x: root.wobble-enabled ? root.font-size * root.wobble-x-em * root.wobble-amount : 0px;
+    y: root.motion-y + (root.wobble-enabled ? root.font-size * root.wobble-y-em * root.wobble-amount : 0px);
     width: root.width; height: root.height;
     // Center the scale pop on the word like the upstream inline-block transform origin.
     // Translation still comes from the same song clock, so the full word and its glow travel together.
-    transform-origin: { x: self.width / 2, y: self.height / 2 };
-    transform-scale-x: root.animated-line-scale * (root.wobble-enabled ? root.wobble-scale-x : 1);
-    transform-scale-y: root.animated-line-scale * (root.wobble-enabled ? root.wobble-scale-y : 1);
+    transform-origin: { x: root.grouped-wobble ? root.wobble-origin-em * root.font-size : self.width / 2, y: self.height / 2 };
+    transform-scale-x: root.animated-line-scale * (root.wobble-enabled ? 1 + (root.wobble-scale-x - 1) * root.wobble-amount : 1);
+    transform-scale-y: root.animated-line-scale * (root.wobble-enabled ? 1 + (root.wobble-scale-y - 1) * root.wobble-amount : 1);
     // Shadows are blurred glyph alpha masks, shared by words, never rectangular box shadows.
     if root.glow-fade > 0.001: Rectangle {
         width: root.width; height: root.height;
@@ -449,8 +467,7 @@ component LyricWordView inherits Rectangle {
             width: word.preferred-width;
             height: word.preferred-height;
     }
-    letters := Rectangle {
-        visible: root.lettered;
+    if root.lettered: Rectangle {
         x: 0px; y: 0px;
         width: root.width; height: root.height;
         for glyph in root.glyphs: Rectangle {
@@ -458,16 +475,16 @@ component LyricWordView inherits Rectangle {
             width: glyph.width * root.width; height: root.height;
             Rectangle {
             width: parent.width; height: parent.height;
-            private property <float> phase: root.word-wobble && root.motion != "none"
-                ? min(1, max(0, (root.elapsed-ms - glyph.delay-ms) / glyph.wave-ms)) : 0;
+            private property <float> phase: root.letter-wave && root.motion != "none"
+                ? min(1, max(0, (root.letter-motion-ms - glyph.delay-ms) / max(1,glyph.wave-ms))) : 0;
             private property <float> rise: self.phase < 0.4
                 ? root.ease-progress(self.phase / 0.4, root.letter-wave-rise-easing)
                 : 1 - root.ease-progress((self.phase - 0.4) / 0.6, root.letter-wave-fall-easing);
-            y: root.font-size * (self.phase < 0.4
+            y: root.font-size * root.letter-amount * (self.phase < 0.4
                 ? root.letter-wave-y-em * self.rise
-                : root.letter-wave-settle-y-em + (root.letter-wave-y-em - root.letter-wave-settle-y-em) * self.rise);
+                : root.settled-word-motion ? root.letter-wave-y-em * self.rise : root.letter-wave-settle-y-em + (root.letter-wave-y-em - root.letter-wave-settle-y-em) * self.rise);
             transform-origin: { x: self.width / 2, y: self.height / 2 };
-            transform-scale: root.cue-duration-ms > root.long-word-threshold-ms ? 1 + (root.letter-wave-emphasis-scale - 1) * self.rise : 1;
+            transform-scale: root.cue-duration-ms > root.long-word-threshold-ms ? 1 + (root.letter-wave-emphasis-scale - 1) * self.rise * root.letter-amount : 1;
             // Composite sharp/base ink once in local coordinates before applying the
             // letter transform. Re-rasterizing scaled text changes its pixel phase and
             // can make a moving gradient lose an entire strip for a frame.
@@ -569,6 +586,8 @@ export component LyricsView inherits Rectangle {
     in property <float> glow-radius-to-px: 0;
     in property <float> long-word-threshold-ms: 1500;
     in property <bool> word-wobble: true;
+    in property <bool> settled-word-motion: false;
+    in property <float> wobble-strength: 1;
     in property <float> wobble-duration-ms: 1000;
     in property <float> wobble-peak-offset: 0.125;
     in property <float> wobble-settle-offset: 0.75;
@@ -650,6 +669,12 @@ export component LyricsView inherits Rectangle {
                         glow-radius-from-px: root.glow-radius-from-px; long-word-threshold-ms: root.long-word-threshold-ms;
                         motion: root.karaoke ? "karaoke" : root.word-motion;
                         word-wobble: root.word-wobble;
+                        settled-word-motion: root.settled-word-motion;
+                        wobble-strength: root.wobble-strength;
+                        grouped-wobble: root.settled-word-motion && part.motion-duration-ms > 0;
+                        wobble-origin-em: part.motion-origin-em;
+                        wobble-elapsed-ms: root.playback-time-ms - (root.settled-word-motion && part.motion-duration-ms > 0 ? part.motion-start-ms : part.start-ms + (root.settled-word-motion ? part.duration-ms * part.cue-offset : 0));
+                        wobble-cue-duration-ms: part.motion-duration-ms > 0 ? part.motion-duration-ms : part.duration-ms * (part.cue-span > 0 ? part.cue-span : 1);
                         wobble-duration-ms: root.wobble-duration-ms; wobble-peak-offset: root.wobble-peak-offset; wobble-settle-offset: root.wobble-settle-offset;
                         wobble-easing: root.wobble-easing; wobble-peak-easing: root.wobble-peak-easing; wobble-end-easing: root.wobble-end-easing;
                         wobble-from: root.wobble-from; wobble-peak: root.wobble-peak; wobble-settle: root.wobble-settle; wobble-to: root.wobble-to;
@@ -794,6 +819,12 @@ export component LyricsView inherits Rectangle {
                         glow-radius-from-px: root.glow-radius-from-px; long-word-threshold-ms: root.long-word-threshold-ms;
                                 motion: root.karaoke ? "karaoke" : root.word-motion;
                                 word-wobble: root.word-wobble;
+                                settled-word-motion: root.settled-word-motion;
+                                wobble-strength: root.wobble-strength;
+                                grouped-wobble: root.settled-word-motion && part.motion-duration-ms > 0;
+                                wobble-origin-em: part.motion-origin-em;
+                                wobble-elapsed-ms: root.playback-time-ms - (root.settled-word-motion && part.motion-duration-ms > 0 ? part.motion-start-ms : part.start-ms + (root.settled-word-motion ? part.duration-ms * part.cue-offset : 0));
+                                wobble-cue-duration-ms: part.motion-duration-ms > 0 ? part.motion-duration-ms : part.duration-ms * (part.cue-span > 0 ? part.cue-span : 1);
                                 wobble-duration-ms: root.wobble-duration-ms; wobble-peak-offset: root.wobble-peak-offset; wobble-settle-offset: root.wobble-settle-offset;
                                 wobble-easing: root.wobble-easing; wobble-peak-easing: root.wobble-peak-easing; wobble-end-easing: root.wobble-end-easing;
                                 wobble-from: root.wobble-from; wobble-peak: root.wobble-peak; wobble-settle: root.wobble-settle; wobble-to: root.wobble-to;

@@ -30,7 +30,10 @@ remain unchanged. The shared artwork-derived background stays visible.
 Normal native lyrics use a single shaped gradient fill and a restrained 6px glow
 at 31% opacity. A gentle sweep wave and scroll with soft acceleration/deceleration provide flowing motion;
 reduced motion disables both. Custom themes may request stronger effects.
-Letter waves/wobble remain available through custom themes. Only nearby visible
+Normal word wobble gently stretches whole words, sharing an origin across timed
+syllables and settling within the cue. Short cues have reduced motion amplitude.
+Letter waves remain optional and independent of wobble; settled waves return to
+one shaped run. Only nearby visible
 rows construct word surfaces. A short complementary crossfade between aligned
 sharp ink and cached blur softens focus changes; each settled row keeps only one
 paint body. Highlight fades use a smooth curve with flat endpoints. See

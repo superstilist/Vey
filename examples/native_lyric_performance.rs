@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     w.set_lyrics_word_timed(true);
     let mut style = w.get_lyric_style();
     style.wave = false;
-    style.wobble = false;
+    style.wobble = std::env::args().any(|arg| arg == "--wobble");
     style.glow_radius = 8.;
     style.glow_color = slint::Color::from_argb_encoded(0x80ffffff);
     w.set_lyric_style(style);

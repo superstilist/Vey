@@ -360,7 +360,7 @@ export component MainWindow inherits Window {
     in-out property <string> lyric-font-family;
     in-out property <string> lyric-style-status;
     in-out property <LyricStyle> lyric-style: {family:"Satoshi",glow-color:#ffffff50,glow-radius:6,glow-duration:1200,
-        glow:true,swipe:true,wave:false,wobble:false,fade:true,inactive-blur:2,line-spacing:1.333,active-scale:1,inactive-scale:0.95,
+        glow:true,swipe:true,wave:false,wobble:true,wobble-duration:1000,wobble-strength:1,fade:true,inactive-blur:2,line-spacing:1.333,active-scale:1,inactive-scale:0.95,
         swipe-duration:1.6,swipe-lead:0.1,wave-duration:900};
     callback apply-lyric-style();
     callback import-lyric-font();

@@ -81,7 +81,13 @@ fn capture(w: &MainWindow, name: &str) -> image::RgbaImage {
     frame
 }
 
-fn verify(off: &image::RgbaImage, mid: &image::RgbaImage, full: &image::RgbaImage, wrapped: bool) {
+fn verify(
+    off: &image::RgbaImage,
+    mid: &image::RgbaImage,
+    full: &image::RgbaImage,
+    wrapped: bool,
+    wave: bool,
+) {
     // Find sung backing glyph cores by comparing the before/after frames, away
     // from the transport. Lead text and row geometry remain fixed throughout.
     let ink = (full.height() / 6..full.height() * 7 / 10)
@@ -97,6 +103,24 @@ fn verify(off: &image::RgbaImage, mid: &image::RgbaImage, full: &image::RgbaImag
     let right = ink.iter().map(|p| p.0).max().unwrap() as f32;
     let top = ink.iter().map(|p| p.1).min().unwrap() as f32;
     let bottom = ink.iter().map(|p| p.1).max().unwrap() as f32;
+    // A real letter wave moves dim base glyphs too. Their unlit color ceiling
+    // remains unchanged; position-by-position differences would mistake that
+    // movement for early fill. Non-wave cases retain the exact-pixel check.
+    let mut base_ceiling = [0u8; 3];
+    for y in top as u32..=bottom as u32 {
+        for x in left as u32..=right as u32 {
+            let p = off.get_pixel(x, y);
+            for c in 0..3 {
+                base_ceiling[c] = base_ceiling[c].max(p[c]);
+            }
+        }
+    }
+    if wave {
+        assert!(
+            base_ceiling.iter().all(|c| *c < 160),
+            "unsung base must be dim enough to distinguish highlight"
+        );
+    }
     let mut early = 0;
     let mut lit = 0;
     let mut tail = 0;
@@ -108,7 +132,15 @@ fn verify(off: &image::RgbaImage, mid: &image::RgbaImage, full: &image::RgbaImag
             && (!wrapped || (y as f32) < top + (bottom - top) * 0.4)
         {
             early += 1;
-            if (0..3).all(|c| b[c] as i16 - a[c] as i16 > 70) {
+            let covered = if wave {
+                (y.saturating_sub(3)..=(y + 3).min(mid.height() - 1)).any(|py| {
+                    (x.saturating_sub(3)..=(x + 3).min(mid.width() - 1))
+                        .any(|px| (0..3).all(|c| mid.get_pixel(px, py)[c] > 215))
+                })
+            } else {
+                (0..3).all(|c| b[c] as i16 - a[c] as i16 > 70)
+            };
+            if covered {
                 lit += 1;
             }
         }
@@ -118,7 +150,11 @@ fn verify(off: &image::RgbaImage, mid: &image::RgbaImage, full: &image::RgbaImag
             (x as f32) > left + (right - left) * 0.65
         } {
             tail += 1;
-            if (0..3).any(|c| (b[c] as i16 - a[c] as i16).abs() > 3) {
+            if if wave {
+                (0..3).any(|c| b[c] > base_ceiling[c].saturating_add(3))
+            } else {
+                (0..3).any(|c| (b[c] as i16 - a[c] as i16).abs() > 3)
+            } {
                 prematurely_lit += 1;
             }
         }
@@ -167,7 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if phase == 0 {w.set_position(2.6);}
         else if phase == 1 {w.set_position(5.8);}
         else {
-            let mut f = frames.borrow_mut(); verify(&f[0], &f[1], &f[2], wrapped); f.clear();
+            let mut f = frames.borrow_mut(); verify(&f[0], &f[1], &f[2], wrapped, wave); f.clear();
             if case + 1 == CASES.len() {
                 println!("native backing fill: phrase, mobile wrapping and opt-in letter path passed");
                 slint::quit_event_loop().unwrap();

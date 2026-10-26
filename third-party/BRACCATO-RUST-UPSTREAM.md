@@ -69,6 +69,12 @@ Host adaptations (all other copied crate source is unchanged):
   feather to finish inside each cue/fragment, gates continuation ink/glow until
   the previous fragment completes, and removes the wave at those boundaries.
   Native stage/focus selection uses actual cues in the Vey adapter.
+  Optional `settled-word-motion` bounds word/letter motion to supplied cue or
+  fragment intervals, uses a smooth attack/return and attenuates short cues.
+  `LyricWord.motion-start-ms`, `motion-duration-ms` and `motion-origin-em` are
+  layout-only host metadata: Vey groups timed syllables under one transform
+  origin without changing text or fill clocks. Cached glyph bodies exist only
+  during an optional letter wave; word wobble and letter waves are independent.
 - `crates/slint/src/glow.rs`: apply the requested variable-font weight when
   measuring mask bounds and sweep glyphs, matching the native text font instance.
 - Vey's `src/native_lyric_glyphs.rs` is based on demo/src/glyph_plans.rs, with

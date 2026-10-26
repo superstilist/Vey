@@ -11,6 +11,7 @@ export struct LyricStyle {
     glow: bool, swipe: bool, wave: bool, wobble: bool, fade: bool,
     inactive-blur: float, line-spacing: float, active-scale: float, inactive-scale: float,
     swipe-duration: float, swipe-lead: float, wave-duration: float,
+    wobble-duration: float, wobble-strength: float,
 }
 
 // Vey host bindings; the renderer itself is the copied Rust Braccato component.
@@ -94,6 +95,14 @@ export component NativeLyrics inherits Rectangle {
             animate-instrumental: !root.reduced;
             animate-decorations: !root.reduced;
             word-wobble: !root.reduced && root.richsync && root.style.wobble;
+            settled-word-motion: true;
+            wobble-duration-ms: root.style.wobble-duration;
+            wobble-strength: root.style.wobble-strength;
+            wobble-easing: "linear";
+            wobble-peak-easing: "smooth";
+            wobble-end-easing: "smooth";
+            wobble-peak-offset: 0.22;
+            wobble-settle-offset: 0.85;
             letter-wave: !root.reduced && root.richsync && root.style.wave;
             highlight-glow: !root.reduced && root.richsync && root.style.glow;
             highlight-swipe: !root.reduced && root.richsync && root.style.swipe;

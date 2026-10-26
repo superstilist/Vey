@@ -11,6 +11,8 @@ pub struct Appearance {
     pub swipe: bool,
     pub wave: bool,
     pub wobble: bool,
+    pub wobble_duration: f32,
+    pub wobble_strength: f32,
     pub fade: bool,
     pub inactive_blur: f32,
     pub line_spacing: f32,
@@ -30,7 +32,9 @@ impl Default for Appearance {
             glow: true,
             swipe: true,
             wave: false,
-            wobble: false,
+            wobble: true,
+            wobble_duration: 1000.,
+            wobble_strength: 1.,
             fade: true,
             inactive_blur: 2.,
             line_spacing: 1.333,
@@ -85,6 +89,8 @@ impl NativeTheme {
             swipe: a.swipe,
             wave: a.wave,
             wobble: a.wobble,
+            wobble_duration: a.wobble_duration,
+            wobble_strength: a.wobble_strength,
             fade: a.fade,
             inactive_blur: a.inactive_blur,
             line_spacing: a.line_spacing,
@@ -351,6 +357,13 @@ pub fn convert(css: &str) -> NativeTheme {
                 "--blyrics-inactive-blur" => number(value, "px", 0., 12.)
                     .map(|v| theme.appearance.inactive_blur = v)
                     .is_some(),
+                "--blyrics-wobble-duration" => crate::braccato::settings::milliseconds(value)
+                    .filter(|n| *n > 0 && *n <= 10000)
+                    .map(|n| theme.appearance.wobble_duration = n as f32)
+                    .is_some(),
+                "--vey-word-wobble-strength" => number(value, "", 0., 2.)
+                    .map(|v| theme.appearance.wobble_strength = v)
+                    .is_some(),
                 "--blyrics-swipe-duration-ratio" => number(value, "", 0.2, 4.)
                     .map(|v| theme.appearance.swipe_duration = v)
                     .is_some(),
@@ -393,14 +406,19 @@ pub fn convert(css: &str) -> NativeTheme {
 mod tests {
     use super::*;
     #[test]
-    fn normal_fill_is_light_and_the_original_motion_remains_opt_in() {
+    fn normal_fill_is_light_with_whole_word_motion_and_optional_letter_waves() {
         let default = NativeTheme::default();
-        assert!(!default.appearance.wave && !default.appearance.wobble);
+        assert!(!default.appearance.wave && default.appearance.wobble);
         assert_eq!(default.appearance.glow_radius, 6.);
         assert_eq!(default.style().glow_color.alpha(), 0x50);
         let enabled=convert(":root{--blyrics-animate-letter-wave:1;--blyrics-animate-word-wobble:1;--blyrics-highlight-glow-radius-from:12.8px;}");
         assert!(enabled.appearance.wave && enabled.appearance.wobble);
         assert_eq!(enabled.appearance.glow_radius, 12.8);
+        let custom=convert(":root{--blyrics-wobble-duration:700ms;--vey-word-wobble-strength:0.6;--blyrics-animate-word-wobble:0;}");
+        assert!(custom.unsupported.is_empty());
+        assert_eq!(custom.appearance.wobble_duration, 700.);
+        assert_eq!(custom.appearance.wobble_strength, 0.6);
+        assert!(!custom.appearance.wobble);
     }
     #[test]
     fn custom_fonts_effects_and_persistent_theme_round_trip() {

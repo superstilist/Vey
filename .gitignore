@@ -19,6 +19,7 @@ live-ytm.txt
 
 /.reference/
 /tools/braccato-widget/node_modules/
+/tools/braccato-widget/target/
 
 /.claude/
 *.pid

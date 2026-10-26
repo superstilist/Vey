@@ -174,13 +174,17 @@ overlaps, pins tall wrapped sources and retargets immediately; manual/resume,
 paused seeks and reduced motion remain exact. Sung activation keeps its clock.
 The default glow is 6px at 31% opacity. Atlases crossfade two radii, or four
 for broader custom glow. Normal fill paints base/highlight in one shaped text
-run; letter waves and wobble are opt-in. Only viewport-adjacent row bodies
-  instantiate word views. Focus crossfades aligned sharp ink/cached blur for
-  180ms in and 280ms out, sharing one row scale/origin. Settled rows retain one
-  paint body; reduced motion switches immediately.
-  `FocusPaint` retains blend clocks outside model delegates and updates nearby
-  `focus-mix` values only while changing, so ordinary row updates cannot reset
-  a handoff. Seeks snap the blend together with the camera.
+run; subtle whole-word wobble is enabled, while letter waves remain opt-in.
+Layout-only motion intervals/origins keep syllables together and defer wrapped
+continuations until their fill entry. Motion settles within the actual cue;
+duration/strength CSS and reduced motion remain supported. Letter waves work
+independently and instantiate glyph bodies only during their motion window.
+Only viewport-adjacent row bodies instantiate word views. Focus crossfades
+aligned sharp ink/cached blur for 180ms in and 280ms out, sharing one row
+scale/origin. Settled rows retain one paint body; reduced motion switches immediately.
+`FocusPaint` retains blend clocks outside model delegates and updates nearby
+`focus-mix` values only while changing, so ordinary row updates cannot reset
+a handoff. Seeks snap the blend together with the camera.
 Multiword timed cues remain one shaping run until wrapping; normalized cue
 offset/span carries the same fill edge across wrapped fragments without retiming.
 Native fill is bounded by the supplied cue end; each wrapped fragment completes

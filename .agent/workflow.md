@@ -34,10 +34,12 @@ Run commands from the project root in PowerShell unless stated otherwise.
 | Long hyphenated/unbroken text, mobile/stage bounds and cue continuation | `cargo run --locked --example native_lyric_overflow` |
 | Native Braccato reference typography/focus/sweep visuals | `cargo run --locked --example native_lyric_effects` |
 | Focus crossfade pixels, no additive duplicate and reduced motion | `cargo run --locked --example native_lyric_handoff` |
+| Whole-word/syllable motion, unsung-word pixels and independent letter waves | `cargo run --locked --example native_lyric_wobble` |
 | Continuous camera positions, rapid retarget and no overshoot | `cargo run --locked --example native_lyric_motion` |
 | Imported fonts, custom themes and filled-only glow pixels | `cargo run --locked --example native_lyric_custom` |
 | Backing-vocal phrase/wrapped fill pixels, including opt-in letter waves | `cargo run --locked --example native_lyric_backing` |
 | Native render workload timings | `cargo run --locked --example native_lyric_performance -- label`; JSON under `target/native-lyrics-check/` |
+| Same native workload with word wobble enabled | `cargo run --locked --example native_lyric_performance -- label --wobble` |
 | Native executable release build | `cargo build --release --bin vey --locked`; output `target/release/vey.exe` |
 | Copied renderer unit checks | `cargo test --locked --manifest-path third-party/braccato-rust/Cargo.toml --target-dir target -p braccato-slint -p braccato-engine -p braccato-types -p braccato-themes` |
 | Android bars/cutout layout fixtures (native simulation) | `cargo run --locked --example android_layout` |

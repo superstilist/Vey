@@ -117,6 +117,9 @@ pub fn lyric_rows(
                         LyricWord {
                             cue_offset: 0.0,
                             cue_span: 1.0,
+                            motion_start_ms: 0.0,
+                            motion_duration_ms: 0.0,
+                            motion_origin_em: 0.0,
                             source_part: part_index as i32,
                             glow_wide: Default::default(),
                             glow_tight: Default::default(),
@@ -186,6 +189,9 @@ pub fn lyric_rows(
                     .map(|(part_index, part)| LyricWord {
                         cue_offset: 0.0,
                         cue_span: 1.0,
+                        motion_start_ms: 0.0,
+                        motion_duration_ms: 0.0,
+                        motion_origin_em: 0.0,
                         source_part: part_index as i32,
                         glow_wide: Default::default(),
                         glow_tight: Default::default(),
