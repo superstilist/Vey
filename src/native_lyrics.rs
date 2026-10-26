@@ -276,11 +276,7 @@ fn styled_layout(
 // Presentation-only groups: separately timed syllables share one word transform.
 // Canonical cue times and fill fragments are deliberately not rewritten.
 fn plan_word_motion(parts: &mut [BraccatoWord], size: f32, weight: u16) {
-    let boundary = |text: &str| {
-        text.ends_with(|c: char| {
-            c.is_whitespace() || matches!(c, '-' | '\u{2010}' | '\u{00ad}' | '\u{200b}')
-        })
-    };
+    let boundary = |text: &str| text.ends_with(|c: char| c.is_whitespace() || c == '\u{200b}');
     let mut first = 0;
     while first < parts.len() {
         if parts[first].text.chars().all(char::is_whitespace) {
@@ -774,6 +770,33 @@ pub fn install(w: &MainWindow) {
 mod tests {
     use super::*;
     use crate::lyrics::LyricsAlternative;
+    #[test]
+    fn hyphenated_syllables_share_motion_but_keep_their_fill_times() {
+        let mut parts = vec![
+            BraccatoWord {
+                text: "Sha-".into(),
+                start_ms: 1000.,
+                duration_ms: 225.,
+                cue_span: 1.,
+                ..Default::default()
+            },
+            BraccatoWord {
+                text: "ba,".into(),
+                start_ms: 1225.,
+                duration_ms: 224.,
+                cue_span: 1.,
+                ..Default::default()
+            },
+        ];
+        plan_word_motion(&mut parts, 48., 700);
+        for part in &parts {
+            assert_eq!(
+                (part.motion_start_ms, part.motion_duration_ms),
+                (1000., 449.)
+            );
+        }
+        assert_eq!((parts[1].start_ms, parts[1].duration_ms), (1225., 224.));
+    }
     #[test]
     fn word_motion_groups_syllables_without_touching_their_cues() {
         let mut parts = vec![

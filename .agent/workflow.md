@@ -35,6 +35,8 @@ Run commands from the project root in PowerShell unless stated otherwise.
 | Native Braccato reference typography/focus/sweep visuals | `cargo run --locked --example native_lyric_effects` |
 | Focus crossfade pixels, no additive duplicate and reduced motion | `cargo run --locked --example native_lyric_handoff` |
 | Whole-word/syllable motion, unsung-word pixels and independent letter waves | `cargo run --locked --example native_lyric_wobble` |
+| Continuous repeated-word/backing fill with no backwards ink | `cargo run --locked --example native_fill_continuity` |
+| Active/expired glow, atlas feather and letter/whole-run fill conformance | `cargo run --locked --example native_fill_effects` |
 | Continuous camera positions, rapid retarget and no overshoot | `cargo run --locked --example native_lyric_motion` |
 | Imported fonts, custom themes and filled-only glow pixels | `cargo run --locked --example native_lyric_custom` |
 | Backing-vocal phrase/wrapped fill pixels, including opt-in letter waves | `cargo run --locked --example native_lyric_backing` |

@@ -28,8 +28,10 @@ line with cached, progressively blurred neighboring lines. Glyph masks are
 rasterized off the UI thread; source timestamps and word/syllable boundaries
 remain unchanged. The shared artwork-derived background stays visible.
 Normal native lyrics use a single shaped gradient fill and a restrained 6px glow
-at 31% opacity. A gentle sweep wave and scroll with soft acceleration/deceleration provide flowing motion;
-reduced motion disables both. Custom themes may request stronger effects.
+at 31% opacity. Fill uses one linear spatial sweep for whole runs, letters and
+the glow feather. Completed words use a solid brush; glow settles within its
+real cue. Word motion and soft scrolling provide flowing motion; reduced motion
+disables both. Custom themes may request stronger effects.
 Normal word wobble gently stretches whole words, sharing an origin across timed
 syllables and settling within the cue. Short cues have reduced motion amplitude.
 Letter waves remain optional and independent of wobble; settled waves return to

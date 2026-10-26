@@ -160,7 +160,11 @@ component LyricInk inherits Rectangle {
     // One native text run: no per-band scissor edges can cut through the glyphs.
     if root.native-text-gradients: Text {
         width: root.width; height: root.height; text: root.text;
-        color: @linear-gradient(90deg + root.wave-angle,
+        // Avoid coincident gradient stops at complete/empty coverage. Native
+        // backends should receive an unambiguous solid brush at those states.
+        color: root.reveal <= 0 || root.sweep-end <= 0 ? root.base-ink
+            : root.sweep-start >= 1 ? root.ink.mix(root.base-ink,root.reveal)
+            : @linear-gradient(90deg + root.wave-angle,
             root.left-ink 0%, root.left-ink root.start-stop * 100%,
             root.right-ink root.end-stop * 100%, root.right-ink 100%);
         font-family: root.font-family; font-size: root.font-size; font-weight: root.font-weight;
@@ -228,6 +232,7 @@ component LyricWordView inherits Rectangle {
     in property <image> sustain-blurred;
     in property <[LyricGlyph]> glyphs;
     in property <bool> glow-enabled: true;
+    in property <bool> cue-bounded-glow: false;
     in property <float> elapsed-ms: -1;
     in property <string> motion: "stretch";
     in property <int> font-weight: 700;
@@ -293,12 +298,18 @@ component LyricWordView inherits Rectangle {
     private property <float> reveal: (root.cue-duration-ms <= 0 ? min(1, max(0, root.elapsed-ms / max(1, root.highlight-fade-in-ms))) : (root.elapsed-ms >= 0 && (!root.finish-fill-at-cue-end || !root.highlight-swipe || root.cue-phase >= root.cue-offset) ? 1 : 0)) * root.fade;
     private property <float> glow-time: root.ease-progress(min(1, max(0, root.elapsed-ms / max(root.glow-min-duration-ms, root.cue-duration-ms * root.glow-duration-ratio))), root.glow-easing);
     private property <float> glow-in: root.ease-progress(min(1, max(0, root.elapsed-ms / 80)), "ease-out");
+    private property <float> glow-elapsed-ms: root.elapsed-ms - root.cue-duration-ms * root.cue-offset;
+    private property <float> glow-window-ms: root.cue-duration-ms * root.fragment-span;
+    private property <float> glow-attack: root.ease-progress(min(1,max(0,root.glow-elapsed-ms / max(1,min(80,root.glow-window-ms * 0.2)))), "smooth");
+    private property <float> glow-release: root.ease-progress(min(1,max(0,(root.glow-window-ms - root.glow-elapsed-ms) / max(1,min(180,root.glow-window-ms * 0.35)))), "smooth");
     private property <float> glow-fade: root.glow-enabled && root.elapsed-ms >= 0 && root.cue-duration-ms > 0 && (!root.finish-fill-at-cue-end || !root.highlight-swipe || root.cue-phase >= root.cue-offset)
-        ? root.glow-in * root.fade : 0;
+        ? (root.cue-bounded-glow ? root.glow-attack * root.glow-release : root.glow-in) * root.fade : 0;
     // Only positive-radius shadows have cached paint. The zero-radius resting state is empty.
     private property <float> glow-wide-strength: 1 - root.glow-time;
     private property <float> glow-tight-strength: root.glow-time;
-    private property <brush> glow-highlight: root.glow-color;
+    private property <float> glow-start-texel: root.glow-padding + root.ramp-start * root.width * 64 / max(1px,root.font-size);
+    private property <float> glow-end-texel: root.glow-padding + root.ramp-end * root.width * 64 / max(1px,root.font-size);
+    private property <color> glow-highlight: root.glow-color;
     // inject.ts splits every non-joining timed word, including short syllables. The long-word
     // threshold controls emphasis scaling only, never the existence of letter masks or floats.
     private property <float> letter-elapsed-ms: root.elapsed-ms - (root.settled-word-motion ? root.cue-duration-ms * root.cue-offset : 0);
@@ -413,19 +424,43 @@ component LyricWordView inherits Rectangle {
         height: root.glow-wide.height * root.font-size / 64;
         clip: true;
         private property <float> frame: root.glow-time * root.glow-levels;
-        for sample in [0, 1]: Image {
+        private property <int> tile-width: root.glow-wide.width / root.glow-levels;
+        private property <int> cut-end: root.highlight-swipe && !root.fill-complete
+            ? min(self.tile-width,max(0,ceil(root.glow-end-texel))) : self.tile-width;
+        private property <int> feather-start: root.cue-bounded-glow
+            ? min(self.cut-end,max(0,floor(root.glow-start-texel))) : self.cut-end;
+        for sample in [0, 1]: Rectangle {
             private property <int> level: floor(parent.frame) + sample;
-            x: 0px; y: 0px;
-            width: root.glow-wide.width / root.glow-levels * root.font-size / 64;
-            height: root.glow-wide.height * root.font-size / 64;
-            source: root.glow-wide;
-            source-clip-x: min(root.glow-levels - 1, self.level) * root.glow-wide.width / root.glow-levels;
-            source-clip-y: 0;
-            source-clip-width: root.glow-wide.width / root.glow-levels;
-            source-clip-height: root.glow-wide.height;
-            colorize: root.glow-color;
-            opacity: self.level >= root.glow-levels ? 0 : root.glow-fade
+            private property <int> tile-width: parent.tile-width;
+            private property <int> cut-end: parent.cut-end;
+            private property <int> feather-start: parent.feather-start;
+            private property <int> band-count: root.cue-bounded-glow ? 9 : 1;
+            private property <float> radius-alpha: self.level >= root.glow-levels ? 0 : root.glow-fade
                 * (sample == 0 ? 1 - parent.frame + floor(parent.frame) : parent.frame - floor(parent.frame));
+            width: parent.width; height: parent.height;
+            // Image tint gradients span the entire atlas, not a clipped radius
+            // tile, and invalidate its colorized texture as the fill moves.
+            // Keep tint static; split only the feather into eight disjoint
+            // source-texel bands plus one fully sung prefix.
+            for band in self.band-count: Image {
+                private property <int> first: band == 0 ? 0
+                    : floor(parent.feather-start + (parent.cut-end - parent.feather-start) * (band - 1) / 8);
+                private property <int> last: band == 0 ? parent.feather-start
+                    : floor(parent.feather-start + (parent.cut-end - parent.feather-start) * band / 8);
+                private property <float> coverage: !root.cue-bounded-glow || !root.highlight-swipe || root.fill-complete ? 1
+                    : min(1,max(0,(root.glow-end-texel - (self.first + self.last) / 2) / max(1,root.glow-end-texel - root.glow-start-texel)));
+                visible: self.last > self.first && parent.level < root.glow-levels;
+                x: self.first * root.font-size / 64;
+                width: max(0,self.last - self.first) * root.font-size / 64;
+                height: root.glow-wide.height * root.font-size / 64;
+                source: root.glow-wide;
+                source-clip-x: min(root.glow-levels - 1,parent.level) * parent.tile-width + self.first;
+                source-clip-y: 0;
+                source-clip-width: max(0,self.last - self.first);
+                source-clip-height: root.glow-wide.height;
+                colorize: root.glow-color;
+                opacity: parent.radius-alpha * self.coverage;
+            }
         }
     }
     if root.use-sustain-blur: Image {
@@ -509,11 +544,11 @@ component LyricWordView inherits Rectangle {
                 private property <float> mask-progress: min(1, max(0,
                     (root.progress * root.cue-duration-ms * root.swipe-duration-ratio - glyph.sweep-delay-ms)
                     / max(1, glyph.sweep-duration-ms)));
-                sweep-start: root.fill-complete || !root.highlight-swipe ? 1 : root.fragment-span < 0.9999
+                sweep-start: root.fill-complete || !root.highlight-swipe ? 1 : root.finish-fill-at-cue-end || root.fragment-span < 0.9999
                     ? (root.ramp-start - glyph.start) / max(0.0001, glyph.width)
                     : root.mix(glyph.sweep-from, glyph.sweep-to, self.mask-progress);
-                sweep-end: root.fill-complete ? 1 : root.highlight-swipe && root.fragment-span < 0.9999
-                    ? (root.ramp-end - glyph.start) / max(0.0001, glyph.width)
+                sweep-end: root.fill-complete || !root.highlight-swipe ? 1 : root.finish-fill-at-cue-end || root.fragment-span < 0.9999
+                    ? (root.ramp-end + 1px / max(1px,root.width) - glyph.start) / max(0.0001, glyph.width)
                     : self.sweep-start + glyph.sweep-feather;
             }
             }
@@ -562,6 +597,7 @@ export component LyricsView inherits Rectangle {
     in property <int> line-scale-duration-ms: 166;
     in property <string> font-family: "Satoshi";
     in property <bool> highlight-glow: true;
+    in property <bool> cue-bounded-glow: false;
     in property <bool> finish-fill-at-cue-end: false;
     in property <bool> highlight-swipe: true;
     in property <float> swipe-wave-em: 0;
@@ -656,6 +692,7 @@ export component LyricsView inherits Rectangle {
                         glow-wide: part.glow-wide; glow-tight: part.glow-tight; glow-padding: part.glow-padding; glow-levels: part.glow-levels;
                         glyphs: part.glyphs;
                         glow-enabled: root.highlight-glow && !root.karaoke && !root.sustain;
+                        cue-bounded-glow: root.cue-bounded-glow;
                         highlight-swipe: root.highlight-swipe;
                         finish-fill-at-cue-end: root.finish-fill-at-cue-end;
                         swipe-wave-em: root.swipe-wave-em;
@@ -806,6 +843,7 @@ export component LyricsView inherits Rectangle {
                         glow-wide: part.glow-wide; glow-tight: part.glow-tight; glow-padding: part.glow-padding; glow-levels: part.glow-levels;
                         glyphs: part.glyphs;
                         glow-enabled: root.highlight-glow && !root.karaoke && !root.sustain;
+                        cue-bounded-glow: root.cue-bounded-glow;
                         highlight-swipe: root.highlight-swipe;
                                 finish-fill-at-cue-end: root.finish-fill-at-cue-end;
                         swipe-wave-em: root.swipe-wave-em;

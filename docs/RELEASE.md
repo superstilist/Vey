@@ -1,4 +1,10 @@
-# Vey 0.1.22
+# Vey 0.1.23
+
+Native fill now uses the same spatial sweep for whole text and optional letter
+waves, including variable-width glyphs and wrapped fragments. Empty/completed
+coverage uses a solid brush. Glow follows that sweep's feather and fades out
+within each actual cue instead of lingering over finished words. Hyphenated
+syllables share word motion while retaining their independent fill timings.
 
 Normal native lyrics now include subtle whole-word wobble. Timed syllables
 share a motion interval and transform origin, retaining their original fill
@@ -12,13 +18,13 @@ crossfades use 180ms to sharpen and 280ms to blur, with aligned paint and one
 shared scale. Highlight fades ease out over 500ms for both line and word sync.
 Reduced motion and seeks remain immediate; cue starts and fill deadlines stay exact.
 
-Local Windows x64 build, 2026-10-26. Native lyrics now use a single shaped
+Local Windows x64 build, 2026-10-27. Native lyrics now use a single shaped
 fill pass, instantiate word views only near the viewport and use a soft
 6px glow at 31% opacity by default. Optional custom motion, fonts and themes remain available.
 Long hyphenated chants now wrap at hyphens; oversized tokens wrap at complete
 Unicode graphemes. Timed syllables stay together when their word fits. Fill and
 scroll follow wrapped cue fragments continuously without changing source timings.
-The fill has a gentle wave and scrolling uses a soft-start/stop curve.
+The fill has a straight, stable edge and scrolling uses a soft-start/stop curve.
 Normal mode waits for supplied cue starts, with no default camera lead or
 future-line grouping. Sung focus never uses a future scroll cue; native stage
 also waits for actual line starts and preserves genuine vocal overlaps.

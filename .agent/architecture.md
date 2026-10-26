@@ -193,9 +193,13 @@ before its continuation begins. The copied renderer exposes this as an opt-in
 Wrapping keeps syllables of a word together, permits hyphen breaks and falls
 back to whole grapheme clusters for oversized tokens. Visual follow uses each
 fragment's measured fill-entry phase; canonical timestamps stay unchanged.
-  The single-run fill has a gentle wave; scroll uses a soft-start/stop cubic
-  curve. Highlight fade uses smoothstep without delaying cue fill. Reduced
-  motion disables wave, animated scrolling and focus crossfade.
+Whole-run/letter fill and glow use the same linear spatial ramp; empty/completed
+coverage uses a solid brush. The Vey host opts into cue-bounded glow, including
+wrapped-fragment attack/release windows. Hyphens permit wrapping but do not split
+word-motion groups. Cached glow uses a solid tint and bounded source-texel
+feather bands. Scroll uses a soft-start/stop cubic curve. Highlight fade uses
+smoothstep without delaying cue fill. Reduced motion disables wave, animated
+scrolling and focus crossfade.
 Explicit backing phrase intervals survive display conversion as single cues;
 untimed phrases retain line sync and never acquire estimated word timings.
 Glow is clipped at the actual fill edge. Appearance CSS and selected font family

@@ -76,7 +76,8 @@ export component NativeLyrics inherits Rectangle {
             glow-min-duration-ms: root.style.glow-duration;
             swipe-duration-ratio: root.style.swipe-duration;
             finish-fill-at-cue-end: true;
-            swipe-wave-em: !root.reduced && root.richsync ? 0.06 : 0;
+            cue-bounded-glow: true;
+            swipe-wave-em: 0;
             swipe-lead-ratio: root.style.swipe-lead;
             letter-wave-duration-ms: root.style.wave-duration;
             layout: root.stage ? "stage" : "scroll";

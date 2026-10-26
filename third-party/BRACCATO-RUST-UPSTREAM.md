@@ -75,6 +75,12 @@ Host adaptations (all other copied crate source is unchanged):
   layout-only host metadata: Vey groups timed syllables under one transform
   origin without changing text or fill clocks. Cached glyph bodies exist only
   during an optional letter wave; word wobble and letter waves are independent.
+  Vey opts into `cue-bounded-glow`, a smooth attack/release inside each supplied
+  cue/fragment. Solid atlas tint and disjoint source-texel feather bands follow
+  the ink ramp without recoloring the full texture each tick. Empty and
+  completed ink use solid brushes. With `finish-fill-at-cue-end`, letter masks
+  project the whole-run spatial ramp into each measured glyph, including its
+  one-pixel feather, instead of mixing grapheme-count and measured-width clocks.
 - `crates/slint/src/glow.rs`: apply the requested variable-font weight when
   measuring mask bounds and sweep glyphs, matching the native text font instance.
 - Vey's `src/native_lyric_glyphs.rs` is based on demo/src/glyph_plans.rs, with

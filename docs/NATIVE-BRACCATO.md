@@ -522,3 +522,58 @@ EXE SHA-256: `5f4b0b05278592eb832a079bb10d2ee81c21e22549e97ab15f6886739c697566`.
 Local ZIP: `dist/Vey-0.1.22-windows-x64.zip`, SHA-256
 `68a3d83f6019c13df896ebb2eeb1b7a0c14ce8ae933c056614f7a5ef9696d367`.
 This is a local Windows build; no tag or cross-platform publication was performed.
+
+## 0.1.23 fill consistency and cue-bounded glow, 2026-10-27
+
+The reported repeated-word/backing pattern exposed a real halo lifetime bug:
+short cues kept their shadow until the parent line's fade. A new regression
+reproduced 2410 residual changed pixels after a 568ms backing cue had ended.
+The host now enables optional `cue-bounded-glow`, with smooth attack/release
+inside the actual cue/fragment. The same regression now records zero residual
+pixels, while active-cue glow still changes 2656 pixels. Source times stay intact.
+
+Whole-run ink, optional letter ink and glow now share one spatial ramp. Native
+letter masks project that ramp through measured glyph offsets/widths, including
+the one-pixel feather, rather than mixing those widths with grapheme-count mask
+windows. Glow uses a matching alpha feather instead of a hard bright edge.
+The shadow atlas keeps a constant solid tint. One sung prefix and eight
+disjoint source-texel feather bands per sampled radius move the mask without
+recoloring the whole atlas on each playback tick. A tint gradient would instead
+span the entire atlas, causing different coverage in its separate radius tiles.
+An identical-radius isolation fixture now records maximum intensity difference
+2/255 and mean 0.21/255 when radius weights change; transparent-margin violations
+remain zero.
+Completed/empty ink uses an explicit solid brush, avoiding coincident gradient
+stops and unnecessary gradient painting at rest. The Vey host uses a straight
+fill edge; word/letter motion remains independent. Hyphens remain valid wrap
+opportunities but no longer split a word-motion group such as a timed chant.
+
+`native_fill_continuity` sampled 41 static frames from the repeated backing cue:
+8057 advancing pixel samples, zero backward pixels and visible advance in 37
+of 40 intervals. The 15-phase `native_fill_effects` verifies active/expired glow,
+atlas-radius invariance, return from letter motion and variable-width glyph
+fill. Its stationary-glyph isolation
+recorded mean fill error 0.37 over 1199 eroded glyph cores against the shaped
+run, using an intentionally transparent sentinel only inside the fixture.
+
+Focused tests passed 21 native, five theme and all 10 copied Slint tests. Both
+deadline paths passed (638 / 4176 changed pixels, zero late pixels); wrapped
+boundaries retained 991 completed first-row cores and 1213 unlit continuation
+cores without early/late fill. All four backing cases and the word-wobble
+fixture passed, including still-unsung following words and exact resting ink.
+
+Focus/fade crossfade pixels, 56 continuous camera samples, imported font/theme
+checks, desktop/mobile/stage overflow, actual wheel/resume and all 14 renderer
+phases passed. Ordinary playback still recorded zero canonical source reads.
+Active/expired glow and mixed-width fill screenshots were visually inspected.
+WASM compilation, formatting and whitespace checks passed.
+
+The final optimized Windows build and packaged EXE passed isolated
+`--screenshots` with exit code 0. The package matches `target/release/vey.exe`
+byte-for-byte. Desktop/mobile frames under
+`target/release-0.1.23-final-ui-check/docs/screenshots/` were inspected.
+
+EXE SHA-256: `d262556aef2391008e0ade63efa166dde6822d5aaee694bf11e85445dd7b4e32`.
+Local ZIP: `dist/Vey-0.1.23-windows-x64.zip`, SHA-256
+`0ef256d2c739d7d4300ef16e99efa47104f1cc8a713a4f082ba4c72cd2670e2f`.
+This is a local Windows build; no tag or cross-platform publication was performed.
