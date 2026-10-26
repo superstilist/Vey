@@ -1,0 +1,836 @@
+export struct LyricGlyph {
+    text: string,
+    start: float,
+    width: float,
+    delay-ms: float,
+    wave-ms: float,
+    sweep-delay-ms: float,
+    sweep-duration-ms: float,
+    sweep-from: float,
+    sweep-to: float,
+    sweep-feather: float,
+}
+
+export struct WobbleFrame {
+    x-em: float,
+    y-em: float,
+    scale-x: float,
+    scale-y: float,
+}
+
+export struct LyricWord {
+    text: string,
+    active: bool,
+    background: bool,
+    start-ms: float,
+    duration-ms: float,
+    cue-offset: float,
+    cue-span: float,
+    source-part: int,
+    font-family: string,
+    glow-wide: image,
+    glow-tight: image,
+    glow-padding: float,
+    glow-levels: int,
+    sustain-blurred: image,
+    glyphs: [LyricGlyph],
+}
+
+export struct BraccatoRow {
+    text: string,
+    active: bool,
+    secondary: bool,
+    translation: bool,
+    romanization: bool,
+    agent: string,
+    instrumental: bool,
+    stage-role: string,
+    source-index: int,
+    parts: [LyricWord],
+    sustain-blurred: image,
+    sustain-blurred-width: float,
+    sustain-blurred-height: float,
+    sustain-blurred-padding: float,
+    sustain-distance: int,
+    focus-mix: float,
+    font-family: string,
+    start-ms: float,
+    end-ms: float,
+}
+
+export struct InstrumentalFrames {
+    silhouette: image,
+    fill: image,
+    glow: image,
+    tile-size: int,
+    columns: int,
+    levels: int,
+    phases: int,
+}
+
+component InstrumentalNote inherits Rectangle {
+    in property <InstrumentalFrames> frames;
+    in property <color> active-color;
+    in property <color> muted-color;
+    in property <color> glow-color;
+    in property <length> note-size: 36px;
+    in property <bool> animate: true;
+    in property <float> time-ms;
+    in property <float> start-ms;
+    in property <float> end-ms;
+    private property <float> progress: min(1, max(0, (root.time-ms - root.start-ms) / max(1, root.end-ms - root.start-ms)));
+    private property <float> level: root.progress * max(0, root.frames.levels - 1);
+    private property <float> phase: root.animate ? mod(max(0, root.time-ms - root.start-ms) / 1250, 1) * max(1, root.frames.phases) : 0;
+    private property <float> fade: root.time-ms < root.start-ms ? 0 : min(1, max(0, (root.time-ms - root.start-ms) / 150)) * min(1, max(0, 1 - (root.time-ms - root.end-ms) / 500));
+    private property <float> deep-stop: min(1, max(0, (6 + 3 + 24 * (0.78 - 0.82 * root.progress) + 0.65) / 36));
+    width: root.note-size * 4 / 3;
+    height: root.note-size;
+    Image {
+        x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
+        width: root.note-size * 1.5; height: self.width;
+        source: root.frames.silhouette;
+        colorize: root.muted-color;
+    }
+    Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - root.note-size * 1.5) / 2 + root.note-size * 1.5 * root.deep-stop;
+        width: root.note-size * 1.5;
+        height: root.note-size * 1.5 * (1 - root.deep-stop);
+        clip: true; opacity: root.fade;
+        Image {
+            y: -root.note-size * 1.5 * root.deep-stop;
+            width: root.note-size * 1.5; height: self.width;
+            source: root.frames.silhouette;
+            colorize: root.active-color;
+        }
+    }
+    // Bilinear sampling of immutable alpha-mask cells keeps the water surface and rise smooth.
+    for sample in [0, 1, 2, 3]: Rectangle {
+        private property <int> level-index: min(root.frames.levels - 1, floor(root.level) + (sample >= 2 ? 1 : 0));
+        private property <int> phase-index: mod(floor(root.phase) + mod(sample, 2), max(1, root.frames.phases));
+        private property <int> frame-index: max(0, self.level-index) * max(1, root.frames.phases) + self.phase-index;
+        opacity: root.fade * (sample >= 2 ? root.level - floor(root.level) : 1 - root.level + floor(root.level))
+            * (mod(sample, 2) == 1 ? root.phase - floor(root.phase) : 1 - root.phase + floor(root.phase));
+        Image {
+            x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
+            width: root.note-size * 1.5; height: self.width;
+            source: root.frames.glow;
+            source-clip-x: mod(parent.frame-index, max(1, root.frames.columns)) * root.frames.tile-size;
+            source-clip-y: floor(parent.frame-index / max(1, root.frames.columns)) * root.frames.tile-size;
+            source-clip-width: root.frames.tile-size; source-clip-height: root.frames.tile-size;
+            colorize: root.glow-color;
+        }
+        Image {
+            x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
+            width: root.note-size * 1.5; height: self.width;
+            source: root.frames.fill;
+            source-clip-x: mod(parent.frame-index, max(1, root.frames.columns)) * root.frames.tile-size;
+            source-clip-y: floor(parent.frame-index / max(1, root.frames.columns)) * root.frames.tile-size;
+            source-clip-width: root.frames.tile-size; source-clip-height: root.frames.tile-size;
+            colorize: root.active-color;
+        }
+    }
+}
+
+// Clip geometry and text offsets stay on a fixed integer-pixel grid. Moving the clips and
+// cancelling their offsets re-rasterizes text at changing phases and makes slow fills flicker.
+component LyricInk inherits Rectangle {
+    in property <string> text;
+    in property <string> font-family;
+    in property <length> font-size;
+    in property <int> font-weight;
+    in property <color> ink;
+    in property <color> base-ink: transparent;
+    in property <float> reveal: 1;
+    in property <float> sweep-start;
+    in property <float> sweep-end;
+    in property <length> wave-amplitude;
+    in property <float> wave-phase;
+    in property <bool> native-text-gradients: true;
+    private property <angle> wave-angle: sin(root.wave-phase * 180deg)
+        * min(0.12, root.wave-amplitude * 2 / max(1px, root.height)) * 57.2958deg;
+    private property <float> span: max(0.0001, root.sweep-end - root.sweep-start);
+    private property <color> left-ink: root.ink.mix(root.base-ink, root.reveal * min(1, max(0, root.sweep-end / root.span)));
+    private property <color> right-ink: root.ink.mix(root.base-ink, root.reveal * min(1, max(0, (root.sweep-end - 1) / root.span)));
+    private property <float> start-stop: min(1, max(0, root.sweep-start));
+    private property <float> end-stop: min(1, max(0, root.sweep-end));
+    // One native text run: no per-band scissor edges can cut through the glyphs.
+    if root.native-text-gradients: Text {
+        width: root.width; height: root.height; text: root.text;
+        color: @linear-gradient(90deg + root.wave-angle,
+            root.left-ink 0%, root.left-ink root.start-stop * 100%,
+            root.right-ink root.end-stop * 100%, root.right-ink 100%);
+        font-family: root.font-family; font-size: root.font-size; font-weight: root.font-weight;
+        wrap: no-wrap; horizontal-alignment: left; vertical-alignment: center;
+    }
+    // Slint's software text rasterizer only supports solid brushes. Retain the fixed
+    // integer-pixel feather for hosts using that backend instead of a native GPU renderer.
+    private property <length> ink-padding: ceil(root.font-size / 4px) * 1px;
+    private property <length> cell-size: max(1, ceil((root.width + root.ink-padding * 2) / 256px)) * 1px;
+    private property <int> cell-count: max(1, ceil((root.width + root.ink-padding * 2) / root.cell-size));
+    if !root.native-text-gradients: Rectangle {
+        width: root.width; height: root.height;
+        for cell in root.cell-count: Rectangle {
+        private property <float> edge-from: self.x / max(0.001px, root.width);
+        private property <float> edge-to: (self.x + self.width) / max(0.001px, root.width);
+        private property <float> start: root.sweep-start;
+        private property <float> end: root.sweep-end;
+        private property <float> feather-from: max(self.edge-from, self.start);
+        private property <float> feather-to: min(self.edge-to, self.end);
+        private property <float> coverage: self.start >= 1 || self.edge-to <= self.start ? 1
+            : self.edge-from >= self.end ? 0
+            : min(1, max(0, (max(0, min(self.edge-to, self.start) - self.edge-from)
+                + max(0, self.feather-to - self.feather-from)
+                * min(1, max(0, (self.end - (self.feather-from + self.feather-to) / 2)
+                    / max(0.0001, self.end - self.start)))) / max(0.0001, self.edge-to - self.edge-from)));
+        x: cell * root.cell-size - root.ink-padding;
+        width: root.cell-size; height: root.height; clip: true;
+        Text {
+            x: -parent.x;
+            width: root.width; height: root.height; text: root.text;
+            // Paint alpha directly; container opacity would switch offscreen compositing at 1.0.
+            color: root.ink.mix(root.base-ink, root.reveal * parent.coverage);
+            font-family: root.font-family; font-size: root.font-size; font-weight: root.font-weight;
+            wrap: no-wrap; horizontal-alignment: left; vertical-alignment: center;
+        }
+        }
+    }
+}
+
+component LyricWordView inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    in property <bool> background-vocal;
+    in property <color> foreground-color;
+    in property <color> muted-color;
+    in property <color> active-color;
+    in property <color> accent-color;
+    in property <color> glow-color;
+    in property <length> font-size;
+    in property <float> line-scale: 1;
+    in property <int> line-scale-duration-ms: 166;
+    in property <bool> animate-line-scale: true;
+    private property <float> animated-line-scale: root.line-scale;
+    animate animated-line-scale { duration: root.animate-line-scale ? root.line-scale-duration-ms * 1ms : 0ms; easing: ease; }
+    in property <float> cue-duration-ms;
+    // Wrapped fragments share the original cue's sweep without inventing new timings.
+    in property <float> cue-offset;
+    in property <float> cue-span: 1;
+    private property <float> fragment-span: root.cue-span > 0 ? root.cue-span : 1;
+    in property <float> after-line-ms: -1;
+    in property <image> glow-wide;
+    in property <image> glow-tight;
+    in property <float> glow-padding: 32;
+    in property <int> glow-levels: 0;
+    in property <image> sustain-blurred;
+    in property <[LyricGlyph]> glyphs;
+    in property <bool> glow-enabled: true;
+    in property <float> elapsed-ms: -1;
+    in property <string> motion: "stretch";
+    in property <int> font-weight: 700;
+    in property <bool> word-wobble: true;
+    in property <float> wobble-duration-ms: 1000;
+    in property <float> wobble-peak-offset: 0.125;
+    in property <float> wobble-settle-offset: 0.75;
+    in property <string> wobble-easing: "ease";
+    in property <string> wobble-peak-easing: "ease-in-out";
+    in property <string> wobble-end-easing: "ease-out";
+    in property <WobbleFrame> wobble-from: { x-em: 0, y-em: 0, scale-x: 1, scale-y: 1 };
+    in property <WobbleFrame> wobble-peak: { x-em: 0.05, y-em: 0, scale-x: 1.025, scale-y: 1 };
+    in property <WobbleFrame> wobble-settle: { x-em: 0, y-em: 0, scale-x: 1, scale-y: 1 };
+    in property <WobbleFrame> wobble-to: { x-em: 0, y-em: 0, scale-x: 1, scale-y: 1 };
+    in property <float> letter-wave-y-em: -0.05;
+    in property <float> letter-wave-settle-y-em: -0.02;
+    in property <float> letter-wave-emphasis-scale: 1.11;
+    in property <float> letter-wave-duration-ms: 900;
+    in property <bool> letter-wave: true;
+    in property <string> letter-wave-rise-easing: "ease-in-out";
+    in property <string> letter-wave-fall-easing: "ease-out";
+    in property <bool> use-sustain-blur: false;
+    in property <bool> highlight-swipe: true;
+    in property <bool> finish-fill-at-cue-end: false;
+    in property <float> swipe-wave-em: 0;
+    in property <bool> native-text-gradients: true;
+    in property <bool> highlight-fade: true;
+    in property <bool> smooth-highlight-fade: false;
+    in property <float> swipe-lead-ratio: 0.1;
+    in property <float> swipe-duration-ratio: 1.6;
+    in property <string> swipe-easing: "linear";
+    in property <float> swipe-start-from: -0.2;
+    in property <float> swipe-end-from: -0.1;
+    in property <float> swipe-start-to: 1.4;
+    in property <float> swipe-end-to: 1.5;
+    in property <float> glow-duration-ratio: 1.2;
+    in property <float> glow-min-duration-ms: 1200;
+    in property <string> glow-easing: "ease";
+    in property <float> highlight-fade-in-ms: 330;
+    in property <float> highlight-fade-out-ms: 500;
+    in property <float> glow-radius-from-px: 12.8;
+    in property <float> long-word-threshold-ms: 1500;
+    // These are the upstream ramp, lead and duration ratios, not a hard clipping rectangle.
+    private property <float> completion-progress: min(1, max(0, (1 - root.swipe-start-from) / max(0.0001, root.swipe-start-to - root.swipe-start-from)));
+    private property <float> initial-progress: min(root.completion-progress, root.swipe-lead-ratio / max(0.0001, root.swipe-duration-ratio));
+    private property <bool> fill-complete: root.finish-fill-at-cue-end && root.cue-duration-ms > 0 && root.cue-phase >= min(1,root.cue-offset + root.fragment-span);
+    private property <float> cue-phase: min(1,max(0,root.elapsed-ms / max(1,root.cue-duration-ms)));
+    private property <float> local-cue-phase: min(1,max(0,(root.cue-phase - root.cue-offset) / root.fragment-span));
+    private property <float> progress: !root.highlight-swipe ? 1 : root.cue-duration-ms > 0
+        ? (root.finish-fill-at-cue-end ? root.initial-progress + (root.completion-progress - root.initial-progress) * root.ease-progress(root.local-cue-phase,root.swipe-easing)
+            : root.ease-progress(min(1, max(0, (root.elapsed-ms + root.cue-duration-ms * root.swipe-lead-ratio) / (root.cue-duration-ms * root.swipe-duration-ratio))), root.swipe-easing)) : 1;
+    private property <float> ramp-start: (root.swipe-start-from + (root.swipe-start-to - root.swipe-start-from) * root.progress - (root.finish-fill-at-cue-end ? 0 : root.cue-offset)) / (root.finish-fill-at-cue-end ? 1 : root.fragment-span);
+    private property <float> ramp-end: (root.swipe-end-from + (root.swipe-end-to - root.swipe-end-from) * root.progress - (root.finish-fill-at-cue-end ? 0 : root.cue-offset)) / (root.finish-fill-at-cue-end ? 1 : root.fragment-span);
+    private property <float> fade-phase: min(1, max(0, root.after-line-ms / max(1, root.highlight-fade-out-ms)));
+    private property <float> fade: !root.highlight-fade ? 1 : root.smooth-highlight-fade
+        ? 1 - root.fade-phase * root.fade-phase * (3 - 2 * root.fade-phase) : 1 - root.fade-phase;
+    private property <float> reveal: (root.cue-duration-ms <= 0 ? min(1, max(0, root.elapsed-ms / max(1, root.highlight-fade-in-ms))) : (root.elapsed-ms >= 0 && (!root.finish-fill-at-cue-end || !root.highlight-swipe || root.cue-phase >= root.cue-offset) ? 1 : 0)) * root.fade;
+    private property <float> glow-time: root.ease-progress(min(1, max(0, root.elapsed-ms / max(root.glow-min-duration-ms, root.cue-duration-ms * root.glow-duration-ratio))), root.glow-easing);
+    private property <float> glow-in: root.ease-progress(min(1, max(0, root.elapsed-ms / 80)), "ease-out");
+    private property <float> glow-fade: root.glow-enabled && root.elapsed-ms >= 0 && root.cue-duration-ms > 0 && (!root.finish-fill-at-cue-end || !root.highlight-swipe || root.cue-phase >= root.cue-offset)
+        ? root.glow-in * root.fade : 0;
+    // Only positive-radius shadows have cached paint. The zero-radius resting state is empty.
+    private property <float> glow-wide-strength: 1 - root.glow-time;
+    private property <float> glow-tight-strength: root.glow-time;
+    private property <brush> glow-highlight: root.glow-color;
+    // inject.ts splits every non-joining timed word, including short syllables. The long-word
+    // threshold controls emphasis scaling only, never the existence of letter masks or floats.
+    private property <bool> lettered: root.letter-wave && root.glyphs.length > 0
+        && root.cue-duration-ms > 0 && root.motion != "karaoke";
+    private property <float> wobble-phase: root.ease-progress(root.wobble-duration-ms > 0 ? min(1, max(0, root.elapsed-ms / root.wobble-duration-ms)) : 1, root.wobble-easing);
+    private property <int> wobble-segment: root.wobble-phase <= root.wobble-peak-offset ? 0 : root.wobble-phase <= root.wobble-settle-offset ? 1 : 2;
+    private property <float> wobble-local: root.wobble-segment == 0
+        ? root.wobble-phase / max(0.0001, root.wobble-peak-offset)
+        : root.wobble-segment == 1
+            ? root.ease-progress((root.wobble-phase - root.wobble-peak-offset) / max(0.0001, root.wobble-settle-offset - root.wobble-peak-offset), root.wobble-peak-easing)
+            : (root.wobble-phase - root.wobble-settle-offset) / max(0.0001, 1 - root.wobble-settle-offset);
+    private property <float> wobble-x-em: root.wobble-segment == 0 ? root.mix(root.wobble-from.x-em, root.wobble-peak.x-em, root.wobble-local)
+        : root.wobble-segment == 1 ? root.mix(root.wobble-peak.x-em, root.wobble-settle.x-em, root.wobble-local)
+        : root.mix(root.wobble-settle.x-em, root.wobble-to.x-em, root.wobble-local);
+    private property <float> wobble-y-em: root.wobble-segment == 0 ? root.mix(root.wobble-from.y-em, root.wobble-peak.y-em, root.wobble-local)
+        : root.wobble-segment == 1 ? root.mix(root.wobble-peak.y-em, root.wobble-settle.y-em, root.wobble-local)
+        : root.mix(root.wobble-settle.y-em, root.wobble-to.y-em, root.wobble-local);
+    private property <float> wobble-scale-x: root.wobble-segment == 0 ? root.mix(root.wobble-from.scale-x, root.wobble-peak.scale-x, root.wobble-local)
+        : root.wobble-segment == 1 ? root.mix(root.wobble-peak.scale-x, root.wobble-settle.scale-x, root.wobble-local)
+        : root.mix(root.wobble-settle.scale-x, root.wobble-to.scale-x, root.wobble-local);
+    private property <float> wobble-scale-y: root.wobble-segment == 0 ? root.mix(root.wobble-from.scale-y, root.wobble-peak.scale-y, root.wobble-local)
+        : root.wobble-segment == 1 ? root.mix(root.wobble-peak.scale-y, root.wobble-settle.scale-y, root.wobble-local)
+        : root.mix(root.wobble-settle.scale-y, root.wobble-to.scale-y, root.wobble-local);
+    private property <bool> wobble-enabled: root.word-wobble && root.elapsed-ms >= 0 && root.motion != "none" && root.motion != "karaoke";
+    private property <float> karaoke-lift-phase: root.elapsed-ms < 160
+        ? root.ease-progress(min(1, max(0, root.elapsed-ms / 160)), "ease-in-out")
+        : 1 - root.ease-progress(min(1, max(0, (root.elapsed-ms - 160) / 360)), "ease-in-out");
+    private property <length> motion-y: root.motion == "karaoke" && root.elapsed-ms >= 0
+        ? -root.font-size * 0.15 * root.karaoke-lift-phase : 0px;
+    public pure function mix(a: float, b: float, progress: float) -> float { a + (b - a) * progress }
+    pure function bezier-x(t: float, p1: float, p2: float) -> float {
+        3 * (1 - t) * (1 - t) * t * p1 + 3 * (1 - t) * t * t * p2 + t * t * t
+    }
+    pure function bezier-y(t: float, p1: float, p2: float) -> float {
+        3 * (1 - t) * (1 - t) * t * p1 + 3 * (1 - t) * t * t * p2 + t * t * t
+    }
+    pure function bezier-slope-x(t: float, p1: float, p2: float) -> float {
+        3 * (1 - t) * (1 - t) * p1 + 6 * (1 - t) * t * (p2 - p1) + 3 * t * t * (1 - p2)
+    }
+    pure function cubic-bezier-progress(progress: float, x1: float, y1: float, x2: float, y2: float) -> float {
+        let p = min(1, max(0, progress));
+        let t0 = p;
+        let t1 = min(1, max(0, t0 - (root.bezier-x(t0, x1, x2) - p) / max(0.0001, root.bezier-slope-x(t0, x1, x2))));
+        let t2 = min(1, max(0, t1 - (root.bezier-x(t1, x1, x2) - p) / max(0.0001, root.bezier-slope-x(t1, x1, x2))));
+        let t3 = min(1, max(0, t2 - (root.bezier-x(t2, x1, x2) - p) / max(0.0001, root.bezier-slope-x(t2, x1, x2))));
+        let t4 = min(1, max(0, t3 - (root.bezier-x(t3, x1, x2) - p) / max(0.0001, root.bezier-slope-x(t3, x1, x2))));
+        root.bezier-y(t4, y1, y2)
+    }
+    public pure function ease-progress(progress: float, curve: string) -> float {
+        if curve == "linear" { return min(1, max(0, progress)); }
+        if curve == "ease-in" { return root.cubic-bezier-progress(progress, 0.42, 0, 1, 1); }
+        if curve == "ease-out" { return root.cubic-bezier-progress(progress, 0, 0, 0.58, 1); }
+        if curve == "ease-in-out" { return root.cubic-bezier-progress(progress, 0.42, 0, 0.58, 1); }
+        root.cubic-bezier-progress(progress, 0.25, 0.1, 0.25, 1)
+    }
+    in property <string> font-family;
+    callback clicked();
+    background: transparent;
+    // Loading a glyph plan must never change the width of its host word.
+    width: word.preferred-width;
+    height: word.preferred-height;
+    private property <length> mask-y: (root.height - (word.font-metrics.ascent - word.font-metrics.descent)) / 2 - root.font-size * root.glow-padding / 64;
+    Rectangle {
+    x: root.wobble-enabled ? root.font-size * root.wobble-x-em : 0px;
+    y: root.motion-y + (root.wobble-enabled ? root.font-size * root.wobble-y-em : 0px);
+    width: root.width; height: root.height;
+    // Center the scale pop on the word like the upstream inline-block transform origin.
+    // Translation still comes from the same song clock, so the full word and its glow travel together.
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale-x: root.animated-line-scale * (root.wobble-enabled ? root.wobble-scale-x : 1);
+    transform-scale-y: root.animated-line-scale * (root.wobble-enabled ? root.wobble-scale-y : 1);
+    // Shadows are blurred glyph alpha masks, shared by words, never rectangular box shadows.
+    if root.glow-fade > 0.001: Rectangle {
+        width: root.width; height: root.height;
+        if root.glow-levels == 0: Image {
+            x: -root.font-size * root.glow-padding / 64; y: root.mask-y;
+            width: self.source.width * root.font-size / 64;
+            height: self.source.height * root.font-size / 64;
+            image-fit: fill;
+            source: root.glow-wide;
+            colorize: root.glow-highlight;
+            opacity: root.glow-fade * min(1, root.glow-wide-strength);
+        }
+        if root.glow-levels == 0: Image {
+            x: -root.font-size * root.glow-padding / 64; y: root.mask-y;
+            width: self.source.width * root.font-size / 64;
+            height: self.source.height * root.font-size / 64;
+            image-fit: fill;
+            source: root.glow-tight;
+            colorize: root.glow-highlight;
+            opacity: root.glow-fade * root.glow-tight-strength;
+        }
+    }
+    // Crossfade adjacent cached radii, following the upstream shrinking
+    // drop-shadow. The final zero-radius state uses the foreground text itself.
+    if root.glow-levels > 0 && root.glow-fade > 0.001: Rectangle {
+        private property <length> inset: root.font-size * root.glow-padding / 64;
+        // Limit glow to the actual fill edge, including in the letter-wave path.
+        // Colorizing a whole blurred word alone can illuminate unsung glyphs.
+        private property <float> filled: !root.highlight-swipe ? 1 : min(1,max(0,root.ramp-end));
+        x: -self.inset; y: root.mask-y;
+        width: self.filled <= 0 ? 0px : self.inset + root.width * self.filled + (self.filled >= 1 ? self.inset : 0px);
+        height: root.glow-wide.height * root.font-size / 64;
+        clip: true;
+        private property <float> frame: root.glow-time * root.glow-levels;
+        for sample in [0, 1]: Image {
+            private property <int> level: floor(parent.frame) + sample;
+            x: 0px; y: 0px;
+            width: root.glow-wide.width / root.glow-levels * root.font-size / 64;
+            height: root.glow-wide.height * root.font-size / 64;
+            source: root.glow-wide;
+            source-clip-x: min(root.glow-levels - 1, self.level) * root.glow-wide.width / root.glow-levels;
+            source-clip-y: 0;
+            source-clip-width: root.glow-wide.width / root.glow-levels;
+            source-clip-height: root.glow-wide.height;
+            colorize: root.glow-color;
+            opacity: self.level >= root.glow-levels ? 0 : root.glow-fade
+                * (sample == 0 ? 1 - parent.frame + floor(parent.frame) : parent.frame - floor(parent.frame));
+        }
+    }
+    if root.use-sustain-blur: Image {
+        x: -root.font-size * 0.5;
+        y: -root.font-size * 0.5;
+        width: root.width + root.font-size;
+        height: root.height + root.font-size;
+        source: root.sustain-blurred;
+        colorize: root.foreground-color;
+    }
+    word := Text {
+        x: 0px; y: 0px;
+        width: root.width; height: root.height;
+        wrap: no-wrap; horizontal-alignment: left; vertical-alignment: center;
+        text: root.text;
+        color: root.foreground-color;
+        font-family: root.font-family;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        // Measurement only. Visible ink is shaped/painted once below.
+        opacity: 0;
+    }
+    if !root.lettered: LyricInk {
+            x: 0px; y: 0px;
+            text: root.text;
+            ink: root.active-color;
+            base-ink: root.foreground-color;
+            reveal: root.reveal;
+            wave-amplitude: root.motion == "karaoke" || root.cue-duration-ms <= 0 ? 0px : min(root.font-size * root.swipe-wave-em, root.width * 0.025);
+            wave-phase: root.finish-fill-at-cue-end ? root.local-cue-phase : root.progress;
+            native-text-gradients: root.native-text-gradients;
+            sweep-start: root.fill-complete || root.motion == "karaoke" || root.cue-duration-ms <= 0 ? 1 : root.ramp-start;
+            // lyrics.css adds one physical pixel to the unlettered gradient's transparent stop.
+            sweep-end: root.fill-complete || root.motion == "karaoke" || root.cue-duration-ms <= 0 ? 1 : root.ramp-end + 1px / max(1px, root.width);
+            opacity: root.use-sustain-blur ? 0 : 1;
+            font-family: root.font-family;
+            font-size: root.font-size;
+            font-weight: root.font-weight;
+            width: word.preferred-width;
+            height: word.preferred-height;
+    }
+    letters := Rectangle {
+        visible: root.lettered;
+        x: 0px; y: 0px;
+        width: root.width; height: root.height;
+        for glyph in root.glyphs: Rectangle {
+            x: glyph.start * root.width;
+            width: glyph.width * root.width; height: root.height;
+            Rectangle {
+            width: parent.width; height: parent.height;
+            private property <float> phase: root.word-wobble && root.motion != "none"
+                ? min(1, max(0, (root.elapsed-ms - glyph.delay-ms) / glyph.wave-ms)) : 0;
+            private property <float> rise: self.phase < 0.4
+                ? root.ease-progress(self.phase / 0.4, root.letter-wave-rise-easing)
+                : 1 - root.ease-progress((self.phase - 0.4) / 0.6, root.letter-wave-fall-easing);
+            y: root.font-size * (self.phase < 0.4
+                ? root.letter-wave-y-em * self.rise
+                : root.letter-wave-settle-y-em + (root.letter-wave-y-em - root.letter-wave-settle-y-em) * self.rise);
+            transform-origin: { x: self.width / 2, y: self.height / 2 };
+            transform-scale: root.cue-duration-ms > root.long-word-threshold-ms ? 1 + (root.letter-wave-emphasis-scale - 1) * self.rise : 1;
+            // Composite sharp/base ink once in local coordinates before applying the
+            // letter transform. Re-rasterizing scaled text changes its pixel phase and
+            // can make a moving gradient lose an entire strip for a frame.
+            Rectangle {
+            x: -root.font-size * 0.25; y: -root.font-size * 0.25;
+            width: parent.width + root.font-size * 0.5;
+            height: root.height + root.font-size * 0.5;
+            // The default uses a whole shaped run. Opt-in scaled letter waves
+            // retain a local surface to avoid glyph raster-phase flicker.
+            cache-rendering-hint: root.native-text-gradients && root.cue-duration-ms > root.long-word-threshold-ms;
+            LyricInk {
+                x: root.font-size * 0.25; y: root.font-size * 0.25; text: glyph.text;
+                width: parent.width - root.font-size * 0.5; height: root.height;
+                font-family: root.font-family; font-size: root.font-size; font-weight: root.font-weight;
+                opacity: root.use-sustain-blur ? 0 : 1;
+                ink: root.active-color;
+            base-ink: root.foreground-color;
+            reveal: root.reveal;
+                wave-amplitude: min(root.font-size * root.swipe-wave-em, root.width * 0.025);
+                wave-phase: root.finish-fill-at-cue-end ? root.local-cue-phase : root.progress;
+                native-text-gradients: root.native-text-gradients;
+                private property <float> mask-progress: min(1, max(0,
+                    (root.progress * root.cue-duration-ms * root.swipe-duration-ratio - glyph.sweep-delay-ms)
+                    / max(1, glyph.sweep-duration-ms)));
+                sweep-start: root.fill-complete || !root.highlight-swipe ? 1 : root.fragment-span < 0.9999
+                    ? (root.ramp-start - glyph.start) / max(0.0001, glyph.width)
+                    : root.mix(glyph.sweep-from, glyph.sweep-to, self.mask-progress);
+                sweep-end: root.fill-complete ? 1 : root.highlight-swipe && root.fragment-span < 0.9999
+                    ? (root.ramp-end - glyph.start) / max(0.0001, glyph.width)
+                    : self.sweep-start + glyph.sweep-feather;
+            }
+            }
+            }
+        }
+    }
+    }
+    TouchArea { clicked => { root.clicked(); } }
+}
+
+export component LyricsView inherits Rectangle {
+    in property <[BraccatoRow]> lines;
+    in property <InstrumentalFrames> instrumental-frames;
+    in property <string> layout: "scroll";
+    in property <int> active-line: -1;
+    in property <bool> follow-playback: true;
+    in property <bool> paused: false;
+    in property <bool> synchronized: true;
+    in property <float> scroll-position: -1;
+    in property <bool> karaoke: false;
+    in property <bool> sustain: false;
+    in property <bool> lucid-focus: false;
+    in property <float> background-font-scale: 0.72;
+    in property <int> scroll-duration-ms: -1;
+    in property <int> scroll-easing-profile: 0;
+    in property <string> word-motion: "stretch";
+    in property <int> font-weight: 700;
+    in property <bool> passive-scroll: false;
+    in property <float> playback-progress: 0;
+    private property <length> manual-scroll-y: 0px;
+    in property <bool> animate-decorations: true;
+    in property <float> decoration-progress: 1;
+    private property <float> animated-decoration-progress: root.decoration-progress;
+    animate animated-decoration-progress { duration: root.animate-decorations ? 350ms : 0ms; easing: ease-out; }
+    in property <color> background-color: #101014;
+    in property <color> foreground-color: #f7f6fa;
+    in property <color> muted-color: #777780;
+    in property <color> accent-color: #f50032;
+    in property <length> lyric-size: 34px;
+    in property <float> line-spacing: 1.35;
+    in property <int> transition-ms: 320;
+    in property <float> active-scale: 1.0;
+    in property <float> word-active-scale: 1.025;
+    in property <color> glow-color: root.foreground-color.with-alpha(0.75);
+    in property <float> playback-time-ms: 0;
+    in property <int> line-scale-duration-ms: 166;
+    in property <string> font-family: "Satoshi";
+    in property <bool> highlight-glow: true;
+    in property <bool> finish-fill-at-cue-end: false;
+    in property <bool> highlight-swipe: true;
+    in property <float> swipe-wave-em: 0;
+    in property <float> inactive-blur-px: 0;
+    in property <bool> native-text-gradients: true;
+    in property <bool> highlight-fade: true;
+    in property <bool> smooth-highlight-fade: false;
+    in property <bool> external-focus-mix: false;
+    in property <float> swipe-lead-ratio: 0.1;
+    in property <float> swipe-duration-ratio: 1.6;
+    in property <string> swipe-easing: "linear";
+    in property <float> swipe-start-from: -0.2;
+    in property <float> swipe-end-from: -0.1;
+    in property <float> swipe-start-to: 1.4;
+    in property <float> swipe-end-to: 1.5;
+    in property <float> glow-duration-ratio: 1.2;
+    in property <float> glow-min-duration-ms: 1200;
+    in property <string> glow-easing: "ease";
+    in property <float> highlight-fade-in-ms: 330;
+    in property <float> highlight-fade-out-ms: 500;
+    in property <float> glow-radius-from-px: 12.8;
+    in property <float> glow-radius-to-px: 0;
+    in property <float> long-word-threshold-ms: 1500;
+    in property <bool> word-wobble: true;
+    in property <float> wobble-duration-ms: 1000;
+    in property <float> wobble-peak-offset: 0.125;
+    in property <float> wobble-settle-offset: 0.75;
+    in property <string> wobble-easing: "ease";
+    in property <string> wobble-peak-easing: "ease-in-out";
+    in property <string> wobble-end-easing: "ease-out";
+    in property <WobbleFrame> wobble-from: { x-em: 0, y-em: 0, scale-x: 1, scale-y: 1 };
+    in property <WobbleFrame> wobble-peak: { x-em: 0.05, y-em: 0, scale-x: 1.025, scale-y: 1 };
+    in property <WobbleFrame> wobble-settle: { x-em: 0, y-em: 0, scale-x: 1, scale-y: 1 };
+    in property <WobbleFrame> wobble-to: { x-em: 0, y-em: 0, scale-x: 1, scale-y: 1 };
+    in property <bool> letter-wave: true;
+    in property <float> letter-wave-y-em: -0.05;
+    in property <float> letter-wave-settle-y-em: -0.02;
+    in property <float> letter-wave-emphasis-scale: 1.11;
+    in property <float> letter-wave-duration-ms: 900;
+    in property <string> letter-wave-rise-easing: "ease-in-out";
+    in property <string> letter-wave-fall-easing: "ease-out";
+    in property <bool> animate-line-scale: true;
+    in property <bool> animate-scroll: true;
+    in property <bool> animate-instrumental: true;
+    in property <length> scroll-padding: 24px;
+    in property <length> line-padding: 32px;
+    in property <float> target-scroll-pos-ratio: 0.42;
+    in property <float> inactive-scale: 0.95;
+    in property <bool> show-translation: true;
+    in property <bool> show-romanization: true;
+    callback line-clicked(int);
+    callback word-clicked(int, int);
+    callback user-scrolled();
+    // Hosts can observe the measured viewport after resize and scroll. Reading
+    // content-height here also resolves the retained Flickable layout before
+    // taking a native snapshot, including while the media clock is paused.
+    callback viewport-changed(float, float, float);
+
+    background: background-color;
+    clip: true;
+
+    if layout == "stage": VerticalLayout {
+        alignment: center;
+        padding-left: 36px;
+        padding-right: 36px;
+        spacing: 0px;
+        for line[index] in lines: Rectangle {
+            visible: self.opacity > 0.001
+                && (!line.translation || root.show-translation)
+                && (!line.romanization || root.show-romanization);
+            private property <length> row-height: !self.visible ? 0px : (line.secondary ? root.lyric-size * 0.7 : (line.parts.length > 0 && line.parts[0].background ? root.lyric-size * 0.95 : root.lyric-size * root.line-spacing));
+            min-height: self.row-height; max-height: self.row-height;
+            background: transparent;
+            if self.visible: HorizontalLayout {
+                alignment: line.agent == "v1000" ? center : (line.agent == "v2" || line.agent == "v3" ? end : start);
+                if line.instrumental: InstrumentalNote {
+                    frames: root.instrumental-frames; note-size: root.lyric-size;
+                    active-color: root.foreground-color; muted-color: root.muted-color; glow-color: root.glow-color;
+                    time-ms: root.playback-time-ms; start-ms: line.start-ms; end-ms: line.end-ms;
+                    animate: root.animate-instrumental;
+                }
+                if !line.instrumental && line.parts.length > 0: HorizontalLayout {
+                    alignment: line.agent == "v1000" ? center : (line.agent == "v2" || line.agent == "v3" ? end : start);
+                    for part[index] in line.parts: LyricWordView {
+                        text: part.text; active: part.active; background-vocal: part.background;
+                        elapsed-ms: root.playback-time-ms - part.start-ms;
+                        cue-duration-ms: part.duration-ms;
+                        cue-offset: part.cue-offset; cue-span: part.cue-span;
+                        after-line-ms: root.playback-time-ms - line.end-ms;
+                        glow-wide: part.glow-wide; glow-tight: part.glow-tight; glow-padding: part.glow-padding; glow-levels: part.glow-levels;
+                        glyphs: part.glyphs;
+                        glow-enabled: root.highlight-glow && !root.karaoke && !root.sustain;
+                        highlight-swipe: root.highlight-swipe;
+                        finish-fill-at-cue-end: root.finish-fill-at-cue-end;
+                        swipe-wave-em: root.swipe-wave-em;
+                        native-text-gradients: root.native-text-gradients;
+                        highlight-fade: root.highlight-fade; smooth-highlight-fade: root.smooth-highlight-fade; highlight-fade-in-ms: root.highlight-fade-in-ms; highlight-fade-out-ms: root.highlight-fade-out-ms;
+                        swipe-lead-ratio: root.swipe-lead-ratio; swipe-duration-ratio: root.swipe-duration-ratio;
+                        swipe-easing: root.swipe-easing;
+                        swipe-start-from: root.swipe-start-from; swipe-end-from: root.swipe-end-from;
+                        swipe-start-to: root.swipe-start-to; swipe-end-to: root.swipe-end-to;
+                        glow-duration-ratio: root.glow-duration-ratio; glow-min-duration-ms: root.glow-min-duration-ms; glow-easing: root.glow-easing;
+                        glow-radius-from-px: root.glow-radius-from-px; long-word-threshold-ms: root.long-word-threshold-ms;
+                        motion: root.karaoke ? "karaoke" : root.word-motion;
+                        word-wobble: root.word-wobble;
+                        wobble-duration-ms: root.wobble-duration-ms; wobble-peak-offset: root.wobble-peak-offset; wobble-settle-offset: root.wobble-settle-offset;
+                        wobble-easing: root.wobble-easing; wobble-peak-easing: root.wobble-peak-easing; wobble-end-easing: root.wobble-end-easing;
+                        wobble-from: root.wobble-from; wobble-peak: root.wobble-peak; wobble-settle: root.wobble-settle; wobble-to: root.wobble-to;
+                        letter-wave: root.letter-wave;
+                        letter-wave-y-em: root.letter-wave-y-em; letter-wave-settle-y-em: root.letter-wave-settle-y-em;
+                        letter-wave-emphasis-scale: root.letter-wave-emphasis-scale; letter-wave-duration-ms: root.letter-wave-duration-ms;
+                        letter-wave-rise-easing: root.letter-wave-rise-easing; letter-wave-fall-easing: root.letter-wave-fall-easing;
+                        font-weight: part.background ? 500 : root.font-weight;
+                        foreground-color: muted-color;
+                        active-color: root.foreground-color;
+                        muted-color: muted-color; accent-color: accent-color;
+                        glow-color: root.glow-color;
+                        font-size: line.secondary ? lyric-size * 0.48 : (part.background ? lyric-size * root.background-font-scale : lyric-size);
+                        line-scale: line.stage-role == "current" ? root.active-scale : root.inactive-scale;
+                        line-scale-duration-ms: root.line-scale-duration-ms; animate-line-scale: root.animate-line-scale;
+                        font-family: part.font-family == "" ? root.font-family : part.font-family;
+                        opacity: root.karaoke ? (root.playback-time-ms < part.start-ms ? 0 : part.active ? 1 : 0.7) : 1;
+                        clicked => { root.word-clicked(line.source-index, part.source-part); }
+                    }
+                }
+                if !line.instrumental && line.parts.length == 0: Text {
+                    private property <float> fade-phase: min(1,max(0,(root.playback-time-ms - line.end-ms) / max(1,root.highlight-fade-out-ms)));
+                    private property <float> highlight: line.active ? 1
+                        : root.smooth-highlight-fade && root.highlight-fade && root.playback-time-ms >= line.end-ms ? 1 - self.fade-phase * self.fade-phase * (3 - 2 * self.fade-phase) : 0;
+                    text: line.text;
+                    color: line.secondary ? muted-color : root.foreground-color.mix(root.muted-color,self.highlight);
+                    font-family: line.font-family == "" ? root.font-family : line.font-family;
+                    font-size: line.secondary ? lyric-size * 0.5 : ((line.stage-role == "current") ? lyric-size * root.active-scale : lyric-size * 0.72);
+                    font-weight: line.active ? 700 : 500;
+                    horizontal-alignment: center;
+                    animate font-size { duration: root.animate-line-scale ? root.line-scale-duration-ms * 1ms : 0ms; easing: ease; }
+                }
+            }
+            opacity: (line.secondary ? root.animated-decoration-progress : 1) * (line.stage-role == "current" ? 1.0 : (line.stage-role == "previous" ? 0.7 : 0));
+            animate opacity { duration: root.transition-ms * 1ms; easing: ease-in-out; }
+            TouchArea { clicked => { root.line-clicked(line.source-index); } }
+        }
+    }
+    if layout != "stage": viewport := Flickable {
+        changed content-y => { root.viewport-changed(self.content-y / 1px, self.height / 1px, self.content-height / 1px); }
+        changed content-height => { if self.following && abs(self.content-y - self.follow-y) > 0.5px { self.content-y = self.follow-y; } root.viewport-changed(self.content-y / 1px, self.height / 1px, self.content-height / 1px); }
+        changed height => { if self.following && abs(self.content-y - self.follow-y) > 0.5px { self.content-y = self.follow-y; } root.viewport-changed(self.content-y / 1px, self.height / 1px, self.content-height / 1px); }
+        content-width: self.width;
+        // User input assigns content-y and replaces its initial binding. Keep
+        // an observed target so future cues and resume restore native follow.
+        private property <bool> following: (root.follow-playback && root.active-line >= 0) || (root.passive-scroll && !root.synchronized);
+        private property <length> follow-y: root.passive-scroll && !root.synchronized ? -max(0px, self.content-height - self.height) * root.playback-progress : (root.follow-playback && root.active-line >= 0
+            ? -max(0px, (root.scroll-position >= 0 ? root.scroll-position * 1px : root.active-line * (root.lyric-size * root.line-spacing + root.line-padding * 2)))
+            : root.manual-scroll-y);
+        content-y: self.follow-y;
+        changed follow-y => { if self.following { self.content-y = self.follow-y; } }
+        changed following => { if self.following { self.content-y = self.follow-y; } }
+        flicked => { root.manual-scroll-y = self.content-y; root.user-scrolled(); }
+        animate content-y {
+            duration: root.animate-scroll ? (root.scroll-duration-ms >= 0 ? root.scroll-duration-ms * 1ms : root.transition-ms * 1.5ms) : 0ms;
+            easing: root.scroll-easing-profile == 1 ? linear : root.scroll-easing-profile == 2 ? ease
+                : root.scroll-easing-profile == 3 ? ease-in : root.scroll-easing-profile == 4 ? ease-out
+                : root.scroll-easing-profile == 5 ? cubic-bezier(0.45, 0, 0.15, 1)
+                : root.scroll-easing-profile == 6 ? cubic-bezier(0.86, 0, 0.2, 1)
+                : root.scroll-easing-profile == 7 ? cubic-bezier(0.3, 0, 0.2, 1) : ease-in-out;
+        }
+        VerticalLayout {
+            alignment: start;
+            spacing: 0px;
+            padding-left: root.scroll-padding;
+            padding-right: root.scroll-padding;
+            padding-top: root.synchronized ? max(root.scroll-padding, viewport.height * root.target-scroll-pos-ratio - root.lyric-size * root.line-spacing / 2) : root.scroll-padding;
+            padding-bottom: root.synchronized ? max(root.scroll-padding, viewport.height * (1 - root.target-scroll-pos-ratio) - root.lyric-size * root.line-spacing / 2) : root.scroll-padding;
+            for line[index] in lines: Rectangle {
+                private property <length> before: index == 0 || root.lines[index - 1].source-index != line.source-index ? root.line-padding : 0px;
+                private property <length> after: index == root.lines.length - 1 || root.lines[index + 1].source-index != line.source-index ? root.line-padding : 0px;
+                private property <bool> paint-row: self.visible
+                    && self.y + viewport.content-y + self.height >= -root.lyric-size * 2
+                    && self.y + viewport.content-y <= viewport.height + root.lyric-size * 2;
+                private property <length> viewport-center: self.y + viewport.content-y + self.before + (self.height - self.before - self.after) / 2;
+                private property <float> edge-fade: min(1, max(0, self.viewport-center / (root.lyric-size * 1.5)))
+                    * min(1, max(0, (viewport.height - self.viewport-center) / (root.lyric-size * 1.5)));
+                private property <float> focus-opacity: root.lucid-focus
+                    ? (!root.follow-playback || root.active-line < 0 ? 1 : line.source-index < root.lines[root.active-line].source-index ? 0 : 1)
+                    : root.sustain
+                    ? (!root.follow-playback || root.active-line < 0 ? 1.0 : line.sustain-distance == 0 ? 1.0 : line.sustain-distance == 1 ? 0.88 : line.sustain-distance == 2 ? 0.72 : line.sustain-distance == 3 ? 0.52 : line.sustain-distance == 4 ? 0.28 : 0.0)
+                    : (line.active || !root.synchronized || root.active-line < 0 || line.source-index == root.lines[root.active-line].source-index ? 1.0 : (index == root.active-line - 1 || index == root.active-line + 1 ? 0.64 : 0.46));
+                animate focus-opacity { duration: root.transition-ms * 1ms; easing: ease-in-out; }
+                private property <bool> sustain-blur: (root.sustain || root.lucid-focus || root.inactive-blur-px > 0) && !line.active && !line.instrumental && root.follow-playback && root.active-line >= 0 && line.sustain-distance > 0 && (!root.sustain || line.sustain-distance <= 4) && line.sustain-blurred.width > 0;
+                private property <float> blur-mix: root.external-focus-mix ? min(1,max(0,line.focus-mix)) : (self.sustain-blur ? 1 : 0);
+                // Complementary, co-located paint only while focus is changing.
+                // At rest the lazy body still creates just one surface.
+                private property <bool> retained-focus: root.external-focus-mix && root.follow-playback && root.active-line >= 0 && root.inactive-blur-px > 0;
+                private property <float> row-scale: self.retained-focus
+                    ? root.active-scale + (root.inactive-scale - root.active-scale) * self.blur-mix
+                    : (line.active ? root.active-scale : root.inactive-scale);
+                animate row-scale { duration: !self.retained-focus && root.animate-line-scale ? root.line-scale-duration-ms * 1ms : 0ms; easing: ease-in-out; }
+                transform-origin: { x: line.agent == "v1000" ? self.width / 2 : (line.agent == "v2" || line.agent == "v3" ? self.width : 0px), y: self.before + (self.height - self.before - self.after) / 2 };
+                transform-scale: self.row-scale;
+
+                visible: (!line.translation || root.show-translation) && (!line.romanization || root.show-romanization);
+                private property <length> row-height: !self.visible ? 0px : self.before + self.after + (line.secondary ? root.lyric-size * 0.7 : (line.parts.length > 0 && line.parts[0].background ? root.lyric-size * 0.95 : root.lyric-size * root.line-spacing));
+                min-height: self.row-height; max-height: self.row-height;
+                background: transparent;
+                if self.paint-row && self.blur-mix > 0.001: Image {
+                    x: line.agent == "v1000" ? (parent.width - self.width) / 2
+                        : (line.agent == "v2" || line.agent == "v3" ? parent.width - self.width + line.sustain-blurred-padding * 1px : -line.sustain-blurred-padding * 1px);
+                    y: parent.before + (parent.height - parent.before - parent.after - self.height) / 2;
+                    width: line.sustain-blurred-width * 1px;
+                    height: line.sustain-blurred-height * 1px;
+                    source: line.sustain-blurred;
+                    colorize: root.muted-color;
+                    opacity: parent.blur-mix;
+                }
+                if self.paint-row && self.blur-mix < 0.999: HorizontalLayout {
+                    opacity: 1 - parent.blur-mix;
+                    padding-top: parent.before;
+                    padding-bottom: parent.after;
+                    alignment: line.agent == "v1000" ? center : (line.agent == "v2" || line.agent == "v3" ? end : start);
+                    if line.instrumental: InstrumentalNote {
+                        frames: root.instrumental-frames; note-size: root.lyric-size;
+                        active-color: root.foreground-color; muted-color: root.muted-color; glow-color: root.glow-color;
+                        time-ms: root.playback-time-ms; start-ms: line.start-ms; end-ms: line.end-ms;
+                        animate: root.animate-instrumental;
+                    }
+                    if !line.instrumental && line.parts.length > 0: HorizontalLayout {
+                        alignment: line.agent == "v1000" ? center : (line.agent == "v2" || line.agent == "v3" ? end : start);
+                            for part[index] in line.parts: LyricWordView {
+                                text: part.text; active: part.active; background-vocal: part.background;
+                                elapsed-ms: root.playback-time-ms - part.start-ms;
+                        cue-duration-ms: part.duration-ms;
+                                cue-offset: part.cue-offset; cue-span: part.cue-span;
+                        after-line-ms: root.playback-time-ms - line.end-ms;
+                        glow-wide: part.glow-wide; glow-tight: part.glow-tight; glow-padding: part.glow-padding; glow-levels: part.glow-levels;
+                        glyphs: part.glyphs;
+                        glow-enabled: root.highlight-glow && !root.karaoke && !root.sustain;
+                        highlight-swipe: root.highlight-swipe;
+                                finish-fill-at-cue-end: root.finish-fill-at-cue-end;
+                        swipe-wave-em: root.swipe-wave-em;
+                        native-text-gradients: root.native-text-gradients;
+                        highlight-fade: root.highlight-fade; smooth-highlight-fade: root.smooth-highlight-fade; highlight-fade-in-ms: root.highlight-fade-in-ms; highlight-fade-out-ms: root.highlight-fade-out-ms;
+                        swipe-lead-ratio: root.swipe-lead-ratio; swipe-duration-ratio: root.swipe-duration-ratio;
+                        swipe-easing: root.swipe-easing;
+                        swipe-start-from: root.swipe-start-from; swipe-end-from: root.swipe-end-from;
+                        swipe-start-to: root.swipe-start-to; swipe-end-to: root.swipe-end-to;
+                        glow-duration-ratio: root.glow-duration-ratio; glow-min-duration-ms: root.glow-min-duration-ms; glow-easing: root.glow-easing;
+                        glow-radius-from-px: root.glow-radius-from-px; long-word-threshold-ms: root.long-word-threshold-ms;
+                                motion: root.karaoke ? "karaoke" : root.word-motion;
+                                word-wobble: root.word-wobble;
+                                wobble-duration-ms: root.wobble-duration-ms; wobble-peak-offset: root.wobble-peak-offset; wobble-settle-offset: root.wobble-settle-offset;
+                                wobble-easing: root.wobble-easing; wobble-peak-easing: root.wobble-peak-easing; wobble-end-easing: root.wobble-end-easing;
+                                wobble-from: root.wobble-from; wobble-peak: root.wobble-peak; wobble-settle: root.wobble-settle; wobble-to: root.wobble-to;
+                                letter-wave: root.letter-wave;
+                                letter-wave-y-em: root.letter-wave-y-em; letter-wave-settle-y-em: root.letter-wave-settle-y-em;
+                                letter-wave-emphasis-scale: root.letter-wave-emphasis-scale; letter-wave-duration-ms: root.letter-wave-duration-ms;
+                                letter-wave-rise-easing: root.letter-wave-rise-easing; letter-wave-fall-easing: root.letter-wave-fall-easing;
+                                font-weight: part.background ? 500 : root.font-weight;
+                                opacity: root.karaoke ? (root.playback-time-ms < part.start-ms ? 0 : part.active ? 1 : 0.7) : 1;
+                                foreground-color: muted-color;
+                                active-color: root.foreground-color;
+                                muted-color: muted-color; accent-color: accent-color;
+                                glow-color: root.glow-color;
+                                font-size: line.secondary ? lyric-size * 0.48 : (part.background ? lyric-size * root.background-font-scale : lyric-size);
+                        line-scale: 1;
+                                line-scale-duration-ms: root.line-scale-duration-ms; animate-line-scale: false;
+                                font-family: part.font-family == "" ? root.font-family : part.font-family;
+                                clicked => { root.word-clicked(line.source-index, part.source-part); }
+                        }
+                    }
+                    if !line.instrumental && line.parts.length == 0: Text {
+                        private property <float> fade-phase: min(1,max(0,(root.playback-time-ms - line.end-ms) / max(1,root.highlight-fade-out-ms)));
+                        private property <float> highlight: line.active || !root.synchronized ? 1
+                            : root.smooth-highlight-fade && root.highlight-fade && root.playback-time-ms >= line.end-ms ? 1 - self.fade-phase * self.fade-phase * (3 - 2 * self.fade-phase) : 0;
+                        text: line.text;
+                        color: line.secondary ? muted-color : root.foreground-color.mix(root.muted-color,self.highlight);
+                        font-family: line.font-family == "" ? root.font-family : line.font-family;
+                        font-size: line.secondary ? lyric-size * 0.5 : lyric-size;
+                        font-weight: root.font-weight;
+                        horizontal-alignment: line.agent == "v1000" ? center : (line.agent == "v2" || line.agent == "v3" ? right : left);
+                        wrap: word-wrap;
+                        animate font-size { duration: root.animate-line-scale ? root.line-scale-duration-ms * 1ms : 0ms; easing: ease; }
+                    }
+                }
+                opacity: (line.secondary ? root.animated-decoration-progress : 1) * self.focus-opacity * self.edge-fade;
+                if self.paint-row: TouchArea { clicked => { root.line-clicked(line.source-index); } }
+            }
+        }
+    }
+}

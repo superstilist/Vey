@@ -106,7 +106,7 @@ See docs/LYRICS-PREFERENCES.md.
 
 Paste/provider/migration payload -> `src/lyrics.rs::parse_payload` -> canonical
 alternatives and synchronization classification -> `src/braccato.rs` conversion
--> upstream widget document or native fallback rows. Preserve backing vocals,
+-> browser widget document or native Rust Braccato display rows. Preserve backing vocals,
 translations, word boundaries, offsets and instrumental gaps across conversions.
 Line-synced input has no reliable per-word timing to animate.
 Word/syllable mode requires explicit part starts and matching source text.
@@ -138,22 +138,74 @@ JSON compare parser output against pinned upstream oracle data. Rust deliberatel
 preserves untimed QRC words where the oracle loses text; do not erase this fix to
 make an upstream comparison identical. See `src/braccato/README.md` for others.
 
-`tools/braccato-widget/build.mjs` bundles vendored upstream runtime exports and
-the integration into `web/braccato/`. Generated assets are checked in and native
-Windows builds embed them. Ordinary Rust builds need no Node dependency install.
-Windows host: `src/lyrics_widget.rs`; browser host: `web/bridge.js`. JWTs never
-belong in rendering documents. Preserve origin/message checks and host disposal.
+`third-party/braccato-rust/` is the copied local Rust-port snapshot. Native
+Vey imports its Slint LyricsView through build.rs; src/native_lyrics.rs adapts
+canonical display rows, clocks, source-index seeks and bounded glyph preparation.
+ui/native-lyrics.slint binds the native component to the player surface.
+The adapter suppresses upstream demo line-word staggering: line cues stay line
+cues. Timed romanization, backing vocals and syllables retain source timestamps.
+See docs/NATIVE-BRACCATO.md and third-party/BRACCATO-RUST-UPSTREAM.md.
 
-The app selects Braccato only; legacy theme selectors/custom CSS UI were removed.
-RICS and theme-processing code still exists in upstream/fallback APIs. Older
-docs describing multiple selectable themes do not establish current UI support.
-Windows/web show loading/retry on host failure; do not assume automatic fallback
-merely because an older integration note describes that behavior.
+`tools/braccato-widget/build.mjs` still bundles the preserved JavaScript snapshot
+for web/braccato/. Browser-only src/lyrics_widget.rs bridges the iframe. Windows
+lyrics no longer instantiate WebView2; video and challenge hosts remain separate.
+JWTs never belong in rendering documents. The app selects Braccato only. Native
+themes map supported CSS/RICS declarations to typed controls in src/themes.rs;
+arbitrary CSS selectors/DOM behavior remain browser-only.
 
 ## Rendering and motion
 
-Slint draws controls/surfaces. Bundled Kawarp produces a small decorative texture
-through the web host; native lyric background paints the matching surface crop.
+Native lyric focus uses `src/native_lyric_focus.rs` and `native_lyric_masks.rs`:
+one bounded worker rasterizes inactive-line masks, returns raw RGBA and rejects
+stale document/layout generations. Slint creates/uploads images on its UI thread.
+Only 14 nearby rows retain masks; paused focus reuses paint. Satoshi/Noto font
+selection and cached variable-font metrics live in `src/native_lyric_fonts.rs`.
+Native display-only NBSP keeps supplied word spaces; canonical timings/text stay
+unchanged. See docs/NATIVE-BRACCATO.md for reference-style checks.
+Word glows and glyph plans use a separate single-job worker in
+`src/native_lyric_paint.rs`; layout generations and seek windows reject stale
+results. Focus preparation runs independently so dense word cues cannot starve it.
+The visible lyric clock ticks at 16 ms and slews small late media samples.
+Normal mode uses zero scroll offset, zero lookahead and zero ending threshold.
+CSS can opt into anticipatory camera/grouping; sung focus always uses actual
+cue time. Native stage selection waits for real starts and retains real overlaps.
+Committed groups do not scroll again at each cue. Active-band geometry handles
+overlaps, pins tall wrapped sources and retargets immediately; manual/resume,
+paused seeks and reduced motion remain exact. Sung activation keeps its clock.
+The default glow is 6px at 31% opacity. Atlases crossfade two radii, or four
+for broader custom glow. Normal fill paints base/highlight in one shaped text
+run; letter waves and wobble are opt-in. Only viewport-adjacent row bodies
+  instantiate word views. Focus crossfades aligned sharp ink/cached blur for
+  180ms in and 280ms out, sharing one row scale/origin. Settled rows retain one
+  paint body; reduced motion switches immediately.
+  `FocusPaint` retains blend clocks outside model delegates and updates nearby
+  `focus-mix` values only while changing, so ordinary row updates cannot reset
+  a handoff. Seeks snap the blend together with the camera.
+Multiword timed cues remain one shaping run until wrapping; normalized cue
+offset/span carries the same fill edge across wrapped fragments without retiming.
+Native fill is bounded by the supplied cue end; each wrapped fragment completes
+before its continuation begins. The copied renderer exposes this as an opt-in
+`finish-fill-at-cue-end` property so standalone upstream defaults remain available.
+Wrapping keeps syllables of a word together, permits hyphen breaks and falls
+back to whole grapheme clusters for oversized tokens. Visual follow uses each
+fragment's measured fill-entry phase; canonical timestamps stay unchanged.
+  The single-run fill has a gentle wave; scroll uses a soft-start/stop cubic
+  curve. Highlight fade uses smoothstep without delaying cue fill. Reduced
+  motion disables wave, animated scrolling and focus crossfade.
+Explicit backing phrase intervals survive display conversion as single cues;
+untimed phrases retain line sync and never acquire estimated word timings.
+Glow is clipped at the actual fill edge. Appearance CSS and selected font family
+persist in Settings. Desktop TTF/OTF imports are validated, stored under the state
+directory's lyric-fonts/ and registered with Slint fontique and both raster workers.
+Font revisions invalidate layout/glyph caches; missing glyphs fall back to Noto.
+Font files stay local; settings do not contain paths.
+Native lyric changes no longer serialize an unused browser document. Windows
+video destroys its WebView on return to cover mode, suspends hidden IPC and
+coalesces unchanged payloads/bounds. Authentication's challenge WebView remains
+required; Android video uses a native TextureView, with WebView only for auth.
+
+Slint directly composites native lyrics and the shared Rust ambient texture.
+The browser retains bundled Kawarp through its iframe host.
 `src/material.rs` derives tonal roles on artwork changes, not playback ticks.
 Dominant hue families use circular averaging and artwork chroma; grayscale
 covers keep dynamic themes neutral. Kawarp uses 0.28 opacity, warp 1, 15 blur
@@ -162,11 +214,14 @@ The browser texture and native fallback add slow clock-driven rotation with
 overscan. Native bilinear sampling lives in `src/ambient_motion.rs`; pause and
 reduced motion stop continuous work. Mobile `TouchStyle` gives shared actions
 44 px targets and pressed feedback without extra persistent backgrounds.
-Theme and texture transitions both use one-second smootherstep fades. Keep
-the native backdrop opacity aligned with Slint; see `docs/APPEARANCE.md`.
+Theme and texture transitions both use one-second smootherstep fades. The
+native lyric component shares the Slint surface and artwork without a child HWND. See `docs/APPEARANCE.md`.
 Desktop page surfaces stay mounted in a compass grid; one interruptible camera
 moves content and lyric host together. Mobile Player is a retained-page overlay.
 Reduced motion bypasses travel. Details: `docs/PAGE-MOTION.md`.
+`src/navigation_fx.rs` captures two bounded transparent page textures per journey
+for blur; `ui/navigation-streaks.slint` follows the same camera vector. The shared
+stage radius drives Slint, DOM and Windows clipping. No snapshot/blur runs per frame.
 
 Avoid duplicate lyric rebuilds, repeated theme compilation, repeated geometry
 styles and hidden frame work. Clock interpolation must apply seeks, pause and
@@ -254,3 +309,18 @@ Slint HWND. Pointer presses on the shell restore native keyboard focus; hiding
 a focused child releases it. Do not move focus on playback timers. Silent auth
 hosts must be non-focusable before attachment (Android) and never request focus
 (Windows). Search input stays mounted with stable clear-action geometry.
+
+## Vey account sync
+
+`src/account.rs` installs a shared native/WASM controller. Its separate opaque
+session is excluded from Store exports; Basic sync allowlists video/cloud references,
+preferences and history. Revision conflicts pause automatic sync. Private audio
+uploads require server-checked developer/tester Premium entitlements; downloads
+are account-scoped native files or temporary browser Blobs. See `docs/ACCOUNTS.md`.
+The Cloudflare D1/R2 implementation lives in the separate `blueberry_melody` repo.
+
+Vey uses its own RFC 8628 OAuth device grant via the system browser. The default
+public API is https://blueberry-melody.superstilist.workers.dev; manual server/email
+entry remains available. Browser popup preparation is synchronous with the click;
+consent is explicit, token polling obeys the server interval, and cancellation
+invalidates the local pending flow. No client secret is shipped.

@@ -1,0 +1,14 @@
+[package]
+name = "braccato-engine"
+description = "Playback synchronization and stage planning for Braccato lyrics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+braccato-types.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

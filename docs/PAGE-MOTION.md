@@ -18,14 +18,17 @@ the same world-position-minus-camera transform. Diagonals move on both axes,
 and opposite destinations span two cells. Retargeting starts from the current
 camera position rather than restarting a canned entrance animation.
 Only content moves. The background, navigation, and playback bar stay fixed.
+Sparse anime-style speed lines follow the camera vector and fade with its
+progress, including interrupted journeys. Reduced motion suppresses the lines.
 The complete lyric viewport moves as one object with the player. Its text,
 scrollbar and lyric controls keep their local layout throughout camera travel.
 Reduced motion moves the camera to its target immediately.
 
 Eight route surfaces and the player surface stay mounted at viewport size.
 While idle, one page at a time is painted through a clipped edge strip; the
-currently visible page is already warm. A destination gets a brief preparation
-frame before travel. Slint's rendering-cache hint keeps these surfaces ready
+currently visible page is already warm. A destination gets a preparation frame
+for capture, then travel starts on a fresh animation tick so capture time cannot
+consume the camera animation. Slint's rendering-cache hint keeps these surfaces ready
 for compositing, trading viewport-scaled render-cache memory for fast returns.
 Normal model and size dependencies refresh the relevant cache when content or
 the viewport changes. Warming pauses during navigation and palette fades;
@@ -38,14 +41,22 @@ The shared ease-in-out curve is `cubic-bezier(0.45, 0, 0.55, 1)`. The bridge
 supplies the camera epoch, start/target coordinates and elapsed time and
 duration. The browser host joins that same curve using Web Animations, so it moves
 between IPC samples even when playback is paused. Duplicate samples preserve
-the animation; reduced motion, editor mode and hiding cancel it. The camera
-adapter is shared by the browser host and standalone widget. Grouped hosts
-disable inner lyric translation to avoid moving the lyrics twice. A rounded
-stage clips the moving viewport in both browser and Windows hosts. Windows
-moves the child without resizing its document and skips hidden geometry work.
-Native placement samples use a 16ms cadence during player camera travel,
-returning to the usual 32ms bridge cadence when the camera settles.
-The Slint fallback lyric list is instantiated only without the external host.
+the animation. `src/navigation_fx.rs` captures outgoing and incoming Slint content
+offscreen once per journey, excluding the ambient backdrop. Each texture is
+downsampled to at most 768 by 640 pixels and blurred once. The camera composites
+these textures through mid-travel and restores live content at the destination;
+there is no per-frame readback or CPU blur, and only two textures are retained.
+Unsupported snapshot renderers retain live content. Native Rust Braccato is
+part of the captured Slint content. External browser lyrics
+blur by 5.5px at mid-travel. Blur can
+be disabled separately in Appearance settings. Reduced motion, editor mode and
+hiding cancel it. The camera adapter is shared by the browser host and standalone
+widget. Grouped hosts blur without translating the lyrics twice. A rounded
+stage clips the moving viewport in both browser and native Slint. The shared
+Slint stage supplies its radius (20px mobile, 28px desktop), and the mobile
+player clips its children to its own rounded sheet. Native lyrics no longer
+use child-window placement or lyric IPC. The copied Rust Braccato view shares
+the page camera; browser host geometry updates remain separate.
 Decorative background readback drops to roughly half its normal cadence while
 content moves, without resetting the warp clock, then returns to normal.
 Paused color morphs reuse a cached GPU target and blend against that target;
@@ -59,6 +70,15 @@ navigation, shared backgrounds, and stable player bounds in the WASM app.
 The test also records headless-browser animation-frame timing samples in
 `docs/navigation-performance.json`; these are environment-specific timings,
 not a native-device frame-rate guarantee.
+
+`node tools/braccato-widget/camera-presentation-test.mjs` checks browser blur,
+interruption, duplicate samples and reduced-motion cancellation.
+`cargo run --locked --example navigation_transition` exercises native captures,
+diagonal travel, retargeting, the blur switch and reduced motion, and writes
+visual fixtures under `docs/screenshots/navigation-*.png`.
+With the WASM assets built and fixture server running,
+`node tools/braccato-widget/navigation-viewport-test.mjs` checks the running web
+shell's camera samples, sharp chrome and matching desktop/mobile host radii.
 
 On mobile, the player uses a separate overlay sheet rather than the world-grid
 camera. Its retained page keeps the normal viewport size and window position,

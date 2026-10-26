@@ -18,6 +18,7 @@ export component LyricsSettings inherits Rectangle {
     private property <[string]> provider-ids: ["auto", "dacubeking", "unison", "lrclib", "youtube"];
     callback provider-changed(string);
     callback display-changed();
+    callback appearance();
     callback mode-changed();
     max-width: 520px;
     height: body.preferred-height;
@@ -39,6 +40,7 @@ export component LyricsSettings inherits Rectangle {
         if root.romanization: Text { text: I18n.tr("Автоматична романізація: Unison / Google"); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
         if root.translation: Text { text: I18n.tr("Автоматичний переклад: Unison / Google Translate"); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
         if root.status != "": Text { text: I18n.tr(root.status); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
+        Action { text: I18n.tr("Вигляд слів"); wide: true; outlined: true; clicked => {root.appearance();} }
         Action { text: I18n.tr("Додатково"); wide: true; selected: root.advanced; outlined: true; clicked => { root.advanced = !root.advanced; } }
         if root.advanced: VerticalLayout {
             spacing: 8px;

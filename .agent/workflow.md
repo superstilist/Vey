@@ -19,12 +19,27 @@ Run commands from the project root in PowerShell unless stated otherwise.
 | --- | --- |
 | Native launch | `cargo run --bin vey` |
 | Rust tests | `cargo test --locked --lib --tests` |
+| Account sync and storage | `cargo test --locked --lib account::tests`; live fixture/browser checks: `docs/ACCOUNTS.md` |
 | Rust build | `cargo build --locked` |
 | Formatting check | `cargo fmt -- --check` |
 | WASM compile check | `cargo check --locked --lib --target wasm32-unknown-unknown` |
 | WASM + bindings | `./scripts/build-web.ps1 -Debug` |
 | Browser backend | `cargo run --bin vey -- --web-server` (http://127.0.0.1:4173) |
 | Native fixture screenshots | `cargo run --bin vey -- --screenshots` |
+| Copied Rust Braccato native visual/behavior fixture | `cargo run --locked --example native_lyrics`; inspect `target/native-lyrics-check/` |
+| Native autoscroll, real wheel/resume and source-read counter | `cargo run --locked --example native_autoscroll` |
+| Continuous 2x native timing, grouped cues and interruptible retarget | `cargo run --locked --example native_lyric_timing` |
+| Word deadline pixels and exact scroll/stage handoff | `cargo run --locked --example native_lyric_boundary` |
+| Wrapped previous-row completion before next-row fill | `cargo run --locked --example native_lyric_wrapped_boundary` |
+| Long hyphenated/unbroken text, mobile/stage bounds and cue continuation | `cargo run --locked --example native_lyric_overflow` |
+| Native Braccato reference typography/focus/sweep visuals | `cargo run --locked --example native_lyric_effects` |
+| Focus crossfade pixels, no additive duplicate and reduced motion | `cargo run --locked --example native_lyric_handoff` |
+| Continuous camera positions, rapid retarget and no overshoot | `cargo run --locked --example native_lyric_motion` |
+| Imported fonts, custom themes and filled-only glow pixels | `cargo run --locked --example native_lyric_custom` |
+| Backing-vocal phrase/wrapped fill pixels, including opt-in letter waves | `cargo run --locked --example native_lyric_backing` |
+| Native render workload timings | `cargo run --locked --example native_lyric_performance -- label`; JSON under `target/native-lyrics-check/` |
+| Native executable release build | `cargo build --release --bin vey --locked`; output `target/release/vey.exe` |
+| Copied renderer unit checks | `cargo test --locked --manifest-path third-party/braccato-rust/Cargo.toml --target-dir target -p braccato-slint -p braccato-engine -p braccato-types -p braccato-themes` |
 | Android bars/cutout layout fixtures (native simulation) | `cargo run --locked --example android_layout` |
 | Windows search focus regression (generated video fixture required) | `cargo run --locked --example search_input` |
 | Volume fill pixel regression | `cargo run --locked --example volume_fill` |

@@ -142,8 +142,8 @@ export function renderAmbient(state: any, send: (message: object) => void) {
   }
 }
 
-// Opaque Windows child: sample the same global background at this viewport,
-// rather than asking DWM to blend a transparent HWND with an OpenGL swap chain.
+// Windows WebView2 is an opaque child HWND. Reproduce the matching Slint
+// surface and artwork crop here instead of relying on cross-swap-chain alpha.
 export function paintNativeBackdrop(backdrop: any) {
   if (!backdrop) return;
   const key = JSON.stringify([backdrop, revision]);

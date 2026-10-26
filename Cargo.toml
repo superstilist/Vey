@@ -1,6 +1,6 @@
 [package]
 name = "vey"
-version = "0.1.16"
+version = "0.1.21"
 edition = "2021"
 build = "build.rs"
 
@@ -21,7 +21,7 @@ name = "playervf"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-slint = { version = "1.18.1", features = ["backend-winit", "renderer-femtovg", "raw-window-handle-06"] }
+slint = { version = "1.18.1", features = ["backend-winit", "renderer-femtovg", "raw-window-handle-06", "unstable-fontique-011"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 roxmltree = "0.21"
@@ -33,8 +33,11 @@ unicode-script = "0.5"
 html-escape = "0.2"
 web-time = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
+qrcode = { version = "0.14.1", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+braccato-slint = { path = "third-party/braccato-rust/crates/slint" }
+ttf-parser = "0.25"
 yt-rust = { path = "third-party/yt-rust", default-features = false, features = ["youtube-music"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }

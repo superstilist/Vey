@@ -1,0 +1,22 @@
+/* Native lyric adaptation of Lucid 1.3.0 by drago-oo.
+   https://github.com/better-lyrics/themes/tree/master/themes/lucid
+   Rosemary is the user's local font substitution. */
+background: #101112;
+foreground: #ffffff;
+muted: #ffffff33;
+accent: #ffffff;
+font-family: Rosemary;
+font-weight: 400;
+font-size: 48px;
+line-spacing: 1.35;
+.blyrics-container {
+    --blyrics-lucid-focus: 1;
+    --blyrics-animate-word-wobble: 0;
+    --blyrics-scale-transition-duration: 600ms;
+    --blyrics-lyric-scroll-duration: 800ms;
+    --blyrics-lyric-scroll-timing-function: cubic-bezier(0.45, 0, 0.15, 1);
+    --blyrics-scale: 0.95;
+    --blyrics-active-scale: 1;
+    --blyrics-background-font-scale: 0.65;
+    --blyrics-padding: 32px;
+}

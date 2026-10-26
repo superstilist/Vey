@@ -1,0 +1,12 @@
+[package]
+name = "braccato-highlight"
+description = "Lyric format tokenization for native editors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+braccato-parsers.workspace = true
+regex.workspace = true

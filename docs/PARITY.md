@@ -12,8 +12,8 @@ The TypeScript/Tauri source project was read as the reference and was not delete
 | YTM | Original public search, clip pairing, suggestions service, browse, recommendations, stream resolution, ranged download/cache and file downloads |
 | Local data | Likes, playlist create/delete/add/remove, history, sources, settings, JSON backup/restore and one-time allowlisted migration |
 | Lyrics | LRC, enhanced timing, QRC, TTML, SRT/WebVTT, nested background vocals, translations, malformed-provider fallback, SSE alternatives, Unison, captions and LRCLib |
-| Lyrics renderer | Original upstream Braccato source and effects in embedded Windows WebView2 and browser iframe; Rust styled-text fallback on other native platforms |
-| Themes | Original CSS and full upstream RICS compiler in the web widget; original highlighted paste editor; Rust fallback supports a smaller theme subset |
+| Lyrics renderer | Copied Rust Braccato Slint component on native targets; preserved original JavaScript source and effects in the browser iframe; see NATIVE-BRACCATO.md |
+| Themes | Native Rust Braccato sweep/glow/wave/stage behavior with Vey display settings; browser CSS/RICS and highlighted editor remain browser-only |
 | JWT | Automatic startup prewarm, hidden official challenge, cached JWT, background renewal in the last hour, invalidation and one retry after 401; live Windows acquisition verified |
 | Account boundary | Voice and Google session/account modules excluded. No embedded Google login, header import, cookie capture or account playlist/liked APIs |
 | Web | Rust/WASM Slint canvas, browser audio, local file picker, durable local state, public network functions through same-origin Rust backend |
@@ -24,7 +24,7 @@ The TypeScript/Tauri source project was read as the reference and was not delete
 - Inline video surface adapters now exist for web, Windows, Android and Linux (optional FFmpeg). Browser fixture playback is checked separately from live streams and device acceptance; native playback acceptance is pending. See PLAYER-REFINEMENT.md.
 - Android 0.1.5 requests runtime audio permission and scans MediaStore instead of a desktop Music folder. Native layout consumes status/navigation/cutout insets. SAF file/save dialogs, browser intents and device runtime acceptance remain; manual app-accessible paths are available. APK packaging checks do not establish device playback/permission behavior. See ANDROID-FIXES.md.
 - The embedded challenge host is implemented for Windows, web and Android. Android device acquisition is pending runtime acceptance; Linux still needs a challenge host.
-- Community CSS themes are executed by the upstream widget on Windows/browser. An exhaustive visual audit of every external theme and preset remains. The Rust fallback still uses converted properties.
+- Community CSS themes are executed by the upstream browser widget. Native targets use the Rust component's supported settings; arbitrary CSS/DOM extensions are browser-only. An exhaustive external-theme audit remains separate.
 - Public album/artist/playlist detail navigation, continuation UX, all original context-menu/gesture shortcuts, download progress/cancellation and exhaustive settings parity remain.
 - Browser metadata/artwork extraction from selected file bytes and complete web artwork parity remain. Browser file handles need reselection after page reload.
 - The migration adapter preserves original supported preference records, but not every old setting has a matching native control. It does not read the old WebView profile automatically.

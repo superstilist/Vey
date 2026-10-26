@@ -85,13 +85,6 @@ fn apply_settings(w: &MainWindow, a: &App) {
     w.set_art_mode(s.art_mode.clone().into());
     w.set_lyrics_provider(s.lyrics_provider.clone().into());
     w.set_lyrics_stage(s.lyrics_stage);
-    w.set_lyrics_passive_scroll(s.lyrics_passive_scroll);
-    let theme = crate::themes::NativeTheme::default();
-    theme.apply(
-        &w,
-        a.store.settings.lyrics_reduced_motion,
-        a.store.settings.lyrics_passive_scroll,
-    );
     let _ = a.audio.volume(s.volume);
     let _ = a.audio.rate(s.rate);
 }
@@ -128,7 +121,9 @@ fn is_downloaded(a: &App, path: &str) -> bool {
             .any(|p| normalize_path(p) == normalize_path(path))
 }
 fn local_file(a: &App, track: &Track) -> Option<String> {
-    if track.video_id.is_none() {
+    if let Some(path) = a.store.downloads.get(&track.path) {
+        Some(path.clone())
+    } else if track.video_id.is_none() {
         Some(track.path.clone())
     } else {
         a.store.downloads.get(&track.path).cloned()
@@ -693,7 +688,6 @@ fn show_lyrics(w: &MainWindow, a: &App, index: usize) {
         .unwrap_or(0.)
         .max(0.)
         * 1000.) as i64;
-    w.set_lyrics_document(crate::braccato::web_document(alt, duration_ms).into());
     w.set_lyric_lines(model(crate::braccato::rows(alt, duration_ms)));
 }
 fn selected(a: &App, index: i32) -> Option<Track> {
@@ -715,20 +709,15 @@ pub fn run() -> Result<(), slint::PlatformError> {
     w.set_android_platform(true);
     crate::i18n::install(&w);
     crate::material::install(&w);
-    crate::renderer::install(&w);
+    crate::native_lyrics::install(&w);
+    crate::navigation_fx::install(&w);
     let (tx, rx) = mpsc::channel();
     let rt = Arc::new(Runtime::new().expect("Rust async runtime"));
     let _video_surface = crate::video::install(&w, rt.clone());
-    #[cfg(not(target_os = "windows"))]
     let _ambient_surface = crate::ambient_native::install(&w);
     let widget_smoke = std::env::args().any(|a| a == "--widget-smoke");
     let widget_preview = std::env::args().any(|a| a == "--widget-preview");
     let snapshot = widget_smoke || widget_preview || std::env::args().any(|a| a == "--screenshots");
-    let _lyrics_widget = if !snapshot || widget_smoke || widget_preview {
-        crate::lyrics_widget::install(&w)
-    } else {
-        None
-    };
     let (mut store, load_error) = if snapshot {
         (Store::default(), None)
     } else {
@@ -805,6 +794,9 @@ pub fn run() -> Result<(), slint::PlatformError> {
         let _ = a.audio.volume(a.store.settings.volume);
         let _ = a.audio.rate(a.store.settings.rate);
     }
+    #[cfg(not(target_os = "android"))]
+    w.set_lyric_font_import_supported(true);
+    crate::native_lyric_fonts::restore();
     apply_settings(&w, &a.borrow());
     if let Some(e) = load_error {
         w.set_status(format!("Помилка читання даних: {e}. Оригінальний файл збережено.").into());
@@ -1144,6 +1136,35 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
     );
 
+    bind!(on_apply_lyric_style, |ui, state| {
+        let mut a = state.borrow_mut();
+        if ui.get_lyric_theme_source().len() > 65536 {
+            ui.set_lyric_style_status("Theme exceeds 64 KiB".into());
+            return;
+        }
+        a.store.settings.lyrics_theme_css = ui.get_lyric_theme_source().to_string();
+        a.store.settings.lyrics_font_family = ui.get_lyric_font_family().to_string();
+        crate::themes::apply_settings(&ui, &a.store.settings);
+        persist(&ui, &a);
+    });
+    bind!(on_import_lyric_font, |ui, state| {
+        if let Some(path) = crate::dialogs::FileDialog::new()
+            .add_filter("TTF / OTF", &["ttf", "otf"])
+            .pick_file()
+        {
+            match crate::native_lyric_fonts::import(&path) {
+                Ok(family) => {
+                    let draft = ui.get_lyric_theme_source();
+                    let mut a = state.borrow_mut();
+                    a.store.settings.lyrics_font_family = family;
+                    crate::themes::apply_settings(&ui, &a.store.settings);
+                    ui.set_lyric_theme_source(draft);
+                    persist(&ui, &a);
+                }
+                Err(error) => ui.set_lyric_style_status(error.into()),
+            }
+        }
+    });
     bind!(on_provider_changed, |ui, state, value| {
         let mut a = state.borrow_mut();
         a.store.settings.lyrics_provider = value.to_string();
@@ -1825,6 +1846,45 @@ pub fn run() -> Result<(), slint::PlatformError> {
         drop(app);
         scan(&a, &w);
     }
+    let account_get = {
+        let state = a.clone();
+        Rc::new(move || crate::account::snapshot(&state.borrow().store))
+    };
+    let account_apply = {
+        let state = a.clone();
+        let weak = w.as_weak();
+        Rc::new(move |cloud: Store| {
+            if let Some(ui) = weak.upgrade() {
+                let mut state = state.borrow_mut();
+                state.store.tracks = cloud.tracks;
+                state.store.likes = cloud.likes;
+                state.store.playlists = cloud.playlists;
+                state.store.history = cloud.history;
+                state.store.offsets = cloud.offsets;
+                state.store.lyrics_choices = cloud.lyrics_choices;
+                state.store.settings = cloud.settings;
+                state.store.downloads = cloud.downloads;
+                state.library = state.store.tracks.clone();
+                crate::preferences::apply(&ui, &state.store.settings);
+                ui.set_volume(state.store.settings.volume);
+                ui.set_color_mode(state.store.settings.color_mode.as_str().into());
+                ui.set_color_hue(state.store.settings.color_hue as f32);
+                ui.set_art_mode(state.store.settings.art_mode.clone().into());
+                ui.set_shuffle(state.store.settings.shuffle);
+                ui.set_repeat_mode(state.store.settings.repeat.clone().into());
+                ui.set_lyrics_provider(state.store.settings.lyrics_provider.clone().into());
+                ui.set_lyrics_stage(state.store.settings.lyrics_stage);
+                ui.set_lyrics_reduced_motion(state.store.settings.lyrics_reduced_motion);
+                ui.set_lyrics_passive_scroll(state.store.settings.lyrics_passive_scroll);
+                ui.invoke_artwork_theme();
+                let _ = state.audio.volume(state.store.settings.volume);
+                refresh(&ui, &mut state);
+                persist(&ui, &state);
+            }
+        })
+    };
+    let _account_timer =
+        crate::account::install(&w, account_get, account_apply, a.borrow().rt.clone());
     let result = w.run();
     let app = a.borrow();
     if app.save_due.take().is_some() {

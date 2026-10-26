@@ -1,0 +1,20 @@
+[package]
+name = "braccato-slint"
+description = "Reusable native Slint lyrics component for Braccato"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+braccato-types.workspace = true
+braccato-engine.workspace = true
+braccato-themes.workspace = true
+slint.workspace = true
+resvg = { version = "0.48", default-features = false, features = ["text"] }
+ttf-parser = "0.25"
+unicode-segmentation = "1.12"
+
+[build-dependencies]
+slint-build.workspace = true

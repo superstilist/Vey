@@ -5646,24 +5646,38 @@ const YTM_LOGIN_URL: &str = "https://accounts.google.com/v3/signin/accountchoose
 /// sign-in happens on Google's and YouTube's own pages.
 
 pub fn open_ytm_login() -> Result<(), String> {
-    let mut command = if cfg!(target_os = "windows") {
-        let mut command = std::process::Command::new("rundll32");
-        command.arg("url.dll,FileProtocolHandler");
+    open_url(YTM_LOGIN_URL)
+}
+
+pub fn open_url(url: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| "Invalid URL".to_string())?;
+    if !matches!(parsed.scheme(), "https" | "http")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err("Invalid browser URL".into());
+    }
+    #[cfg(target_os = "android")]
+    {
+        crate::android::open_url(url)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let mut command = if cfg!(target_os = "windows") {
+            let mut command = std::process::Command::new("rundll32");
+            command.arg("url.dll,FileProtocolHandler");
+            command
+        } else if cfg!(target_os = "macos") {
+            std::process::Command::new("open")
+        } else {
+            std::process::Command::new("xdg-open")
+        };
         command
-    } else if cfg!(target_os = "macos") {
-        std::process::Command::new("open")
-    } else if cfg!(target_os = "android") {
-        let mut command = std::process::Command::new("am");
-        command.args(["start", "-a", "android.intent.action.VIEW", "-d"]);
-        command
-    } else {
-        std::process::Command::new("xdg-open")
-    };
-    command
-        .arg(YTM_LOGIN_URL)
-        .spawn()
-        .map(drop)
-        .map_err(|error| format!("Could not open the system browser: {error}"))
+            .arg(url)
+            .spawn()
+            .map(drop)
+            .map_err(|error| format!("Could not open the system browser: {error}"))
+    }
 }
 
 // ── Entry ─────────────────────────────────────────────────────────────────────

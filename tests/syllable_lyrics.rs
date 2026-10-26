@@ -128,6 +128,43 @@ fn malformed_or_simultaneous_fragments_do_not_gain_syllable_sync() {
 }
 
 #[test]
+fn explicit_backing_phrases_keep_one_interval_and_untimed_phrases_stay_line_synced() {
+    for begin in [1, 2] {
+        let alt = alternative(&format!("<tt xmlns:ttm='http://www.w3.org/ns/ttml#metadata'><body><p begin='1s' end='6s'>Hold<span ttm:role='x-bg' begin='{begin}s' end='5s'>(куди йти…)</span><span ttm:role='x-bg'>(line only echo)</span></p></body></tt>"));
+        let original = alt.lyrics.clone();
+        let display = braccato::display_lyrics(&alt, 7000);
+        let line = display.iter().find(|l| l.words == "Hold").unwrap();
+        let parts = line.parts.as_ref().unwrap();
+        let phrase = parts.iter().find(|p| p.words == "(куди йти…)").unwrap();
+        assert_eq!(
+            (phrase.start_time_ms, phrase.duration_ms),
+            (begin * 1000, (5 - begin) * 1000)
+        );
+        let untimed = parts
+            .iter()
+            .find(|p| p.words == "(line only echo)")
+            .unwrap();
+        assert_eq!((untimed.start_time_ms, untimed.duration_ms), (1000, 0));
+        assert!(parts
+            .iter()
+            .filter(|p| !p.is_background)
+            .all(|p| p.duration_ms == 0));
+        let rows = braccato::rows(&alt, 7000);
+        let row = rows.iter().find(|r| r.text == "Hold").unwrap();
+        let backing = (0..row.words.row_count())
+            .filter_map(|i| row.words.row_data(i))
+            .filter(|p| p.background && p.text == "(куди йти…)")
+            .collect::<Vec<_>>();
+        assert_eq!(backing.len(), 1, "phrase must retain one canonical cue");
+        assert_eq!(
+            (backing[0].start_ms, backing[0].end_ms),
+            (begin as i32 * 1000, 5000)
+        );
+        assert_eq!(alt.lyrics, original);
+    }
+}
+
+#[test]
 fn real_background_cues_do_not_invent_lead_or_phrase_timings() {
     let raw = "[00:01.00]Hold [bg:<00:01.500>ye<00:02.000>ah<00:02.500>]\n[00:04.00]Line only";
     let alt = alternative(raw);

@@ -745,6 +745,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "braccato-engine"
+version = "0.1.0"
+dependencies = [
+ "braccato-types",
+]
+
+[[package]]
+name = "braccato-slint"
+version = "0.1.0"
+dependencies = [
+ "braccato-engine",
+ "braccato-themes",
+ "braccato-types",
+ "resvg",
+ "slint",
+ "slint-build",
+ "ttf-parser",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "braccato-themes"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "braccato-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4965,6 +5001,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7064,11 +7106,12 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vey"
-version = "0.1.16"
+version = "0.1.21"
 dependencies = [
  "arboard",
  "axum",
  "base64 0.22.1",
+ "braccato-slint",
  "console_error_panic_hook",
  "html-escape",
  "image",
@@ -7076,6 +7119,7 @@ dependencies = [
  "js-sys",
  "lofty",
  "opus-pure",
+ "qrcode",
  "raw-window-handle",
  "regex",
  "reqwest",
@@ -7090,6 +7134,7 @@ dependencies = [
  "tao",
  "tokio",
  "tower-http",
+ "ttf-parser",
  "unicode-script",
  "unicode-segmentation",
  "walkdir",

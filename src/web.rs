@@ -402,7 +402,7 @@ fn start(w: &MainWindow, a: &Rc<RefCell<WebApp>>, track: Track) {
         .as_ref()
         .map(|id| format!("/api/audio/{id}"))
         .unwrap_or_else(|| {
-            if track.path.starts_with("browser://") {
+            if track.path.starts_with("browser://") || track.path.starts_with("cloud://") {
                 file_url(&track.path)
             } else {
                 track.path.clone()
@@ -521,6 +521,7 @@ pub fn run() -> Result<(), JsValue> {
     crate::i18n::install(&w);
     crate::material::install(&w);
     crate::renderer::install(&w);
+    crate::navigation_fx::install(&w);
     let _lyrics_widget = crate::lyrics_widget::install(&w);
     let video_surface = crate::video::install(&w);
     std::mem::forget(video_surface);
@@ -567,14 +568,6 @@ pub fn run() -> Result<(), JsValue> {
         w.set_rate(a.store.settings.rate);
         w.set_lyrics_provider(a.store.settings.lyrics_provider.clone().into());
         w.set_lyrics_stage(a.store.settings.lyrics_stage);
-        w.set_lyrics_reduced_motion(a.store.settings.lyrics_reduced_motion);
-        w.set_lyrics_passive_scroll(a.store.settings.lyrics_passive_scroll);
-        let theme = crate::themes::NativeTheme::default();
-        theme.apply(
-            &w,
-            a.store.settings.lyrics_reduced_motion,
-            a.store.settings.lyrics_passive_scroll,
-        );
     }
     macro_rules! bind{($method:ident,|$ui:ident,$state:ident $(,$arg:ident)*|$body:block)=>{{let weak=w.as_weak();let shared=a.clone();w.$method(move|$($arg),*|{if let Some($ui)=weak.upgrade(){let $state=&shared;$body}});}};}
     bind!(on_search_edited, |_ui, state, _query| {
@@ -907,6 +900,17 @@ pub fn run() -> Result<(), JsValue> {
         }
     );
 
+    bind!(on_apply_lyric_style, |ui, state| {
+        let mut a = state.borrow_mut();
+        if ui.get_lyric_theme_source().len() > 65536 {
+            ui.set_lyric_style_status("Theme exceeds 64 KiB".into());
+            return;
+        }
+        a.store.settings.lyrics_theme_css = ui.get_lyric_theme_source().to_string();
+        a.store.settings.lyrics_font_family = ui.get_lyric_font_family().to_string();
+        crate::themes::apply_settings(&ui, &a.store.settings);
+        save(&a);
+    });
     bind!(on_provider_changed, |ui, state, value| {
         state.borrow_mut().store.settings.lyrics_provider = value.to_string();
         save(&state.borrow());
@@ -1065,6 +1069,45 @@ pub fn run() -> Result<(), JsValue> {
     bind!(on_restore_tags, |ui, _state| {
         ui.set_status("Відновлення тегів доступне у нативній версії".into());
     });
+    let account_get = {
+        let state = a.clone();
+        Rc::new(move || crate::account::snapshot(&state.borrow().store))
+    };
+    let account_apply = {
+        let state = a.clone();
+        let weak = w.as_weak();
+        Rc::new(move |cloud: Store| {
+            if let Some(ui) = weak.upgrade() {
+                let mut state = state.borrow_mut();
+                state.store.tracks = cloud.tracks;
+                state.store.likes = cloud.likes;
+                state.store.playlists = cloud.playlists;
+                state.store.history = cloud.history;
+                state.store.offsets = cloud.offsets;
+                state.store.lyrics_choices = cloud.lyrics_choices;
+                state.store.settings = cloud.settings;
+                state.store.downloads = cloud.downloads;
+                state.library = state.store.tracks.clone();
+                crate::preferences::apply(&ui, &state.store.settings);
+                ui.set_volume(state.store.settings.volume);
+                ui.set_color_mode(state.store.settings.color_mode.as_str().into());
+                ui.set_color_hue(state.store.settings.color_hue as f32);
+                ui.set_art_mode(state.store.settings.art_mode.clone().into());
+                ui.set_shuffle(state.store.settings.shuffle);
+                ui.set_repeat_mode(state.store.settings.repeat.clone().into());
+                ui.set_lyrics_provider(state.store.settings.lyrics_provider.clone().into());
+                ui.set_lyrics_stage(state.store.settings.lyrics_stage);
+                ui.set_lyrics_reduced_motion(state.store.settings.lyrics_reduced_motion);
+                ui.set_lyrics_passive_scroll(state.store.settings.lyrics_passive_scroll);
+                ui.invoke_artwork_theme();
+                state.audio.set_volume(state.store.settings.volume as f64);
+                refresh(&ui, &mut state);
+                save(&state);
+            }
+        })
+    };
+    let account_timer = crate::account::install(&w, account_get, account_apply);
+    std::mem::forget(account_timer);
     refresh(&w, &mut a.borrow_mut());
     let weak = w.as_weak();
     let shared = a.clone();

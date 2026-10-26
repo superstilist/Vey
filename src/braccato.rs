@@ -90,7 +90,11 @@ pub fn display_lyrics(alt: &LyricsAlternative, duration_ms: i64) -> Vec<types::L
             } else {
                 part_timed
             };
-            if !timed || !part.start_time_explicit || part.text.split_whitespace().count() > 1 {
+            let timed_backing_phrase = part.is_background && part.duration_ms > 0;
+            if !timed
+                || !part.start_time_explicit
+                || !timed_backing_phrase && part.text.split_whitespace().count() > 1
+            {
                 part.start_ms = line.start_ms;
                 part.duration_ms = 0;
             }

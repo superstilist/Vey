@@ -74,6 +74,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_duration(180.);
     window.set_position(2.);
     let cases = [
+        (
+            "account-login",
+            "settings",
+            "account",
+            320.,
+            640.,
+            40.,
+            32.,
+            0.,
+            0.,
+        ),
+        (
+            "account-basic",
+            "settings",
+            "account",
+            390.,
+            844.,
+            32.,
+            24.,
+            0.,
+            0.,
+        ),
+        (
+            "account-premium",
+            "settings",
+            "account",
+            320.,
+            740.,
+            32.,
+            24.,
+            0.,
+            0.,
+        ),
         ("home", "home", "", 390., 844., 32., 24., 0., 0.),
         ("library", "library", "", 390., 844., 32., 24., 0., 0.),
         (
@@ -159,6 +192,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 window
                     .global::<playervf::I18n>()
                     .set_language(if name == "language" { "ja" } else { "uk" }.into());
+                window.set_account_signed_in(name == "account-basic" || name == "account-premium");
+                window.set_account_premium(name == "account-premium");
+                window.set_account_email("fixture@example.test".into());
+                window.set_account_api("https://api.example.test".into());
+                window.set_account_status("Дані акаунта синхронізовано".into());
                 window.set_dialog("".into());
                 window.set_search_query(
                     if view == "search" {

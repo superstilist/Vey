@@ -54,7 +54,8 @@ export function updateBraccato(json) {
     braccatoStage = document.createElement('div');
     braccatoStage.style.cssText = 'position:fixed;overflow:hidden;pointer-events:none;z-index:2';
     braccatoStage.appendChild(braccatoFrame);
-    braccatoMotion = new CameraPresentation(braccatoFrame);
+    // Slint composites the page blur inside its rounded content viewport.
+    braccatoMotion = new CameraPresentation(braccatoFrame, null, false);
     braccatoMessageHandler = event => {
       if (event.source !== braccatoFrame.contentWindow || event.origin !== location.origin || event.data?.channel !== 'playervf-braccato') return;
       if (event.data.type === 'ready') { braccatoReady = true; sendBraccato(); }
@@ -102,8 +103,9 @@ export function updateBraccato(json) {
     braccatoGeometryDirty = false;
   }
   const sx = braccatoScaleX, sy = braccatoScaleY;
-  const moving = braccatoState.visible && braccatoState.grouped && braccatoState.camera;
-  braccatoMotion.update(moving ? {...moving,width:moving.width*sx,height:moving.height*sy} : null,!!braccatoState.reduced);
+  const cameraMotion = braccatoState.grouped && braccatoState.camera;
+  const moving = braccatoState.visible && cameraMotion;
+  braccatoMotion.update(cameraMotion ? {...cameraMotion,width:cameraMotion.width*sx,height:cameraMotion.height*sy} : null,!!braccatoState.reduced, cameraMotion?.blur !== false);
   const presentationKey = braccatoState.visible ? JSON.stringify([!!moving,moving ? 0 : braccatoState.presentationX,moving ? 0 : braccatoState.presentationY,braccatoState.presentationOpacity]) : 'hidden';
   if (braccatoState.visible && presentationKey !== braccatoPresentationKey) {
     if (!moving) braccatoFrame.style.transform = braccatoState.grouped ? `translate(${(braccatoState.presentationX||0)*sx}px,${(braccatoState.presentationY||0)*sy}px)` : 'none';
@@ -118,6 +120,7 @@ export function updateBraccato(json) {
 }
 export function drainBraccatoMessages() { return JSON.stringify(braccatoMessages.splice(0)); }
 export function fileUrl(path) { return files.get(path) || ""; }
+export function setCloudFile(path, blob) { if (!files.has(path)) files.set(path, URL.createObjectURL(blob)); }
 // Host-only APIs. All UI, library state, queue and lyric parsing live in Rust.
 export async function pickFiles() {
   return new Promise(resolve => {

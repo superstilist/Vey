@@ -1,0 +1,116 @@
+import { LyricsView, BraccatoRow, InstrumentalFrames } from "@braccato/lyrics.slint";
+import { Action } from "controls.slint";
+import { I18n } from "i18n.slint";
+import { Tokens } from "tokens.slint";
+import "../assets/fonts/Satoshi-700.otf";
+import "../assets/fonts/Satoshi-500.otf";
+import "../assets/fonts/NotoSans.ttf";
+
+export struct LyricStyle {
+    family: string, glow-color: color, glow-radius: float, glow-duration: float,
+    glow: bool, swipe: bool, wave: bool, wobble: bool, fade: bool,
+    inactive-blur: float, line-spacing: float, active-scale: float, inactive-scale: float,
+    swipe-duration: float, swipe-lead: float, wave-duration: float,
+}
+
+// Vey host bindings; the renderer itself is the copied Rust Braccato component.
+export component NativeLyrics inherits Rectangle {
+    in property <[BraccatoRow]> lines;
+    in property <InstrumentalFrames> instrumental-frames;
+    in property <int> active-line;
+    in property <float> scroll-position;
+    in property <float> passive-progress;
+    in property <int> time-ms;
+    in property <bool> timed;
+    in property <bool> paused;
+    in property <bool> stage;
+    in property <bool> passive;
+    in property <bool> reduced;
+    in property <bool> manual;
+    in property <bool> richsync;
+    in property <float> size;
+    in property <color> active-color;
+    in property <color> inactive-color;
+    in property <int> weight;
+    in property <LyricStyle> style;
+    in property <int> scroll-duration;
+    in property <bool> scroll-snap;
+    in property <float> scroll-ratio;
+    in property <string> credits;
+    callback geometry(float,float);
+    callback viewport(float,float);
+    callback seek(int,int);
+    callback user-scroll();
+    callback resume();
+    changed width => {root.geometry(root.width / 1px,root.height / 1px);}
+    changed height => {root.geometry(root.width / 1px,root.height / 1px);}
+    VerticalLayout {
+        spacing: 0px;
+        view := LyricsView {
+            vertical-stretch: 1;
+            lines: root.lines;
+            instrumental-frames: root.instrumental-frames;
+            background-color: transparent;
+            foreground-color: root.active-color;
+            muted-color: root.timed && !root.manual
+                ? root.inactive-color.with-alpha(min(root.inactive-color.alpha, 0.5))
+                : root.inactive-color;
+            accent-color: root.active-color;
+            font-family: root.style.family;
+            font-weight: root.weight;
+            lyric-size: root.size * 1px;
+            active-line: root.active-line;
+            scroll-position: root.scroll-position;
+            target-scroll-pos-ratio: root.scroll-ratio;
+            scroll-duration-ms: root.scroll-duration;
+            scroll-easing-profile: 7;
+            line-padding: root.size >= 40 ? 32px : 20px;
+            scroll-padding: root.size >= 40 ? 36px : 24px;
+            line-spacing: root.style.line-spacing;
+            active-scale: root.style.active-scale;
+            inactive-scale: root.style.inactive-scale;
+            inactive-blur-px: root.timed && !root.manual && !root.stage ? root.style.inactive-blur : 0;
+            glow-color: root.style.glow-color;
+            glow-radius-from-px: root.style.glow-radius;
+            glow-min-duration-ms: root.style.glow-duration;
+            swipe-duration-ratio: root.style.swipe-duration;
+            finish-fill-at-cue-end: true;
+            swipe-wave-em: !root.reduced && root.richsync ? 0.06 : 0;
+            swipe-lead-ratio: root.style.swipe-lead;
+            letter-wave-duration-ms: root.style.wave-duration;
+            layout: root.stage ? "stage" : "scroll";
+            synchronized: root.timed;
+            follow-playback: root.timed && !root.manual;
+            passive-scroll: root.passive && !root.manual && !root.reduced;
+            playback-progress: root.passive-progress;
+            playback-time-ms: root.time-ms;
+            paused: root.paused;
+            transition-ms: root.reduced ? 0 : 320;
+            line-scale-duration-ms: root.reduced ? 0 : 220;
+            external-focus-mix: true;
+            smooth-highlight-fade: true;
+            animate-scroll: !root.reduced && !root.scroll-snap;
+            animate-line-scale: !root.reduced;
+            animate-instrumental: !root.reduced;
+            animate-decorations: !root.reduced;
+            word-wobble: !root.reduced && root.richsync && root.style.wobble;
+            letter-wave: !root.reduced && root.richsync && root.style.wave;
+            highlight-glow: !root.reduced && root.richsync && root.style.glow;
+            highlight-swipe: !root.reduced && root.richsync && root.style.swipe;
+            highlight-fade: !root.reduced && root.style.fade;
+            line-clicked(line) => {root.seek(line,-1);}
+            word-clicked(line,part) => {root.seek(line,part);}
+            user-scrolled => {root.user-scroll();}
+            viewport-changed(y,height,extent) => {root.geometry(root.width / 1px,height);root.viewport(y,extent);}
+        }
+        if root.credits != "" && !root.stage: Text {
+            text: I18n.tr("Автори: ") + root.credits;
+            color: Tokens.ink-300; font-size: 12px; wrap: word-wrap;
+        }
+    }
+    if root.manual: Action {
+        x: (root.width - self.width) / 2; y: root.height - 44px;
+        text: I18n.tr("Повернутися до слів"); primary: true;
+        clicked => {root.resume();}
+    }
+}

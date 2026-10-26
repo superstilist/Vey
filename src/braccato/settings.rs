@@ -9,6 +9,8 @@ static SETTINGS: LazyLock<Regex> =
 pub struct ThemeSettings {
     pub target_ratio: f32,
     pub lookahead_ms: i64,
+    pub scroll_offset_ms: i64,
+    pub ending_threshold_ms: i64,
     pub long_word_ms: i64,
     pub reduced_motion: bool,
     pub disable_richsync: bool,
@@ -23,7 +25,9 @@ impl Default for ThemeSettings {
     fn default() -> Self {
         Self {
             target_ratio: 0.37,
-            lookahead_ms: 540,
+            lookahead_ms: 0,
+            scroll_offset_ms: 0,
+            ending_threshold_ms: 0,
             long_word_ms: 1500,
             reduced_motion: false,
             disable_richsync: false,
@@ -73,6 +77,11 @@ impl ThemeSettings {
                 "blyrics-early-scroll-consider-s" => {
                     if let Some(n) = number {
                         s.lookahead_ms = (n.max(0.) * 1000.) as i64;
+                    }
+                }
+                "blyrics-lyric-ending-threshold-s" => {
+                    if let Some(n) = number {
+                        s.ending_threshold_ms = (n.max(0.) * 1000.) as i64;
                     }
                 }
                 "blyrics-long-word-threshold" => {

@@ -1,6 +1,7 @@
-#[cfg(any(test, all(not(target_arch = "wasm32"), not(target_os = "windows"))))]
+mod account;
+#[cfg(any(test, not(target_arch = "wasm32")))]
 mod ambient_motion;
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod ambient_native;
 #[cfg(not(target_arch = "wasm32"))]
 mod app;
@@ -16,13 +17,30 @@ pub mod lyrics;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lyrics_service;
 pub mod lyrics_translation;
+#[cfg(any(test, target_arch = "wasm32"))]
 mod lyrics_widget;
 mod material;
 #[cfg(not(target_arch = "wasm32"))]
 mod media_library;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_lyric_focus;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_lyric_follow;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod native_lyric_fonts;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_lyric_glyphs;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_lyric_masks;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_lyric_paint;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod native_lyrics;
+pub mod navigation_fx;
 mod preferences;
+#[cfg(target_arch = "wasm32")]
 mod renderer;
 pub mod services;
 #[cfg(not(target_arch = "wasm32"))]

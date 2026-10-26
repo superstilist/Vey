@@ -23,8 +23,8 @@ Only load the relevant detail file; this map remains the short starting point.
 - Desktop native, browser WASM and Android share the Rust/Slint shell. No Tauri.
   The original reference checkout is `C:/Users/superstilist/WebstormProjects/playervf`;
   inspect it only when needed and keep changes in this standalone project.
-- Windows uses embedded WebView2; web uses an iframe for the bundled upstream
-  Braccato renderer. Linux/Android use the Rust/Slint lyric fallback.
+- Native targets use the copied Rust Braccato Slint component in
+  `third-party/braccato-rust/`; web retains the bundled upstream iframe.
 - Preserve upstream Braccato source in `third-party/braccato/`; integration
   changes belong in the host/widget. Provenance: `third-party/BRACCATO-UPSTREAM.md`.
 - Google login uses the system browser. No Google session/cookie capture,
@@ -44,13 +44,16 @@ Only load the relevant detail file; this map remains the short starting point.
 | Local audio, scanning, public YTM | `src/native.rs`, `src/audio.rs` |
 | Vendored YT Music catalog parser | `third-party/yt-rust/`, `third-party/YT-RUST-UPSTREAM.md`, `docs/YT-RUST-INTEGRATION.md`; native service also serves browser search |
 | Android media permission and device audio discovery | `src/android.rs`, `src/native.rs` (`scan_android_library`) |
+| Vey accounts, metadata sync, private audio | `src/account.rs`, `web/account.js`, `docs/ACCOUNTS.md`; backend in `blueberry_melody` |
 | Store, queue, migration, persistence | `src/services.rs`, `src/storage.rs` |
 | Shared lyric detection/parsing | `src/lyrics.rs` (`parse_payload`), `src/braccato/` |
 | Per-song lyric choices, display layers and compact settings | `Store.lyrics_choices`, `src/preferences.rs`, `ui/lyrics-settings.slint`; `docs/LYRICS-PREFERENCES.md` |
 | Syllable timing and upstream review | `docs/SYLLABLE-LYRICS.md`, `tests/syllable_lyrics.rs`, widget `test:syllables` |
 | Automatic lyric translation/romanization | src/lyrics_translation.rs, Store.lyrics_enrichment, player track menu; browser /api/lyrics/enrich |
 | Providers, caching, JWT/challenge | `src/lyrics_service.rs`, `src/challenge.rs` |
-| Native lyric host, geometry, playback bridge | `src/lyrics_widget.rs` |
+| Native lyric adapter, clock, wrapping, follow lookup and bounded glyph preparation | `src/native_lyrics.rs`, `src/native_lyric_follow.rs`, `ui/native-lyrics.slint`; `docs/NATIVE-BRACCATO.md` |
+| Native focus masks and reference typography | `src/native_lyric_focus.rs`, `src/native_lyric_masks.rs`, `src/native_lyric_fonts.rs`; `examples/native_lyric_effects.rs` |
+| Custom lyric fonts, CSS controls and filled-only glow | `src/themes.rs`, `src/native_lyric_fonts.rs`, `src/native_lyric_paint.rs`; `examples/native_lyric_custom.rs` |
 | Upstream widget, clock, ambient texture | `tools/braccato-widget/widget.ts`, `clock.ts`, `ambient.ts`, `widget.css` |
 | WASM controller and browser bridges | `src/web.rs`, `web/bridge.js`, `web/player-motion.js` |
 | Same-origin API/streaming server | `src/server.rs` |

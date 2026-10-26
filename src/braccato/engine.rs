@@ -85,6 +85,21 @@ impl Timeline {
         self.starts
             .partition_point(|s| *s <= time.saturating_add(lead))
     }
+    /// Braccato's active scroll group: running tails, the latest started line,
+    /// and nearby future lines. Merely entering this window does not commit it.
+    fn scroll_candidates(&self, time: i64, lead: i64, out: &mut Vec<usize>) {
+        self.active_into(time, out);
+        let started = self.starts.partition_point(|start| *start <= time);
+        if let Some(latest) = started.checked_sub(1) {
+            if out.last() != Some(&latest) {
+                out.push(latest);
+            }
+        }
+        out.extend(started..self.lookahead_end(time, lead.max(0)));
+        if out.is_empty() && !self.is_empty() {
+            out.push(0);
+        }
+    }
     pub fn len(&self) -> usize {
         self.starts.len()
     }
@@ -135,6 +150,7 @@ impl TickOptions {
 #[derive(Default, Debug)]
 pub struct PlaybackClock {
     sample: f64,
+    smoothed: f64,
     wall: f64,
     rate: f64,
     playing: bool,
@@ -150,6 +166,21 @@ impl PlaybackClock {
             || playing != self.playing
             || rate != self.rate
         {
+            let predicted = self.position_ms(wall_ms, 0) as f64 / 1000.;
+            let error = seconds - predicted;
+            // Upstream smoothedPlaybackTime: slew small late samples instead
+            // of stepping the lyric clock backwards. Real seeks remain exact.
+            self.smoothed = if self.initialized
+                && playing
+                && self.playing
+                && rate == self.rate
+                && error < 0.
+                && error.abs() < 0.06
+            {
+                predicted + error * ((wall_ms - self.wall).max(0.) / 1000. * 0.1).min(1.)
+            } else {
+                seconds.max(0.)
+            };
             self.sample = seconds.max(0.);
             self.wall = wall_ms;
             self.playing = playing;
@@ -167,7 +198,7 @@ impl PlaybackClock {
         } else {
             0.
         };
-        let value = (self.sample * 1000. + elapsed * self.rate).max(0.) as i64;
+        let value = (self.smoothed * 1000. + elapsed * self.rate).max(0.) as i64;
         if duration_ms > 0 {
             value.min(duration_ms)
         } else {
@@ -180,6 +211,7 @@ impl PlaybackClock {
 pub struct ScrollPolicy {
     pub target_ratio: f32,
     pub lookahead_ms: i64,
+    pub ending_threshold_ms: i64,
     pub manual_resume_ms: i64,
     pub passive_resume_ms: i64,
 }
@@ -188,6 +220,7 @@ impl Default for ScrollPolicy {
         Self {
             target_ratio: 0.37,
             lookahead_ms: 540,
+            ending_threshold_ms: 500,
             manual_resume_ms: 25000,
             passive_resume_ms: 5000,
         }
@@ -196,9 +229,17 @@ impl Default for ScrollPolicy {
 #[derive(Default, Debug)]
 pub struct ScrollState {
     until: i64,
-    committed_end: usize,
+    committed: Vec<usize>,
+    candidates: Vec<usize>,
     last_time: Option<i64>,
-    last_anchor: Option<usize>,
+    current_anchor: Option<usize>,
+    pinned: Option<usize>,
+    was_manual: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrollPlan {
+    pub anchor: usize,
+    pub sources: Vec<usize>,
 }
 impl ScrollState {
     pub fn note_user_scroll(&mut self, wall: i64, plain: bool, policy: &ScrollPolicy) {
@@ -210,8 +251,10 @@ impl ScrollState {
     }
     pub fn resume(&mut self) {
         self.until = 0;
-        self.committed_end = 0;
-        self.last_anchor = None;
+        self.committed.clear();
+        self.last_time = None;
+        self.pinned = None;
+        self.was_manual = false;
     }
     pub fn user_scrolling(&self, wall: i64) -> bool {
         wall < self.until
@@ -219,26 +262,96 @@ impl ScrollState {
     pub fn anchor_changed(
         &mut self,
         index: &Timeline,
-        active: &[usize],
+        _active: &[usize],
         time: i64,
         wall: i64,
         policy: &ScrollPolicy,
     ) -> Option<usize> {
+        self.plan(index, time, wall, policy, false)
+            .map(|plan| plan.anchor)
+    }
+    pub fn current_anchor(&self) -> Option<usize> {
+        self.current_anchor
+    }
+    pub fn pin(&mut self, source: Option<usize>) {
+        self.pinned = source;
+    }
+    pub fn pinned(&self) -> Option<usize> {
+        self.pinned
+    }
+    pub fn plan(
+        &mut self,
+        index: &Timeline,
+        time: i64,
+        wall: i64,
+        policy: &ScrollPolicy,
+        force: bool,
+    ) -> Option<ScrollPlan> {
         let jumped = self
             .last_time
             .is_some_and(|last| time < last || time - last > 500);
         self.last_time = Some(time);
+        index.scroll_candidates(time, policy.lookahead_ms, &mut self.candidates);
+        let last = self.candidates.last().copied();
+        let retained = |i: usize| {
+            Some(i) == last
+                || time < index.ends[i].saturating_sub(policy.ending_threshold_ms.max(0))
+        };
+        let geometry_anchor = self
+            .candidates
+            .iter()
+            .copied()
+            .rev()
+            .filter(|i| retained(*i))
+            .find(|i| index.starts[*i] <= time && time < index.ends[*i])
+            .or_else(|| {
+                self.candidates
+                    .iter()
+                    .copied()
+                    .rev()
+                    .find(|i| retained(*i) && index.starts[*i] <= time)
+            })
+            .or_else(|| self.candidates.iter().copied().find(|i| retained(*i)));
+        // Focus follows the scroll clock. Geometry can omit a nearly finished
+        // tail to make room for the next line without advancing word timing.
+        self.current_anchor = self
+            .candidates
+            .iter()
+            .copied()
+            .rev()
+            .find(|i| index.starts[*i] <= time && time < index.ends[*i])
+            .or_else(|| {
+                self.candidates
+                    .iter()
+                    .copied()
+                    .rev()
+                    .find(|i| index.starts[*i] <= time)
+            })
+            .or_else(|| self.candidates.first().copied());
         if self.user_scrolling(wall) {
+            self.was_manual = true;
             return None;
         }
-        let anchor = index.anchor(time, active)?;
-        if jumped
-            || self.last_anchor != Some(anchor)
-                && (anchor >= self.committed_end || self.last_anchor.is_none())
-        {
-            self.committed_end = index.lookahead_end(time, policy.lookahead_ms);
-            self.last_anchor = Some(anchor);
-            Some(anchor)
+        let resumed = std::mem::take(&mut self.was_manual);
+        let anchor = geometry_anchor?;
+        let new_started = self
+            .candidates
+            .iter()
+            .any(|i| index.starts[*i] <= time && self.committed.binary_search(i).is_err());
+        let unpin = self.pinned.is_some_and(|i| {
+            i != anchor && (!self.candidates.contains(&i) || !retained(i) || time >= index.ends[i])
+        });
+        if force || jumped || resumed || self.committed.is_empty() || new_started || unpin {
+            self.committed.clone_from(&self.candidates);
+            Some(ScrollPlan {
+                anchor,
+                sources: self
+                    .candidates
+                    .iter()
+                    .copied()
+                    .filter(|i| retained(*i))
+                    .collect(),
+            })
         } else {
             None
         }
@@ -438,6 +551,88 @@ mod tests {
         c.sample(9., 400., true, 1.);
         assert_eq!(c.position_ms(450., 10000), 9050);
     }
+    #[test]
+    fn clock_slews_late_samples_without_rewinding_and_keeps_seeks_exact() {
+        let mut c = PlaybackClock::default();
+        c.sample(1., 0., true, 1.);
+        let previous = c.position_ms(96., 0);
+        c.sample(1.08, 100., true, 1.);
+        assert!(c.position_ms(100., 0) >= previous);
+        assert!((1098..=1100).contains(&c.position_ms(100., 0)));
+        c.sample(0.5, 116., true, 1.);
+        assert_eq!(c.position_ms(116., 0), 500);
+        c.sample(0.51, 132., false, 1.);
+        assert_eq!(c.position_ms(500., 0), 510);
+    }
+    #[test]
+    fn lookahead_groups_commit_only_at_a_new_scroll_cue() {
+        let index = Timeline::from_spans([(0, 1000), (400, 1500), (1200, 1800), (1600, 2300)]);
+        let policy = ScrollPolicy::default();
+        let mut state = ScrollState::default();
+        let first = state.plan(&index, 0, 0, &policy, false).unwrap();
+        assert_eq!(first.sources, vec![0, 1]);
+        assert_eq!(first.anchor, 0);
+        assert!(
+            state.plan(&index, 400, 400, &policy, false).is_none(),
+            "already included cue must not scroll again"
+        );
+        assert_eq!(state.current_anchor(), Some(1));
+        assert!(
+            state.plan(&index, 700, 700, &policy, false).is_none(),
+            "entering lookahead alone cannot scroll"
+        );
+        assert!(state.plan(&index, 1000, 1000, &policy, false).is_none());
+        let next = state.plan(&index, 1200, 1200, &policy, false).unwrap();
+        assert_eq!(next.anchor, 2);
+        assert_eq!(next.sources, vec![2, 3]);
+        assert!(state.plan(&index, 1600, 1600, &policy, false).is_none());
+    }
+
+    #[test]
+    fn pinned_overlap_hands_back_to_a_running_tail_as_soon_as_the_pin_ends() {
+        let index = Timeline::from_spans([(0, 10000), (2000, 2600), (6000, 7000)]);
+        let policy = ScrollPolicy::default();
+        let mut state = ScrollState::default();
+        assert_eq!(
+            state.plan(&index, 2000, 0, &policy, false).unwrap().anchor,
+            1
+        );
+        state.pin(Some(1));
+        assert!(state.plan(&index, 2400, 400, &policy, false).is_none());
+        assert_eq!(
+            state
+                .plan(&index, 2600, 600, &policy, false)
+                .unwrap()
+                .anchor,
+            0
+        );
+    }
+
+    #[test]
+    fn seek_relayout_and_manual_timeout_recommit_without_waiting_for_a_line() {
+        let index = Timeline::from_spans([(0, 4000), (4000, 8000)]);
+        let policy = ScrollPolicy::default();
+        let mut state = ScrollState::default();
+        state.plan(&index, 4000, 0, &policy, false).unwrap();
+        assert_eq!(
+            state.plan(&index, 1000, 16, &policy, false).unwrap().anchor,
+            0
+        );
+        assert_eq!(
+            state.plan(&index, 1100, 32, &policy, true).unwrap().anchor,
+            0
+        );
+        state.note_user_scroll(32, false, &policy);
+        assert!(state.plan(&index, 1200, 100, &policy, false).is_none());
+        assert_eq!(
+            state
+                .plan(&index, 1300, 25032, &policy, false)
+                .unwrap()
+                .anchor,
+            0
+        );
+    }
+
     #[test]
     fn user_scroll_timeout_and_lookahead_groups() {
         let index = Timeline::from_spans([(0, 1000), (400, 2000), (3000, 4000)]);

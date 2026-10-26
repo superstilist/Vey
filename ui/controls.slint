@@ -31,6 +31,8 @@ export component DownloadMark inherits Rectangle {
     accessible-action-default => { root.clicked(); }
 }
 export component Action inherits Rectangle {
+    in property <bool> enabled: true;
+    opacity: root.enabled ? 1 : 0.45;
     in property <string> text;
     in property <string> label;
     in property <image> icon;
@@ -85,10 +87,10 @@ export component Action inherits Rectangle {
         font-size: Tokens.font-sm;
         font-weight: root.primary || root.selected ? 700 : 600;
     }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
     accessible-role: button;
     accessible-label: label == "" ? text : label;
-    accessible-action-default => { root.clicked(); }
+    accessible-action-default => { if root.enabled { root.clicked(); } }
 }
 
 export component PreferenceToggle inherits Rectangle {

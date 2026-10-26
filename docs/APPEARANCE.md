@@ -10,8 +10,12 @@ Open Settings → Вигляд (Appearance).
 - Six fixed hues are available for Static and Background only. The choice and
   mode persist in native state, browser storage and JSON backups. Older settings
   default to Dynamic with the lime hue; unknown mode names fall back to Dynamic.
-- **Менше руху / Reduced motion:** color changes and page travel apply directly.
-  This uses the existing reduced-motion preference shared with lyrics.
+- **Розмиття під час переходів / Blur during transitions:** briefly blurs the
+  browser canvas and lyric overlay while the camera moves between pages. It can
+  be turned off without changing page motion.
+- **Вимкнути всі анімації / Disable all animations:** removes page travel,
+  panel transitions, palette fades and lyric motion. This uses the existing
+  reduced-motion preference shared with lyrics.
 
 ## Implementation
 
@@ -42,7 +46,8 @@ current camera position. Mobile Player retains its separate page overlay.
 
 The native lyric backdrop uses the current surface and the shared animated
 texture opacity, so switching to Static also fades that background consistently.
-Windows/browser use the same locally bundled widget and camera adapter.
+Native targets now composite the copied Rust Braccato component and the shared
+Rust texture directly in Slint. The browser retains the bundled iframe/camera adapter.
 
 ## Checks and limits
 

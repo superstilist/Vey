@@ -8,12 +8,16 @@ export { WordRow, LyricRow } from "lyric-types.slint";
 import { MediaSlot } from "media-slot.slint";
 import { LyricsSettings } from "lyrics-settings.slint";
 import { BraccatoLyrics } from "braccato-lyrics.slint";
+import { NativeLyrics, LyricStyle } from "native-lyrics.slint";
+import { BraccatoRow, LyricWord as BraccatoWord, LyricGlyph as BraccatoGlyph, InstrumentalFrames as BraccatoInstrumental } from "@braccato/lyrics.slint";
+export { BraccatoRow, LyricWord as BraccatoWord, LyricGlyph as BraccatoGlyph, InstrumentalFrames as BraccatoInstrumental } from "@braccato/lyrics.slint";
 import { Tokens } from "tokens.slint";
 export { I18n } from "i18n.slint";
 export { Motion } from "motion.slint";
 export { Tokens } from "tokens.slint";
 export { CoverBadges } from "controls.slint";
 import { StageNavigator } from "stage-navigator.slint";
+import { NavigationStreaks } from "navigation-streaks.slint";
 import { TouchStyle, CoverBadges, Action, SongRow, NavItem, Artwork, Transport, SeekBar, TonalSlider, MobileNavItem, SettingsTile, PlaylistChoice } from "controls.slint";
 
 export struct TrackRow { title: string, artist: string, album: string, duration: string, path: string, art: image, liked: bool, downloaded: bool, downloading: bool }
@@ -22,13 +26,35 @@ export struct PlaylistRow { id: string, name: string, detail: string }
 
 export component MainWindow inherits Window {
     title: "Vey";
+    in-out property <string> account-api;
+    in-out property <string> account-email;
+    in-out property <string> account-password;
+    in-out property <string> account-name;
+    in-out property <string> account-status;
+    in-out property <string> account-verification-url;
+    in-out property <string> account-verification-page;
+    in-out property <string> account-user-code;
+    in-out property <image> account-qr;
+    in-out property <int> account-seconds-left;
+    in-out property <bool> account-signed-in;
+    in-out property <bool> account-manual;
+    in-out property <bool> account-premium;
+    in-out property <bool> account-busy;
+    in-out property <bool> account-auto-sync: true;
+    in-out property <bool> account-auto-upload;
+    in-out property <[string]> account-local-files;
+    in-out property <[string]> account-cloud-files;
+    in-out property <int> account-local-index;
+    in-out property <int> account-cloud-index;
+    callback account-command(string);
+
     init => { Palette.color-scheme = ColorScheme.dark; TouchStyle.mobile = root.mobile; }
     icon: @image-url("../assets/vey-logo-transparent.png");
     preferred-width: 1440px;
     preferred-height: 900px;
     min-width: 320px;
     min-height: root.mobile ? 240px : 560px;
-    background: Tokens.neutral-0;
+    background: root.navigation-capture ? transparent : Tokens.neutral-0;
     default-font-family: I18n.language == "ja" ? "Noto Sans JP" : "Roboto";
     default-font-size: 14px;
 
@@ -36,7 +62,7 @@ export component MainWindow inherits Window {
     // Route motion moves only page content; the background and player host stay fixed.
     out property <string> displayed-view: "home";
     // Every page has a fixed world position; one camera moves between them.
-    private property <int> page-phase: 1; // 1: settled, 2: travel, 3: prepare
+    private property <int> page-phase: 1; // 1: settled, 2: travel, 3: capture, 4: ready
     private property <float> camera-target-x: 0;
     private property <float> camera-target-y: 0;
     private property <float> camera-x: root.camera-target-x;
@@ -52,6 +78,17 @@ export component MainWindow inherits Window {
     out property <float> stage-height: content.height / 1px;
     out property <float> stage-x: content.x / 1px;
     out property <float> stage-y: content.y / 1px;
+    out property <float> stage-radius: root.mobile ? 20 : 28;
+    in-out property <bool> navigation-capture: false;
+    in-out property <bool> navigation-capture-target: false;
+    in-out property <bool> navigation-fx-ready: false;
+    in-out property <image> navigation-from-image;
+    in-out property <image> navigation-to-image;
+    callback capture-navigation();
+    private property <float> navigation-distance: max(abs(root.camera-end-x - root.camera-start-x), abs(root.camera-end-y - root.camera-start-y));
+    out property <float> navigation-progress: root.navigation-distance < 0.001 ? 1 : clamp(max(abs(root.camera-x - root.camera-start-x), abs(root.camera-y - root.camera-start-y)) / root.navigation-distance, 0, 1);
+    out property <float> navigation-pulse: root.camera-travelling && !root.lyrics-reduced-motion && !root.navigation-capture ? 4 * root.navigation-progress * (1 - root.navigation-progress) : 0;
+    private property <float> navigation-blend: root.navigation-blur && root.navigation-fx-ready ? root.navigation-pulse : 0;
     animate camera-x { duration: root.lyrics-reduced-motion || root.mobile-sheet ? 0ms : root.camera-duration * 1ms; easing: cubic-bezier(0.45, 0, 0.55, 1); }
     animate camera-y { duration: root.lyrics-reduced-motion || root.mobile-sheet ? 0ms : root.camera-duration * 1ms; easing: cubic-bezier(0.45, 0, 0.55, 1); }
     out property <float> player-motion-x: root.mobile ? 0 : (1 - root.camera-x) * content.width / 1px;
@@ -88,6 +125,15 @@ export component MainWindow inherits Window {
     function finish-travel() {
         root.displayed-view = root.active-view;
         root.page-phase = 1;
+    }
+    function prepare-travel() {
+        // Hold the current presentation during readback, including retargets.
+        root.camera-start-x = root.camera-x;
+        root.camera-start-y = root.camera-y;
+        root.camera-target-x = root.camera-start-x;
+        root.camera-target-y = root.camera-start-y;
+        root.capture-navigation();
+        root.page-phase = 4;
     }
     function start-travel() {
         root.camera-start-x = root.camera-x;
@@ -130,6 +176,12 @@ export component MainWindow inherits Window {
     Timer {
         interval: 16ms;
         running: root.page-phase == 3;
+        triggered => { root.prepare-travel(); }
+    }
+    Timer {
+        // Start on a fresh animation tick after offscreen capture has finished.
+        interval: 16ms;
+        running: root.page-phase == 4;
         triggered => { root.start-travel(); }
     }
     Timer {
@@ -150,7 +202,7 @@ export component MainWindow inherits Window {
     private property <int> settings-direction: 1;
     animate settings-progress { duration: Motion.panel; easing: cubic-bezier(0.45, 0, 0.55, 1); }
     pure function settings-name(section: string) -> string {
-        return section == "language" ? I18n.tr("Мова інтерфейсу") : section == "appearance" ? I18n.tr("Вигляд") : section == "audio" ? I18n.tr("Відтворення") : section == "library" ? I18n.tr("Бібліотека") : section == "data" ? I18n.tr("Дані та вхід") : I18n.tr("Налаштування");
+        return section == "account" ? I18n.tr("Акаунт Vey") : section == "language" ? I18n.tr("Мова інтерфейсу") : section == "appearance" ? I18n.tr("Вигляд") : section == "audio" ? I18n.tr("Відтворення") : section == "library" ? I18n.tr("Бібліотека") : section == "data" ? I18n.tr("Дані та вхід") : I18n.tr("Налаштування");
     }
     function commit-settings() {
         root.settings-section = root.settings-next;
@@ -236,6 +288,16 @@ export component MainWindow inherits Window {
     in-out property <bool> lyrics-word-timed: true;
     in-out property <string> lyrics-credits;
     in-out property <string> lyrics-document;
+    in-out property <bool> native-lyrics: false;
+    in-out property <[BraccatoRow]> native-lyric-lines;
+    in-out property <BraccatoInstrumental> native-instrumental;
+    in-out property <int> native-active-line: -1;
+    in-out property <float> native-scroll-position;
+    in-out property <float> native-passive-progress;
+    in-out property <bool> native-scroll-snap;
+    in-out property <float> native-content-y;
+    in-out property <float> native-content-height;
+    callback native-lyric-seek(int, int);
     in-out property <bool> lyrics-web-ready;
     in-out property <bool> lyrics-web-required;
     in-out property <string> lyrics-renderer-error;
@@ -261,13 +323,16 @@ export component MainWindow inherits Window {
     in-out property <bool> lyrics-passive-scroll: false;
     callback lyric-mode-changed(bool,bool,bool);
     in-out property <bool> lyrics-reduced-motion: false;
+    in-out property <bool> navigation-blur: true;
     in-out property <bool> lyrics-romanization: true;
     in-out property <bool> lyrics-translation: true;
     in-out property <string> lyrics-translation-language: "auto";
     in-out property <string> lyrics-enrichment-status;
     in-out property <bool> lyrics-user-scrolling: false;
     in-out property <float> lyrics-scroll-ratio: 0.37;
-    in-out property <int> lyrics-lookahead-ms: 540;
+    in-out property <int> lyrics-lookahead-ms: 0;
+    in-out property <int> lyrics-scroll-offset-ms: 0;
+    in-out property <int> lyrics-ending-threshold-ms: 0;
     in-out property <int> lyrics-scroll-duration-ms: 750;
     in-out property <float> lyrics-passive-seconds: 3.5;
     in-out property <bool> lyrics-disable-richsync: false;
@@ -286,10 +351,20 @@ export component MainWindow inherits Window {
     in-out property <[string]> providers;
     in-out property <int> provider-index;
     in-out property <string> lyrics-provider: "auto";
-    in-out property <float> lyric-size: 28;
+    in-out property <float> lyric-size: 48;
     in-out property <color> lyric-active: Tokens.ink-100;
     in-out property <color> lyric-inactive: Tokens.ink-300;
     in-out property <int> lyric-weight: 700;
+    in-out property <string> lyric-theme-source;
+    in-out property <string> lyric-theme-applied;
+    in-out property <string> lyric-font-family;
+    in-out property <string> lyric-style-status;
+    in-out property <LyricStyle> lyric-style: {family:"Satoshi",glow-color:#ffffff50,glow-radius:6,glow-duration:1200,
+        glow:true,swipe:true,wave:false,wobble:false,fade:true,inactive-blur:2,line-spacing:1.333,active-scale:1,inactive-scale:0.95,
+        swipe-duration:1.6,swipe-lead:0.1,wave-duration:900};
+    callback apply-lyric-style();
+    callback import-lyric-font();
+    in-out property <bool> lyric-font-import-supported: false;
     in-out property <string> lyrics-paste;
     in-out property <string> jwt-status: I18n.tr("Потрібна перевірка");
     in-out property <bool> sidebar-collapsed;
@@ -580,13 +655,14 @@ export component MainWindow inherits Window {
         y: root.safe-top * 1px + (root.immersive ? 8px : root.compact-height ? 52px : 64px);
         width: root.width - self.x - 8px - root.safe-right * 1px;
         height: root.immersive ? root.height - 16px - (root.safe-top + root.safe-bottom) * 1px : root.page-viewport-height;
-        border-radius: 0px;
+        border-radius: root.navigation-capture ? 0px : root.stage-radius * 1px;
         clip: true;
-        background: Tokens.neutral-0;
+        background: root.navigation-capture ? transparent : Tokens.neutral-0;
 
         // One persistent surface on every route. Window coordinates keep its
         // pattern fixed when the player expands or the sidebar changes width.
         ambient-surface := Rectangle {
+            visible: !root.navigation-capture;
             x: -content.x; y: -content.y;
             width: root.width; height: root.height;
             background: Tokens.neutral-0;
@@ -599,12 +675,12 @@ export component MainWindow inherits Window {
             property <string> route: page-name;
             property <[TrackRow]> page-tracks: self.route == "home" ? root.home-page-tracks : self.route == "explore" ? root.explore-page-tracks : self.route == "library" ? root.library-page-tracks : self.route == "liked" ? root.liked-page-tracks : self.route == "playlist" ? root.playlist-page-tracks : self.route == "queue" ? root.queue-page-tracks : self.route == "search" ? root.search-page-tracks : root.settings-page-tracks;
             property <bool> warming: !root.mobile-sheet && ((root.warm-page == index && root.page-phase == 1 && self.route != root.displayed-view) || (root.page-phase == 3 && self.route == root.active-view));
-            visible: !root.colors-changing || (!self.warming && abs(root.page-column(self.route) - root.camera-x) < 1 && abs(root.page-row(self.route) - root.camera-y) < 1) || (root.page-phase == 3 && self.route == root.active-view);
+            visible: root.navigation-capture && root.navigation-capture-target ? self.route == root.active-view : !root.colors-changing || (!self.warming && abs(root.page-column(self.route) - root.camera-x) < 1 && abs(root.page-row(self.route) - root.camera-y) < 1) || (root.page-phase == 3 && self.route == root.active-view);
             // A clipped edge strip warms the cached surface without covering
             // the active page's controls or intercepting its normal gestures.
-            x: self.warming ? content.width - 1px : (root.page-column(self.route) - root.camera-x) * content.width;
-            y: (root.mobile-sheet ? 56px : 0px) + (self.warming ? 0px : (root.page-row(self.route) - root.camera-y) * self.height);
-            opacity: self.warming ? 0.003922 : 1;
+            x: root.navigation-capture && root.navigation-capture-target ? 0px : self.warming ? content.width - 1px : (root.page-column(self.route) - root.camera-x) * content.width;
+            y: root.navigation-capture && root.navigation-capture-target ? 0px : (root.mobile-sheet ? 56px : 0px) + (self.warming ? 0px : (root.page-row(self.route) - root.camera-y) * self.height);
+            opacity: root.navigation-capture && root.navigation-capture-target ? 1 : self.warming ? 0.003922 : 1 - root.navigation-blend;
             clip: true;
             width: 100%; height: root.mobile ? root.page-viewport-height : content.height;
             cache-rendering-hint: true;
@@ -764,11 +840,76 @@ export component MainWindow inherits Window {
                         x: (1 - root.settings-progress) * root.settings-direction * 16px;
                         width: parent.width; height: self.preferred-height;
                         spacing: 14px; padding-bottom: 20px;
+                        if root.settings-section == "account": VerticalLayout {
+                            spacing: 12px;
+                            Text { text: root.account-signed-in ? (root.account-premium ? "Premium · developer / tester" : I18n.tr("Базовий акаунт")) + " · " + root.account-email : I18n.tr("Увійдіть, щоб зберігати бібліотеку та налаштування між пристроями."); wrap: word-wrap; color: Tokens.ink-100; font-size: 15px; }
+                            if !root.account-signed-in: VerticalLayout {
+                                spacing: 10px;
+                                if root.account-verification-url == "": Action { text: I18n.tr("Продовжити з Vey"); comfortable: true; wide: true; primary: true; enabled: !root.account-busy; clicked => { root.account-command("device"); } }
+                                if root.account-verification-url == "": Action { text: I18n.tr("Увійти через QR-код"); comfortable: true; wide: true; enabled: !root.account-busy; clicked => { root.account-command("qr"); } }
+                                if root.account-verification-url == "": Action { text: I18n.tr("Email або інший сервер"); comfortable: true; wide: true; enabled: !root.account-busy; clicked => { root.account-manual = !root.account-manual; } }
+                                if root.account-manual && root.account-verification-url == "": VerticalLayout {
+                                    spacing: 10px;
+                                Text { text: I18n.tr("Адреса API Vey"); color: Tokens.ink-200; }
+                                LineEdit { height: 44px; text <=> root.account-api; placeholder-text: "https://your-api.example"; enabled: !root.account-busy; }
+                                LineEdit { height: 44px; text <=> root.account-name; placeholder-text: I18n.tr("Ім’я для нового акаунта"); enabled: !root.account-busy; }
+                                LineEdit { height: 44px; text <=> root.account-email; placeholder-text: "Email"; enabled: !root.account-busy; }
+                                LineEdit { height: 44px; text <=> root.account-password; placeholder-text: I18n.tr("Пароль Vey"); input-type: password; enabled: !root.account-busy; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Action { text: I18n.tr("Увійти"); primary: true; comfortable: true; wide: true; enabled: !root.account-busy; clicked => { root.account-command("login"); } }
+                                    Action { text: I18n.tr("Створити акаунт"); comfortable: true; wide: true; enabled: !root.account-busy; clicked => { root.account-command("register"); } }
+                                }
+                                }
+                                if root.account-verification-url != "": VerticalLayout {
+                                    spacing: 10px;
+                                    Text { text: I18n.tr("Скануй QR-код камерою телефона"); color: Tokens.ink-100; wrap: word-wrap; }
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: root.height < 720px ? 184px : 216px; height: self.width;
+                                            background: #ffffff; border-radius: 12px;
+                                            Image { x: 8px; y: 8px; width: parent.width - 16px; height: parent.height - 16px; source: root.account-qr; image-fit: contain; }
+                                        }
+                                    }
+                                    Text { text: root.account-user-code; color: Tokens.ink-100; font-size: 25px; font-weight: 700; horizontal-alignment: center; }
+                                    Text { text: I18n.tr("Код діє ще") + " " + root.account-seconds-left + " " + I18n.tr("сек"); color: Tokens.ink-300; font-size: 12px; horizontal-alignment: center; }
+                                    Text { text: I18n.tr("Або відкрий посилання та введи код:") + " " + root.account-verification-page; color: Tokens.ink-200; font-size: 12px; wrap: word-wrap; }
+
+                                    Action { text: I18n.tr("Відкрити сторінку входу"); comfortable: true; wide: true; primary: true; clicked => { root.account-command("website"); } }
+                                    Action { text: I18n.tr("Скасувати вхід"); comfortable: true; wide: true; clicked => { root.account-command("cancel-login"); } }
+                                }
+                            }
+                            if root.account-status != "": Text { text: root.account-status; wrap: word-wrap; color: Tokens.ink-200; font-size: 13px; }
+                            if root.account-signed-in: VerticalLayout {
+                                spacing: 10px;
+                                Text { text: I18n.tr("Синхронізуються посилання на відео, улюблене, історія, списки та налаштування. Файли пристрою залишаються локальними."); color: Tokens.ink-200; wrap: word-wrap; font-size: 13px; }
+                                Action { text: I18n.tr("Зберегти дані цього пристрою у хмарі"); comfortable: true; wide: true; primary: true; enabled: !root.account-busy; clicked => { root.account-command("push"); } }
+                                Action { text: I18n.tr("Відновити дані з хмари на цьому пристрої"); comfortable: true; wide: true; enabled: !root.account-busy; clicked => { root.account-command("pull"); } }
+                                Action { text: I18n.tr("Автоматична синхронізація"); comfortable: true; wide: true; selected: root.account-auto-sync; clicked => { root.account-auto-sync = !root.account-auto-sync; } }
+                                Action { text: I18n.tr("Оновити доступ акаунта"); comfortable: true; wide: true; enabled: !root.account-busy; clicked => { root.account-command("refresh"); } }
+                                if !root.account-premium: Text { text: I18n.tr("Premium для завантаження власного аудіо зараз видається лише розробникам і тестувальникам. Купівля недоступна."); color: Tokens.ink-300; wrap: word-wrap; font-size: 13px; }
+                                if root.account-premium: VerticalLayout {
+                                    spacing: 10px;
+                                    Text { text: I18n.tr("Власне аудіо · приватне сховище"); color: Tokens.ink-100; font-weight: 600; }
+                                    ComboBox { model: root.account-local-files; current-index <=> root.account-local-index; enabled: !root.account-busy; }
+                                    Action { text: I18n.tr("Завантажити вибрану пісню у хмару"); comfortable: true; wide: true; enabled: !root.account-busy; clicked => { root.account-command("upload"); } }
+                                    Action { text: I18n.tr("Автоматично завантажувати локальні пісні"); comfortable: true; wide: true; selected: root.account-auto-upload; clicked => { root.account-auto-upload = !root.account-auto-upload; } }
+                                    Text { text: I18n.tr("Автоматичне завантаження працює для пісень із вашої бібліотеки, поки Vey відкритий."); color: Tokens.ink-300; wrap: word-wrap; font-size: 12px; }
+                                }
+                                Action { text: I18n.tr("Оновити список хмарних файлів"); comfortable: true; wide: true; enabled: !root.account-busy; clicked => { root.account-command("files"); } }
+                                if root.account-cloud-files.length > 0: ComboBox { model: root.account-cloud-files; current-index <=> root.account-cloud-index; enabled: !root.account-busy; }
+                                if root.account-cloud-files.length > 0: Action { text: I18n.tr("Завантажити пісню на пристрій"); comfortable: true; wide: true; enabled: !root.account-busy; clicked => { root.account-command("download"); } }
+                                if root.account-busy: Action { text: I18n.tr("Скасувати завантаження"); comfortable: true; wide: true; clicked => { root.account-command("cancel"); } }
+                                Action { text: I18n.tr("Вийти з акаунта"); comfortable: true; wide: true; enabled: !root.account-busy; clicked => { root.account-command("logout"); } }
+                            }
+                        }
                         if root.settings-section == "": SettingsTile { text: I18n.tr("Відтворення"); detail: I18n.tr("Гучність звуку"); icon: @image-url("../assets/icons/Volume2.svg"); clicked => { root.open-settings("audio"); } }
                         if root.settings-section == "": SettingsTile { text: I18n.tr("Бібліотека"); detail: I18n.tr("Файли та джерела музики"); icon: @image-url("../assets/icons/Library.svg"); clicked => { root.open-settings("library"); } }
                         if root.settings-section == "": SettingsTile { text: I18n.tr("Дані та вхід"); detail: I18n.tr("Резервні копії та підключення"); icon: @image-url("../assets/icons/Settings.svg"); clicked => { root.open-settings("data"); } }
                         if root.settings-section == "": SettingsTile { text: I18n.tr("Вигляд"); detail: I18n.tr("Кольори та плавні переходи"); icon: @image-url("../assets/icons/Settings.svg"); clicked => { root.open-settings("appearance"); } }
                         if root.settings-section == "": SettingsTile { text: I18n.tr("Мова"); detail: I18n.tr("Мова інтерфейсу"); icon: @image-url("../assets/icons/Settings.svg"); clicked => { root.open-settings("language"); } }
+                        if root.settings-section == "": SettingsTile { text: I18n.tr("Акаунт Vey"); detail: root.account-signed-in ? root.account-email : I18n.tr("Улюблене, історія та налаштування у хмарі"); icon: @image-url("../assets/icons/Library.svg"); clicked => { root.open-settings("account"); } }
                         if root.settings-section == "language": VerticalLayout {
                             spacing: 8px;
                             for locale[index] in ["Українська", "English", "Čeština", "Polski", "Deutsch", "Español", "Français", "日本語"]:
@@ -799,13 +940,16 @@ export component MainWindow inherits Window {
                                         accessible-action-default => { root.color-hue = hue; root.appearance-changed(root.color-mode, hue); }
                                     }
                                 }
-                                Action { text: I18n.tr("Менше руху"); comfortable: true; wide: true; selected: root.lyrics-reduced-motion; outlined: true; clicked => { root.lyrics-reduced-motion = !root.lyrics-reduced-motion; root.lyric-mode-changed(root.lyrics-stage, root.lyrics-reduced-motion, root.lyrics-passive-scroll); } }
                             }
                         }
                         if root.settings-section == "appearance": Rectangle {
                             background: transparent; border-radius: 0px;
                             VerticalLayout {
                                 padding: root.mobile ? 16px : 24px; spacing: 12px;
+                                Text { text: I18n.tr("Рух інтерфейсу"); color: Tokens.ink-100; font-size: 18px; font-weight: 600; }
+                                Action { text: I18n.tr("Розмиття під час переходів"); comfortable: true; wide: true; outlined: true; selected: root.navigation-blur; clicked => { root.navigation-blur = !root.navigation-blur; root.preferences-changed(); } }
+                                Action { text: I18n.tr("Вимкнути всі анімації"); comfortable: true; wide: true; outlined: true; selected: root.lyrics-reduced-motion; clicked => { root.lyrics-reduced-motion = !root.lyrics-reduced-motion; root.lyric-mode-changed(root.lyrics-stage, root.lyrics-reduced-motion, root.lyrics-passive-scroll); } }
+                                Text { text: I18n.tr("Вимикає рух сторінок, панелей і тексту."); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
                                 HorizontalLayout {
                                     spacing: 16px;
                                     Text { text: I18n.tr("Позначка локального файлу"); color: Tokens.ink-100; font-size: 18px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; wrap: word-wrap; }
@@ -1015,13 +1159,16 @@ export component MainWindow inherits Window {
         // =========================================================================
         player-stage := Rectangle {
             property <bool> warming: root.warm-page == 8 && root.page-phase == 1 && !root.player-on-stage;
-            visible: root.player-on-stage || (self.warming && !root.colors-changing);
-            x: self.warming ? content.width - 1px : root.player-motion-x * 1px; y: self.warming ? 0px : root.player-motion-y * 1px; width: 100%; height: 100%;
-            opacity: self.warming ? 0.003922 : root.player-reveal;
+            visible: root.navigation-capture && root.navigation-capture-target ? root.active-view == "lyrics" : root.player-on-stage || (self.warming && !root.colors-changing);
+            x: root.navigation-capture && root.navigation-capture-target ? 0px : self.warming ? content.width - 1px : root.player-motion-x * 1px;
+            y: root.navigation-capture && root.navigation-capture-target ? 0px : self.warming ? 0px : root.player-motion-y * 1px; width: 100%; height: 100%;
+            opacity: root.navigation-capture && root.navigation-capture-target ? 1 : self.warming ? 0.003922 : root.player-reveal * (1 - root.navigation-blend);
             cache-rendering-hint: true;
-            background: root.mobile ? Tokens.neutral-50 : transparent;
+            background: root.mobile && !root.navigation-capture ? Tokens.neutral-50 : transparent;
             border-radius: root.mobile ? 28px : 0px;
+            clip: true;
             if root.mobile: Rectangle {
+                visible: !root.navigation-capture;
                 width: 100%; height: 100%; border-radius: 28px; clip: true;
                 Image { source: root.ambient-frame; width: 100%; height: 100%; image-fit: fill; opacity: root.ambient-opacity; }
             }
@@ -1417,7 +1564,7 @@ export component MainWindow inherits Window {
                     }
 
                     // Active Tab: Synchronized Karaoke / Line-by-Line Lyrics Stage
-                    if root.player-tab == "lyrics" && root.lyric-lines.length > 0: BraccatoLyrics {
+                    if root.player-tab == "lyrics" && root.lyric-lines.length > 0 && !root.native-lyrics: BraccatoLyrics {
                         vertical-stretch: 1;
                         lyric-lines: root.lyric-lines;
                         external-view: root.lyrics-web-required || root.lyrics-web-ready;
@@ -1455,6 +1602,37 @@ export component MainWindow inherits Window {
                         user-scroll => { root.lyric-user-scroll(); }
                         resume => { root.lyric-resume(); }
                         seek-to(position) => { root.seek-to(position); }
+                    }
+
+                    if root.player-tab == "lyrics" && root.lyric-lines.length > 0 && root.native-lyrics: NativeLyrics {
+                        vertical-stretch: 1;
+                        lines: root.native-lyric-lines;
+                        instrumental-frames: root.native-instrumental;
+                        active-line: root.native-active-line;
+                        scroll-position: root.native-scroll-position;
+                        passive-progress: root.native-passive-progress;
+                        time-ms: root.lyrics-position;
+                        timed: root.lyrics-timed;
+                        paused: root.player-state != "playing";
+                        stage: root.lyrics-stage && root.lyrics-timed;
+                        passive: root.lyrics-passive-scroll;
+                        reduced: root.lyrics-reduced-motion;
+                        manual: root.lyrics-user-scrolling;
+                        richsync: !root.lyrics-disable-richsync;
+                        size: root.mobile && root.lyric-size == 48 ? 32 : clamp(root.lyric-size,12,72);
+                        active-color: root.lyric-active;
+                        inactive-color: root.lyric-inactive;
+                        weight: root.lyric-weight;
+                        style: root.lyric-style;
+                        scroll-duration: root.lyrics-scroll-duration-ms;
+                        scroll-snap: root.native-scroll-snap;
+                        scroll-ratio: root.lyrics-scroll-ratio;
+                        credits: root.lyrics-credits;
+                        geometry(width,height) => {root.lyrics-widget-width=width;root.lyrics-viewport-height=height;}
+                        viewport(y,extent) => {root.native-content-y=y;root.native-content-height=extent;}
+                        seek(line,part) => {root.native-lyric-seek(line,part);}
+                        user-scroll => {root.lyric-user-scroll();}
+                        resume => {root.lyric-resume();}
                     }
 
                     // Compact Mobile Now-Playing Header + Transport Card
@@ -1556,6 +1734,29 @@ export component MainWindow inherits Window {
         }
         }
 
+        // Only the page textures fade through blur. The ambient canvas stays fixed.
+        if root.navigation-blend > 0.001: Rectangle {
+            width: 100%; height: 100%; opacity: root.navigation-blend;
+            Image {
+                source: root.navigation-from-image; image-fit: fill;
+                width: 100%; height: 100%;
+                x: (root.camera-start-x - root.camera-x) * content.width;
+                y: (root.camera-start-y - root.camera-y) * content.height;
+            }
+            Image {
+                source: root.navigation-to-image; image-fit: fill;
+                width: 100%; height: 100%;
+                x: (root.camera-end-x - root.camera-x) * content.width;
+                y: (root.camera-end-y - root.camera-y) * content.height;
+            }
+        }
+        if root.navigation-pulse > 0.001: NavigationStreaks {
+            width: 100%; height: 100%;
+            direction-x: root.camera-end-x - root.camera-start-x;
+            direction-y: root.camera-end-y - root.camera-start-y;
+            progress: root.navigation-progress; strength: root.navigation-pulse;
+        }
+
         // Independent overlay: opening tools never changes player geometry.
         tools-panel := Rectangle {
             visible: (root.player-tools || root.tools-progress > 0.001) && root.displayed-view == "lyrics" && root.dialog == "";
@@ -1590,6 +1791,7 @@ export component MainWindow inherits Window {
                 }
                 LyricsSettings {
                     embedded: true;
+                    appearance => {root.player-tools=false;root.dialog="lyric-style";}
                     provider <=> root.lyrics-provider;
                     romanization <=> root.lyrics-romanization;
                     translation <=> root.lyrics-translation;
@@ -1743,7 +1945,7 @@ export component MainWindow inherits Window {
         TouchArea { clicked => { root.dialog = ""; } }
         Rectangle {
             width: min(root.width - (root.safe-left + root.safe-right) * 1px - 32px, 520px);
-            height: min(root.dialog-bottom - root.safe-top * 1px - 32px, root.dialog == "paste" || root.dialog == "add" ? 440px : root.dialog == "match" ? 360px : 210px);
+            height: min(root.dialog-bottom - root.safe-top * 1px - 32px, root.dialog == "lyric-style" ? 640px : root.dialog == "paste" || root.dialog == "add" ? 440px : root.dialog == "match" ? 360px : 210px);
             x: root.safe-left * 1px + (root.width - (root.safe-left + root.safe-right) * 1px - self.width) / 2;
             y: root.safe-top * 1px + (root.dialog-bottom - root.safe-top * 1px - self.height) / 2;
             background: Tokens.neutral-100;
@@ -1758,7 +1960,7 @@ export component MainWindow inherits Window {
             dialog-layout := VerticalLayout {
                 padding: root.mobile ? 16px : 24px; spacing: root.mobile ? 12px : 16px;
                 Text {
-                    text: root.dialog == "auth" ? I18n.tr("Доступ до слів пісень") : root.dialog == "paste" ? I18n.tr("Вставити слова пісні") :
+                    text: root.dialog == "lyric-style" ? I18n.tr("Вигляд слів") : root.dialog == "auth" ? I18n.tr("Доступ до слів пісень") : root.dialog == "paste" ? I18n.tr("Вставити слова пісні") :
                           root.dialog == "add" ? I18n.tr("Додати до списку") :
                           root.dialog == "source" ? I18n.tr("Шлях до папки або файлу") :
                           root.dialog == "match" ? I18n.tr("Перевірте збіг YouTube Music") : I18n.tr("Новий список відтворення");
@@ -1766,6 +1968,24 @@ export component MainWindow inherits Window {
                     font-size: root.mobile ? 18px : 20px;
                     wrap: word-wrap;
                     font-weight: 700;
+                }
+                if root.dialog == "lyric-style": VerticalLayout {
+                    spacing: 10px;
+                    Text {text:I18n.tr("Шрифт слів");color:Tokens.ink-300;}
+                    LineEdit {height:44px;text <=> root.lyric-font-family;placeholder-text:"Satoshi";}
+                    if root.lyric-font-import-supported: Action {text:I18n.tr("Імпортувати шрифт…");comfortable:true;wide:true;outlined:true;clicked=>{root.import-lyric-font();}}
+                    ComboBox {height:44px;model:["Braccato",I18n.tr("М’яке сяйво"),I18n.tr("Чіткий текст"),I18n.tr("Власна тема")];
+                        current-index: root.lyric-theme-source == "" ? 0 : 3;
+                        selected(value)=>{
+                        if self.current-index < 3 {
+                        root.lyric-theme-source=self.current-index == 1 ? ":root { --blyrics-glow-color:#ffffff40; --blyrics-highlight-glow-radius-from:8px; --blyrics-highlight-glow-min-duration:1.5s; }"
+                            : self.current-index == 2 ? ":root { --blyrics-animate-highlight-glow:0; --blyrics-animate-word-wobble:0; --blyrics-animate-letter-wave:0; }" : "";
+                        }
+                    }}
+                    Text {text:I18n.tr("Власна тема CSS / RICS");color:Tokens.ink-300;}
+                    TextEdit {min-height:190px;vertical-stretch:1;text <=> root.lyric-theme-source;}
+                    if root.lyric-style-status != "": Text {text:root.lyric-style-status;color:Tokens.ink-300;wrap:word-wrap;}
+                    Action {text:I18n.tr("Застосувати");comfortable:true;primary:true;wide:true;clicked=>{root.apply-lyric-style();}}
                 }
                 if root.dialog == "create" || root.dialog == "source": LineEdit {
                     text <=> root.new-name;
@@ -1831,7 +2051,7 @@ export component MainWindow inherits Window {
                     spacing: 10px;
                     Rectangle { horizontal-stretch: 1; }
                     Action { comfortable: root.mobile; text: I18n.tr("Скасувати"); outlined: true; clicked => { root.dialog = ""; } }
-                    if root.dialog != "add": Action {
+                    if root.dialog != "add" && root.dialog != "lyric-style": Action {
                         text: I18n.tr("Зберегти");
                         comfortable: root.mobile;
                         primary: true;

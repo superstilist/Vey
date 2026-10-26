@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-26",
+  "environment": "Windows native Slint, development build",
+  "workload": {
+    "logical_size": [
+      1440,
+      900
+    ],
+    "source_lines": 300,
+    "words": 2400,
+    "samples": 80,
+    "glow_radius_px": 8,
+    "glow_alpha": 0.5,
+    "wave": false,
+    "wobble": false,
+    "snapshot_every_n_callbacks": 4
+  },
+  "before": {
+    "lines": 300,
+    "samples": 80,
+    "snapshot_p50_ms": 85.8936,
+    "snapshot_p95_ms": 120.76960000000001,
+    "tick_p50_ms": 91.94829999999854,
+    "tick_p95_ms": 678.8891000000028,
+    "word_reads": 4035,
+    "words": 2400
+  },
+  "after": {
+    "lines": 300,
+    "samples": 80,
+    "snapshot_p50_ms": 74.1126,
+    "snapshot_p95_ms": 86.6284,
+    "tick_p50_ms": 18.88199999999962,
+    "tick_p95_ms": 91.1679999999997,
+    "word_reads": 3444,
+    "words": 2400
+  },
+  "limits": "Synthetic playback sequence and synchronous snapshot readback; timer intervals include capture cost. Not a playback FPS measurement."
+}

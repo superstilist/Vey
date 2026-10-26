@@ -18,6 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     extern "system" {
         fn GetFocus() -> *mut c_void;
         fn GetWindow(window: *mut c_void, command: u32) -> *mut c_void;
+        fn IsWindow(window: *mut c_void) -> i32;
         fn SetFocus(window: *mut c_void) -> *mut c_void;
         fn PostMessageW(window: *mut c_void, message: u32, wparam: usize, lparam: isize) -> i32;
     }
@@ -76,6 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = phase.clone();
     let started = Instant::now();
     let cycles = Cell::new(0);
+    let video_child = Cell::new(std::ptr::null_mut());
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
@@ -115,6 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     unsafe {
                         let child = GetWindow(hwnd, 5);
                         assert!(!child.is_null(), "real WebView child must exist");
+                        video_child.set(child);
                         SetFocus(child);
                         assert_ne!(GetFocus(), hwnd, "fixture must first focus the WebView");
                     }
@@ -147,6 +150,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     phase.set(5);
                 }
                 5 => {
+                    assert_eq!(
+                        unsafe { IsWindow(video_child.get()) },
+                        0,
+                        "cover mode must destroy the unused video WebView"
+                    );
                     assert_eq!(
                         unsafe { GetFocus() },
                         hwnd,

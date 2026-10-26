@@ -1,0 +1,26 @@
+import { Tokens } from "tokens.slint";
+
+// Sparse anime-style speed lines follow the camera vector, with no input area.
+export component NavigationStreaks inherits Rectangle {
+    in property <float> direction-x;
+    in property <float> direction-y;
+    in property <float> progress;
+    in property <float> strength;
+    private property <float> distance: max(0.001, max(abs(root.direction-x), abs(root.direction-y)));
+    private property <float> dx: root.direction-x / root.distance;
+    private property <float> dy: root.direction-y / root.distance;
+    for index in 14: Path {
+        property <float> travel: (root.progress - 0.5) * 130;
+        property <float> start-x: mod(index * 137 + 13, 100) / 100 * root.width / 1px - root.dx * self.travel;
+        property <float> start-y: mod(index * 47 + 9, 100) / 100 * root.height / 1px - root.dy * self.travel;
+        property <float> span: 30 + mod(index * 19, 90);
+        width: 100%; height: 100%;
+        viewbox-width: root.width / 1px;
+        viewbox-height: root.height / 1px;
+        stroke: Tokens.ink-200;
+        stroke-width: index < 4 ? 1.5px : 1px;
+        opacity: root.strength * (index < 4 ? 0.23 : 0.12);
+        MoveTo { x: parent.start-x; y: parent.start-y; }
+        LineTo { x: parent.start-x - root.dx * parent.span; y: parent.start-y - root.dy * parent.span; }
+    }
+}

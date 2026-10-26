@@ -20,9 +20,21 @@ Settings → Вигляд. Palettes fade over one second rather than jumping; si
 hues support static accents. Reduced motion applies changes immediately. See
 [appearance behavior](APPEARANCE.md) for mode boundaries and animation details.
 
-The native lyric backdrop receives the same surface color as Slint and uses
-the same 28% ambient texture. Bright covers are dimmed without adding a color tint.
-The camera and mounted pages remain intact.
+Native lyrics use the Rust Braccato Slint component, directly composited over
+the shared artwork texture. There is no child lyric WebView or duplicated
+backdrop crop. Browser lyrics retain the upstream iframe. See NATIVE-BRACCATO.md.
+Native lyrics follow Braccato's Satoshi/Noto typography and use a sharp active
+line with cached, progressively blurred neighboring lines. Glyph masks are
+rasterized off the UI thread; source timestamps and word/syllable boundaries
+remain unchanged. The shared artwork-derived background stays visible.
+Normal native lyrics use a single shaped gradient fill and a restrained 6px glow
+at 31% opacity. A gentle sweep wave and scroll with soft acceleration/deceleration provide flowing motion;
+reduced motion disables both. Custom themes may request stronger effects.
+Letter waves/wobble remain available through custom themes. Only nearby visible
+rows construct word surfaces. A short complementary crossfade between aligned
+sharp ink and cached blur softens focus changes; each settled row keeps only one
+paint body. Highlight fades use a smooth curve with flat endpoints. See
+NATIVE-BRACCATO.md for measured fixture evidence.
 Tonal sliders retain the standard widget's pointer, keyboard and accessibility
 behavior beneath their custom appearance. Standard form controls use dark mode.
 
@@ -56,7 +68,7 @@ overscanned crop that fills portrait and landscape corners. The same bounded
 256x144 texture is reused; no artwork decoding or blur is performed per frame.
 Pause freezes motion; reduced motion applies a stable unrotated frame. Warp
 intensity zero also disables rotation. Android/Linux use bilinear sampling of
-the prepared native texture; browser/Windows retain the real Kawarp renderer.
+the prepared native texture; the browser retains the real Kawarp renderer.
 
 Mobile shared actions default to 44 px touch targets, including the dock's
 transport and next control. Filter rows accommodate the same button height.

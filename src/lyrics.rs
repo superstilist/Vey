@@ -207,6 +207,15 @@ fn background_timing_line(line: &LyricLine) -> LyricLine {
 
 pub fn line_has_background_part_timing(line: &LyricLine) -> bool {
     line_has_part_level_timing(&background_timing_line(line))
+        // A supplied backing interval is a real cue even when it contains a
+        // whole phrase or starts with the lead. Keep it as one cue; no per-word
+        // timestamps are inferred from that interval.
+        || line.parts.iter().any(|part| {
+            part.is_background
+                && part.start_time_explicit
+                && part.duration_ms > 0
+                && !part.text.trim().is_empty()
+        })
 }
 
 pub fn has_syllable_level_timing(lyrics: &ParsedLyrics) -> bool {

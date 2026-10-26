@@ -28,6 +28,7 @@
   },
   "devDependencies": {
     "esbuild": "0.25.12",
+    "jsqr": "^1.4.0",
     "playwright": "1.63.0"
   }
 }

@@ -133,6 +133,8 @@ pub fn schedule<T>(w: &MainWindow, _: T) {
         .collect(),
     ));
     w.set_active_lyric_index(1);
+    w.set_lyrics_timed(true);
+    w.set_lyrics_word_timed(true);
     w.set_providers(model(vec![
         "Musixmatch · word".into(),
         "LRCLib · synced".into(),

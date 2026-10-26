@@ -15,7 +15,7 @@ evidence; **documentation** = inconsistent descriptions. Suggested priorities in
 | I-05 | Source-confirmed browser gap | Selected local files lack real tag/artwork extraction; title is filename, artist unknown, album/artwork empty. | `web/bridge.js` file picker; `docs/PARITY.md` |
 | I-06 | Browser session limitation | Local object URLs do not survive reload; files need reselection even when likes/playlists persist. | `web/bridge.js`; `README.md` |
 | I-07 | Reported feature backlog | Public detail pages, continuation UX, download progress/cancellation, original shortcuts/context menus and exhaustive settings parity unfinished. | `docs/PARITY.md`; audit callbacks in `src/app.rs` and `src/web.rs` before implementation |
-| I-08 | Intentional renderer difference | Linux/Android fallback cannot execute every browser CSS/RICS/Web Animations effect. Full visual parity cannot be claimed. | `src/braccato/README.md`, `src/themes.rs`, `ui/braccato-lyrics.slint` |
+| I-08 | Native Rust renderer; platform acceptance separate | Native targets use the copied Rust Braccato Slint component (sweep/glow/waves/stage). Arbitrary browser CSS/RICS/DOM extensions remain browser-only; exact visual parity and device behavior require separate checks. | `docs/NATIVE-BRACCATO.md`, `third-party/BRACCATO-RUST-UPSTREAM.md` |
 | I-09 | Reported compatibility gap | Some provider translation/romanization dialects and old preferences have no complete native/UI equivalent. | `docs/PARITY.md`; `src/lyrics.rs`, `src/braccato/ttml.rs`, `src/services.rs` |
 | I-10 | Unverified Android runtime | APK signing/alignment/manifest and compile/link checks do not prove startup, audio, storage, browser intents, lifecycle or phone usability. | `docs/ANDROID-BUILD.md`; no device acceptance recorded |
 | I-11 | Unverified Linux runtime | Prior local WSL failed because its disk was missing; local runtime and current CI execution are not established. | `docs/PARITY.md`, `.github/workflows/rust.yml` |
@@ -25,6 +25,13 @@ evidence; **documentation** = inconsistent descriptions. Suggested priorities in
 ## Already addressed: retain regression coverage
 
 These are historical fixes, not newly discovered open bugs:
+
+- 2026-10-25 native autoscroll: real wheel/drag input replaced the Flickable's
+  initial content-y binding, so enabling follow did not restore its position.
+  An observed target explicitly restores it on cue/resume changes. Native follow
+  now indexes real word cues within wrapped lines; the actual-wheel fixture is
+  `examples/native_autoscroll.rs`. See `docs/NATIVE-BRACCATO.md` for checks and
+  the measured elimination of repeated source-model scans.
 
 - 2026-10-22 search input: native Windows WebView-to-shell clicks left Win32
   keyboard focus in the child. Pointer focus handoff and hidden-child release

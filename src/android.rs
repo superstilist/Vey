@@ -87,6 +87,43 @@ pub fn bridge_call(method: &str, payload: &str) -> Result<(), String> {
     }));
     Ok(())
 }
+/// Launch an external browser with the Activity's identity, rather than a shell process.
+pub fn open_url(url: &str) -> Result<(), String> {
+    let current = app()?;
+    let activity = current.clone();
+    let url = url.to_owned();
+    current.run_on_java_main_thread(Box::new(move || {
+        let result = with_activity(&activity, |env, activity| {
+            let url = env.new_string(url)?;
+            let uri = env
+                .call_static_method(
+                    "android/net/Uri",
+                    "parse",
+                    "(Ljava/lang/String;)Landroid/net/Uri;",
+                    &[JValue::Object(&url)],
+                )?
+                .l()?;
+            let action = env.new_string("android.intent.action.VIEW")?;
+            let intent = env.new_object(
+                "android/content/Intent",
+                "(Ljava/lang/String;Landroid/net/Uri;)V",
+                &[JValue::Object(&action), JValue::Object(&uri)],
+            )?;
+            env.call_method(
+                activity,
+                "startActivity",
+                "(Landroid/content/Intent;)V",
+                &[JValue::Object(&intent)],
+            )?;
+            Ok(())
+        });
+        if result.is_err() {
+            eprintln!("Android browser could not open");
+        }
+    }));
+    Ok(())
+}
+
 pub fn bridge_poll() -> Result<String, String> {
     with_activity(&app()?, |env, activity| {
         let class = bridge_class(env, activity)?;

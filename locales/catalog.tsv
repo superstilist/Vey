@@ -64,6 +64,10 @@ Vey · Головна	Vey · Home	Vey · Domů	Vey · Strona główna	Vey · Sta
 Фіолетовий	Purple	Fialová	Fioletowy	Violett	Morado	Violet	紫
 Рожевий	Pink	Růžová	Różowy	Rosa	Rosa	Rose	ピンク
 Менше руху	Reduced motion	Omezit pohyb	Ograniczony ruch	Weniger Bewegung	Reducir movimiento	Réduire les animations	動きを減らす
+Рух інтерфейсу	Interface motion	Pohyb rozhraní	Ruch interfejsu	Bewegung der Oberfläche	Movimiento de la interfaz	Mouvement de l’interface	インターフェースの動き
+Розмиття під час переходів	Blur during transitions	Rozostření při přechodech	Rozmycie podczas przejść	Unschärfe bei Übergängen	Desenfoque en las transiciones	Flou pendant les transitions	画面遷移時にぼかす
+Вимкнути всі анімації	Disable all animations	Vypnout všechny animace	Wyłącz wszystkie animacje	Alle Animationen ausschalten	Desactivar todas las animaciones	Désactiver toutes les animations	すべてのアニメーションを無効化
+Вимикає рух сторінок, панелей і тексту.	Disables motion for pages, panels, and text.	Vypne pohyb stránek, panelů a textu.	Wyłącza ruch stron, paneli i tekstu.	Deaktiviert Bewegungen von Seiten, Bereichen und Text.	Desactiva el movimiento de páginas, paneles y texto.	Désactive le mouvement des pages, des panneaux et du texte.	ページ、パネル、テキストの動きを無効にします。
 Гучність	Volume	Hlasitost	Głośność	Lautstärke	Volumen	Volume	音量
 Джерела музики	Music sources	Zdroje hudby	Źródła muzyki	Musikquellen	Fuentes de música	Sources musicales	音楽ソース
 Додайте файли або вкажіть папку з музикою.	Add files or choose a music folder.	Přidejte soubory nebo vyberte složku s hudbou.	Dodaj pliki lub wybierz folder z muzyką.	Dateien hinzufügen oder Musikordner wählen.	Añade archivos o elige una carpeta de música.	Ajoutez des fichiers ou un dossier de musique.	ファイルまたは音楽フォルダーを追加してください。
@@ -266,3 +270,12 @@ JWT прострочено	Lyrics token expired	Platnost tokenu vypršela	Token 
 Романізуємо слова…	Romanizing lyrics…	Přepisování textu latinkou…	Transkrypcja tekstu na łacinę…	Songtext wird romanisiert…	Romanizando la letra…	Romanisation des paroles…	歌詞をローマ字に変換中…
 Романізація недоступна. Спробуйте оновити слова.	Romanization unavailable. Try refreshing lyrics.	Přepis není dostupný. Zkuste obnovit text.	Transkrypcja niedostępna. Spróbuj odświeżyć tekst.	Umschrift nicht verfügbar. Aktualisiere den Songtext.	Romanización no disponible. Prueba a actualizar la letra.	Romanisation indisponible. Actualisez les paroles.	ローマ字に変換できません。歌詞を更新してください。
 Автоматична романізація: Unison / Google	Automatic romanization: Unison / Google	Automatický přepis: Unison / Google	Automatyczna transkrypcja: Unison / Google	Automatische Umschrift: Unison / Google	Romanización automática: Unison / Google	Romanisation automatique : Unison / Google	自動ローマ字変換：Unison / Google
+
+Вигляд слів	Lyrics appearance	Vzhled textu	Wygląd tekstu	Liedtextdarstellung	Aspecto de la letra	Apparence des paroles	歌詞の外観
+Шрифт слів	Lyrics font	Písmo textu	Czcionka tekstu	Liedtextschrift	Fuente de la letra	Police des paroles	歌詞のフォント
+Імпортувати шрифт…	Import font…	Importovat písmo…	Importuj czcionkę…	Schrift importieren…	Importar fuente…	Importer une police…	フォントを読み込む…
+М’яке сяйво	Soft glow	Jemná záře	Delikatna poświata	Sanftes Leuchten	Brillo suave	Lueur douce	柔らかな発光
+Чіткий текст	Clear text	Čistý text	Wyraźny tekst	Klarer Text	Texto claro	Texte net	鮮明な文字
+Власна тема CSS / RICS	Custom CSS / RICS theme	Vlastní motiv CSS / RICS	Własny motyw CSS / RICS	Eigenes CSS-/RICS-Theme	Tema CSS / RICS personalizado	Thème CSS / RICS personnalisé	カスタム CSS / RICS テーマ
+Застосувати	Apply	Použít	Zastosuj	Anwenden	Aplicar	Appliquer	適用
+Власна тема	Custom theme	Vlastní motiv	Własny motyw	Eigenes Theme	Tema personalizado	Thème personnalisé	カスタムテーマ

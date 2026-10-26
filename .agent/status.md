@@ -21,7 +21,7 @@ Full feature and visual parity with the original application is unfinished.
 | Public YTM | Search, suggestions, browse, radio/recommendations, stream resolution/cache, downloads, clip lookup | Search evidence is separate from successful streaming; see I-01 |
 | Personal local data | Likes, local playlists, history, sources, lyric offsets, backup/restore | Google account library APIs are intentionally excluded |
 | Lyrics | Shared format detection for paste/providers/migration; LRC/enhanced LRC, TTML, QRC, SRT, WebVTT, plain and nested JSON | Provider dialect coverage is not exhaustive |
-| Rich lyrics | Word timing, translations, romanization, backing vocals, instrumental gaps, scroll/stage, reduced motion | Full upstream effects require Windows/browser host |
+| Rich lyrics | Real word/syllable timing, translations, romanization, backing vocals, instrumental gaps, scroll/stage, reduced motion | Native Rust Braccato now provides sweep/glow/waves; arbitrary browser CSS remains browser-only |
 | Authentication | Lyric-provider Turnstile exchange, separate JWT cache, startup prewarm, renewal/retry | Google sign-in is a separate system-browser action |
 | Metadata tools | Review a YTM match, write local tags, create/list/restore tag backups | Format support is bounded by tag-writing implementation |
 | Appearance | Dynamic, fixed, or background-only colors; six fixed hues; smooth palette changes; borderless player surfaces | Settings persist across native/browser state and backups; see `docs/APPEARANCE.md` |
@@ -29,12 +29,15 @@ Full feature and visual parity with the original application is unfinished.
 
 ## Platform matrix
 
+Renderer rows updated 2026-10-25: native targets now use the copied Rust Braccato
+component. Exact evidence and remaining device limits: `docs/NATIVE-BRACCATO.md`.
+
 | Target | Shell/audio | Lyrics | Runtime evidence boundary |
 | --- | --- | --- | --- |
-| Windows | Slint + native Rodio; desktop dialogs | Bundled upstream Braccato in WebView2 | Historical fixture/native smoke and local playback evidence; live online parity incomplete |
+| Windows | Slint + native Rodio; desktop dialogs | Copied Rust Braccato Slint component | Native renderer visual/behavior fixture passed; live online parity remains separate |
 | Browser | Rust/WASM Slint canvas + HTML audio; JS file picker | Same-origin Braccato iframe | Historical headless Edge fixtures and touch emulation; files must be reselected after reload |
-| Linux | Native Rust/Slint path; CI build configured | Rust/Slint fallback | Local runtime unverified; older WSL attempt failed to attach its disk |
-| Android ARM64 | Slint native activity, library `playervf` | Rust/Slint fallback | APK packaging checks documented; no connected-device runtime acceptance |
+| Linux | Native Rust/Slint path; CI build configured | Copied Rust Braccato Slint component | Local runtime unverified; older WSL attempt failed to attach its disk |
+| Android ARM64 | Slint native activity, library `playervf` | Copied Rust Braccato Slint component | Updated ARM64 library compile check passed; no connected-device runtime acceptance |
 
 Browser shell has no screen-reader support in the Slint canvas; lyric and
 highlighted-editor surfaces use DOM. Static web hosting can play selected local

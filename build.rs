@@ -7,8 +7,16 @@ fn main() {
     println!("cargo:rerun-if-changed=ui/controls.slint");
     println!("cargo:rerun-if-changed=ui/tokens.slint");
     println!("cargo:rerun-if-changed=ui/braccato-lyrics.slint");
+    println!("cargo:rerun-if-changed=ui/native-lyrics.slint");
     println!("cargo:rerun-if-changed=ui/lyric-types.slint");
-    slint_build::compile("ui/main.slint").expect("failed to compile Slint UI");
+    println!("cargo:rerun-if-changed=third-party/braccato-rust/crates/slint/ui/lyrics.slint");
+    let config = slint_build::CompilerConfiguration::new().with_library_paths(
+        std::collections::HashMap::from([(
+            "braccato".into(),
+            std::path::PathBuf::from("third-party/braccato-rust/crates/slint/ui"),
+        )]),
+    );
+    slint_build::compile_with_config("ui/main.slint", config).expect("failed to compile Slint UI");
 }
 
 fn android_bridge() {

@@ -1,4 +1,33 @@
-# Vey 0.1.16
+# Vey 0.1.21
+
+Native line transitions now accelerate and settle softly. Retained focus
+crossfades use 180ms to sharpen and 280ms to blur, with aligned paint and one
+shared scale. Highlight fades ease out over 500ms for both line and word sync.
+Reduced motion and seeks remain immediate; cue starts and fill deadlines stay exact.
+
+Local Windows x64 build, 2026-10-26. Native lyrics now use a single shaped
+fill pass, instantiate word views only near the viewport and use a soft
+6px glow at 31% opacity by default. Optional custom motion, fonts and themes remain available.
+Long hyphenated chants now wrap at hyphens; oversized tokens wrap at complete
+Unicode graphemes. Timed syllables stay together when their word fits. Fill and
+scroll follow wrapped cue fragments continuously without changing source timings.
+The fill has a gentle wave and scrolling uses a smoother ease-out curve.
+Normal mode waits for supplied cue starts, with no default camera lead or
+future-line grouping. Sung focus never uses a future scroll cue; native stage
+also waits for actual line starts and preserves genuine vocal overlaps.
+Fill completes by each word's supplied end. Wrapped continuations remain
+unfilled until the previous fragment completes. Optional anticipatory camera
+settings remain available without advancing sung focus.
+Backing-vocal phrases use one continuous fill edge, including when a cue wraps
+onto another line; whitespace no longer restarts the fill on each word.
+
+Native lyrics and the lyric editor use Rust/Slint. WebView2 remains necessary
+for lyric API challenges and optional Windows video; returning to cover mode
+releases the video WebView. The ZIP includes a SHA-256 checksum beside it.
+
+The platform notes below describe the earlier 0.1.16 release.
+
+## Earlier 0.1.16 release notes
 
 This release fixes search focus during playback, refines compact mobile navigation,
 and improves automatic lyrics and return-to-current-line scrolling. The open dark

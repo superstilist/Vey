@@ -6,9 +6,11 @@ use crate::{
 use slint::ComponentHandle;
 
 pub fn apply(w: &MainWindow, settings: &Settings) {
+    crate::themes::apply_settings(w, settings);
     w.set_lyrics_romanization(settings.lyrics_romanization);
     w.set_lyrics_translation(settings.lyrics_translation);
     w.set_lyrics_translation_language(settings.lyrics_translation_language.clone().into());
+    w.set_navigation_blur(settings.navigation_blur);
     let badges = w.global::<CoverBadges>();
     badges.set_shown(settings.download_badge_shown);
     badges.set_style(
@@ -45,6 +47,7 @@ pub fn capture(w: &MainWindow, settings: &mut Settings) {
     settings.lyrics_romanization = w.get_lyrics_romanization();
     settings.lyrics_translation = w.get_lyrics_translation();
     settings.lyrics_translation_language = w.get_lyrics_translation_language().to_string();
+    settings.navigation_blur = w.get_navigation_blur();
     let badges = w.global::<CoverBadges>();
     settings.download_badge_shown = badges.get_shown();
     settings.download_badge_style = badges.get_style().to_string();

@@ -35,7 +35,7 @@ unsafe extern "system" fn shell_focus_proc(
 ) -> isize {
     // Winit forwards mouse input to Slint without restoring SetFocus from a
     // child HWND. Reclaim it only on a press delivered to the shell itself;
-    // clicks and typing inside lyrics/the editor remain owned by the WebView.
+    // clicks inside the retained video child remain owned by that WebView.
     if matches!(message, 0x0201 | 0x0204 | 0x0207 | 0x020b | 0x0246) && GetFocus() != window {
         SetFocus(window);
     }
@@ -52,7 +52,7 @@ pub(crate) fn parent(window: &slint::Window) -> Option<slint::WindowHandle> {
     else {
         return None;
     };
-    // Reusing the same callback/id is idempotent for lyrics and video hosts.
+    // Reusing the same callback/id is idempotent for the optional video host.
     unsafe {
         SetWindowSubclass(
             handle.hwnd.get() as Hwnd,

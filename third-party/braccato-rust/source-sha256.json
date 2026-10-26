@@ -1,0 +1,102 @@
+[
+  {
+    "path": "crates/engine/Cargo.toml",
+    "sha256": "2a0b7aaefabd4fa6de72a880b5f73cc2fb3e53527fc300ecbbff8e082f8088aa"
+  },
+  {
+    "path": "crates/engine/src/lib.rs",
+    "sha256": "10221c50551e702a21b8d56174ce1d4bee4cf39957e3d6bff2911bc65e066035"
+  },
+  {
+    "path": "crates/highlight/Cargo.toml",
+    "sha256": "a33ea53b9717eaa49989297f997c3f6b7a57d1d0e8d98a69076d8d0fb2de9e56"
+  },
+  {
+    "path": "crates/highlight/src/lib.rs",
+    "sha256": "9765c3fcebf71a74acdd1a34697dfd3c5f9fc20c592476dcab1900c139de4137"
+  },
+  {
+    "path": "crates/parsers/Cargo.toml",
+    "sha256": "02db19f0b5c1aad15b1ad57843b2be156d8445beb198cbe46ee989a7e95fed7f"
+  },
+  {
+    "path": "crates/parsers/src/lib.rs",
+    "sha256": "c4f69dd911b92c82ac9a61cd08f822b8d94ed0517535ab4843db7f53a793b8c9"
+  },
+  {
+    "path": "crates/providers/Cargo.toml",
+    "sha256": "08b43a820236c2a71a2e460f1960f0e7ef15057f108e6fd6d5627de91ea0233e"
+  },
+  {
+    "path": "crates/providers/src/lib.rs",
+    "sha256": "2972d7bc013de97dc2e42014f4f355037831cc7349d2d5f2a013576b4693dcd7"
+  },
+  {
+    "path": "crates/slint/build.rs",
+    "sha256": "1500608510a405b647546fa38c698a6869e779d7e420064b053ba6593a369caf"
+  },
+  {
+    "path": "crates/slint/Cargo.toml",
+    "sha256": "2454f6704d82ad59a11c2dd3f297d3a49d37ef713d29f910b182303d78872187"
+  },
+  {
+    "path": "crates/slint/src/glow.rs",
+    "sha256": "db16f9ffc8a21cb70efd9074728f59d1cfc0da763fc1941a207a7cba9bc0e8ff"
+  },
+  {
+    "path": "crates/slint/src/instrumental.rs",
+    "sha256": "2e96201a6b835632ea2bd8705948923b30f67ca67272cbbb3c82c32ec0e6e453"
+  },
+  {
+    "path": "crates/slint/src/layout.rs",
+    "sha256": "f726e98adc2ca5f980c72245c903e4419da72c0d13a2dc72be5b4008945a5050"
+  },
+  {
+    "path": "crates/slint/src/lib.rs",
+    "sha256": "a4f3fe65c897b68b6b994640292945795c364e8907877914d14439249f520a33"
+  },
+  {
+    "path": "crates/slint/src/sweep.rs",
+    "sha256": "ce866c0517c7d424af7a15fe0b6f433d8d8d067363bba9b09f76121e6d83e924"
+  },
+  {
+    "path": "crates/slint/ui/instrumental-note.svg",
+    "sha256": "dfc75fef737ea1330e9b73a7bb12ec6363636ea1a940548b06fdf08dce970eea"
+  },
+  {
+    "path": "crates/slint/ui/lyrics.slint",
+    "sha256": "f020fffd869a9ca868f94a2b77781948d8153c1c3ea363d804f4ee98cdda1b8a"
+  },
+  {
+    "path": "crates/themes/Cargo.toml",
+    "sha256": "193b2615e399e109133c7d291df63b81165d542be644469f0be6ed831f132dc4"
+  },
+  {
+    "path": "crates/themes/src/lib.rs",
+    "sha256": "0acec2b0e1067584a20d13201e900cb852fad6ab3fcfa1d19a35bd52e833c919"
+  },
+  {
+    "path": "crates/types/Cargo.toml",
+    "sha256": "ce6d7036f798502aa6ac6f426a875d90ae6135287ef20acfa5662f938a17cd75"
+  },
+  {
+    "path": "crates/types/src/lib.rs",
+    "sha256": "de0c2cd880320369974f2d92d4fd8ca25678ebb4de886e76bd95a4bab925ee03"
+  },
+  {
+    "path": "crates/demo/assets/themes/lucid.rics",
+    "sha256": "9e565839e7a1d409a0802fb22b9c7fe667ccdf9c6ea266cf89cda0e60b02934d"
+  },
+  {
+    "path": "demo/theme-sustain.css",
+    "sha256": "3c2455ecf494bcabc66ee5734b57ca2171759ba3f63c06eced209d42f7576012"
+  },
+  {
+    "path": "demo/theme-karaoke.css",
+    "sha256": "0d4808f39a9840527b4dae62fb8549059b82a014321240d74eaa5f490cf66030"
+  },
+  {
+    "path": "crates/demo/src/glyph_plans.rs",
+    "sha256": "88a4b2ec9cf3e6229b2e40cdad248e7cd2cdea69ea61df459ff8599a7581087c"
+  }
+]

@@ -14,8 +14,9 @@ See [the tonal interface notes](docs/MATERIAL-STYLE.md) and
 [phone layout checks](docs/PHONE-VERIFICATION.md).
 
 Built in Rust.
-The application shell is Slint. Lyrics use the original Braccato web component
-in an embedded Windows WebView2 widget and in a browser iframe. There is no
+The application shell is Slint. Native lyrics use the copied Rust Braccato
+Slint component; browser lyrics use the original iframe. See
+[native integration and checks](docs/NATIVE-BRACCATO.md). There is no
 Tauri dependency. The original player project remains untouched.
 
 **Full parity is not finished.** See [the acceptance and parity report](docs/PARITY.md)
@@ -127,9 +128,9 @@ Braccato is the only lyric theme, using the upstream package's colors, glow
 and word effects. Legacy theme names and custom CSS are ignored on load and
 restore. The theme selector and CSS import are removed. Desktop uses Braccato's
 3rem type size, with a compact cap on mobile. Reduced motion remains available.
-Windows and web show a Braccato loading/retry state if the widget is unavailable,
-instead of silently substituting the native fallback. Windows retries failed
-startup automatically; the retry button recreates the host and resends lyrics.
+Native targets render directly in Slint without a lyric WebView. The browser
+retains loading/retry behavior for its iframe. Pasted native lyrics use Slint's
+text editor; the browser retains the highlighted upstream editor.
 
 The widget smooths small audio-clock corrections while applying seeks, pause
 and speed changes immediately. It holds bounded interpolation across late
@@ -143,18 +144,13 @@ the tab is hidden. Unsent artwork and document updates are retained for resume.
 `docs/braccato-widget-check.json` records the regression checks and the repeated
 sample test; these checks measure avoided work, not overall application FPS.
 
-The home and player pages use locally bundled `@kawarp/core` 1.3.1 for an
-album-art-driven fluid background. The existing WebView2/iframe bridge renders
-a 256×144 decorative texture at about 30 fps, while Slint draws the controls
-and contrast scrim. Motion freezes on pause and respects reduced motion; other
-pages and minimized windows do not request frames. Platforms without the web
-widget, or without WebGL, use a static gradient. No CDN is required.
-On Windows the lyrics child is opaque and paints a crop of that same Kawarp
-frame and contrast scrim. This avoids stale-window artifacts from transparent
-WebView2/OpenGL composition. Its crop follows resize and display scaling;
-unchanged frames reuse the cached background and hidden lyrics skip painting.
-Only one background request is in flight; slower rendering reduces the frame
-rate instead of accumulating work. A lost response permits retry after 500ms.
+Native home/player artwork backgrounds use the bounded Rust texture adapter on
+all native targets, including Windows. The browser keeps locally bundled
+`@kawarp/core` 1.3.1 through its iframe bridge. Both produce a 256×144 decorative
+texture; native Slint draws lyrics, controls and the contrast scrim together.
+Motion freezes on pause and respects reduced motion. No CDN is required.
+Browser background requests remain bounded to one in flight with retry after
+a lost response. Windows no longer paints a duplicated lyric-child backdrop.
 Run `npm run test:ambient` in `tools/braccato-widget` with the fixture server
 running (`npm run serve`) to check GPU output, motion and artwork updates.
 
@@ -205,21 +201,19 @@ representation only when it matches the exact bundled challenge host. Rejecting
 that navigation previously prevented the iframe from ever starting.
 
 
-The default Windows and browser renderer now executes the original upstream
-Braccato code, including letter waves, glow, word wobble, background vocals,
-instrumental SVG effects, overlapping scroll animations, stage layout and the
-full RICS compiler. All six upstream packages and their public runtime exports
-are bundled locally. The full copied source has 163 unmodified upstream files.
-The lyric paste dialog uses upstream's highlighted editor. See
+Native targets use the copied Rust Braccato renderer for letter sweeps/waves,
+glow, word wobble, backing vocals, instrumental masks, wrapping and stage layout.
+The browser retains the original JavaScript renderer and full RICS compiler.
+The older JavaScript source and its 163 unmodified files are preserved. See
 [the integration notes](src/braccato/README.md) and
 [source provenance](third-party/BRACCATO-UPSTREAM.md).
 Use the lyric tools drawer to switch between scrolling and **Сцена**, choose
 reduced motion, or enable **Автопрокрутка** for plain lyrics. These preferences
 are saved. The widget uses the browser animation frame clock while playing,
 interpolates native playback samples and stops its frame loop when hidden or
-paused. Playback updates do not rebuild lyrics or recompile themes. The Rust
-styled-text renderer remains a fallback when WebView2 cannot initialize and on
-other native platforms; its theme/effect subset does not limit the web widget.
+paused. Playback updates do not rebuild lyrics or recompile themes. Native Vey
+uses Rust's sampled playback clock and retained Slint models; no WebView2 lyric
+startup or IPC is required. Arbitrary browser CSS/DOM extensions remain browser-only.
 
 Provider requests now run concurrently and reuse HTTP connection pools. Old
 automatic parser caches are refreshed for the new metadata model; previously

@@ -30,6 +30,17 @@ Issue IDs refer to `issues.md`; do not mark a task done from an old report.
 
 ## Maintenance
 
+- Native autoscroll follow-up (2026-10-25): done. Real wheel/resume restores
+  follow, wrapped rows follow source word cues, idle source scans are cached.
+  Actual-input/native fixtures and 200 tests passed with the known localization
+  test excluded; release executable built and its native UI inspected.
+  Details and benchmark scope: `docs/NATIVE-BRACCATO.md`.
+
+- Native Rust Braccato integration (2026-10-25): implemented using the copied
+  local Rust-port snapshot; Windows native visual fixture and copied-crate tests
+  passed. See `docs/NATIVE-BRACCATO.md` for exact checks, the unrelated existing
+  localization failure and remaining platform/device acceptance boundaries.
+
 - I-13: reconcile README/parity/integration text with current UI and host failure
   behavior. Keep historical verification reports dated; do not overwrite them
   with new claims. Verify against current code and, for appearance, fresh visuals.

@@ -1,4 +1,4 @@
-//! Original Braccato renderer hosted in WebView2 (desktop) or an iframe (WASM).
+//! Browser-only upstream Braccato iframe bridge. Native uses the Rust/Slint crate.
 //! Rust owns playback, authentication, provider requests and canonical documents.
 use crate::*;
 use serde::Deserialize;
@@ -152,7 +152,10 @@ impl Bridge {
             "timed": w.get_lyrics_timed(), "passive": w.get_lyrics_passive_scroll(),
             "reduced": w.get_lyrics_reduced_motion(), "mobile": w.get_mobile(),
             "size": w.get_lyric_size(),
+            "customTheme": w.get_lyric_theme_applied().to_string(),
+            "fontFamily": w.get_lyric_style().family.to_string(),
             "scrollRatio":w.get_lyrics_scroll_ratio(), "lookahead":w.get_lyrics_lookahead_ms(),
+            "scrollOffset":w.get_lyrics_scroll_offset_ms(), "endingThreshold":w.get_lyrics_ending_threshold_ms(),
             "scrollDuration":w.get_lyrics_scroll_duration_ms(), "passiveSeconds":w.get_lyrics_passive_seconds(),
             "disableRichsync":w.get_lyrics_disable_richsync(),
             "bounds":if editing {
@@ -164,7 +167,7 @@ impl Bridge {
             "stageBounds":if editing {
                 serde_json::json!({"x":0,"y":0,"width":size.width,"height":size.height,"radius":0})
             } else {
-                serde_json::json!({"x":w.get_stage_x(),"y":w.get_stage_y(),"width":w.get_stage_width(),"height":w.get_stage_height(),"radius":if w.get_mobile(){20}else{28}})
+                serde_json::json!({"x":w.get_stage_x(),"y":w.get_stage_y(),"width":w.get_stage_width(),"height":w.get_stage_height(),"radius":w.get_stage_radius()})
             },
             "presentationX": if editing {0.} else {w.get_player_motion_x()},
             "presentationY": if editing {0.} else {w.get_player_motion_y()},
@@ -181,22 +184,11 @@ impl Bridge {
                 "duration":w.get_camera_duration(),
                 "fromX":w.get_camera_start_x(),"fromY":w.get_camera_start_y(),
                 "toX":w.get_camera_end_x(),"toY":w.get_camera_end_y(),
-                "width":w.get_stage_width(),"height":w.get_stage_height()
+                "width":w.get_stage_width(),"height":w.get_stage_height(),
+                "blur":w.get_navigation_blur()
             });
         } else {
             state["camera"] = serde_json::Value::Null;
-        }
-        #[cfg(target_os = "windows")]
-        {
-            state["nativeBackdrop"] = serde_json::json!({
-                "opacity":w.get_ambient_opacity(),
-                "surface": format!("#{:02x}{:02x}{:02x}", w.global::<crate::Tokens>().get_neutral_50().red(), w.global::<crate::Tokens>().get_neutral_50().green(), w.global::<crate::Tokens>().get_neutral_50().blue()),
-                "content": {"x":w.get_backdrop_x(),"y":w.get_backdrop_y(),
-                    "width":w.get_backdrop_width(),"height":w.get_backdrop_height()},
-                "viewport":{"x":w.get_lyrics_widget_x()+w.get_player_motion_x(),
-                    "y":w.get_lyrics_widget_y()+w.get_player_motion_y(),
-                    "width":w.get_lyrics_widget_width(),"height":w.get_lyrics_widget_height()}
-            });
         }
         let art = w.get_current_art();
         let changed = self
@@ -305,7 +297,13 @@ fn handle(w: &MainWindow, message: Message) {
                     | "lyrics"
             ) && matches!(
                 section.as_str(),
-                "" | "audio" | "library" | "lyrics" | "data" | "appearance" | "language"
+                "" | "audio"
+                    | "library"
+                    | "lyrics"
+                    | "data"
+                    | "appearance"
+                    | "language"
+                    | "account"
             ) =>
         {
             if !w.get_dialog().is_empty() {
@@ -348,227 +346,6 @@ fn handle(w: &MainWindow, message: Message) {
         }
         _ => {}
     }
-}
-
-// Cut a rounded hole in the child HWND so Slint's settings overlay receives
-// both paint and input, without resizing or rebuilding the lyric widget.
-#[cfg(target_os = "windows")]
-fn clip_native_view(
-    view: &wry::WebView,
-    bounds: (i32, i32, i32, i32),
-    overlay: &serde_json::Value,
-    stage: &serde_json::Value,
-    scale: f32,
-) {
-    use std::ffi::c_void;
-    use wry::WebViewExtWindows;
-    #[link(name = "gdi32")]
-    extern "system" {
-        fn CreateRoundRectRgn(l: i32, t: i32, r: i32, b: i32, w: i32, h: i32) -> *mut c_void;
-        fn CombineRgn(dest: *mut c_void, a: *mut c_void, b: *mut c_void, mode: i32) -> i32;
-        fn DeleteObject(object: *mut c_void) -> i32;
-    }
-    #[link(name = "user32")]
-    extern "system" {
-        fn SetWindowRgn(window: *mut c_void, region: *mut c_void, redraw: i32) -> i32;
-    }
-    unsafe {
-        let mut hwnd = Default::default();
-        if view.controller().ParentWindow(&mut hwnd).is_err() {
-            return;
-        }
-        let radius = (40. * scale).round() as i32;
-        let region = CreateRoundRectRgn(0, 0, bounds.2 + 1, bounds.3 + 1, radius, radius);
-        if region.is_null() {
-            return;
-        }
-        // Move the entire child as one object, clipping it to the player stage.
-        if !stage.is_null() {
-            let px = |key: &str| (stage[key].as_f64().unwrap_or(0.) * scale as f64).round() as i32;
-            let left = px("x") - bounds.0;
-            let top = px("y") - bounds.1;
-            let diameter = px("radius") * 2;
-            let moving = CreateRoundRectRgn(
-                left,
-                top,
-                left + px("width"),
-                top + px("height"),
-                diameter,
-                diameter,
-            );
-            if !moving.is_null() {
-                CombineRgn(region, region, moving, 1); // RGN_AND
-                DeleteObject(moving);
-            }
-        }
-        if !overlay.is_null() {
-            let px =
-                |key: &str| (overlay[key].as_f64().unwrap_or(0.) * scale as f64).round() as i32;
-            let x = px("x") - bounds.0;
-            let y = px("y") - bounds.1;
-            let hole = CreateRoundRectRgn(
-                x,
-                y,
-                x + px("width") + 1,
-                y + px("height") + 1,
-                radius,
-                radius,
-            );
-            if !hole.is_null() {
-                CombineRgn(region, region, hole, 4); // RGN_DIFF
-                DeleteObject(hole);
-            }
-        }
-        // Windows owns the region only after a successful SetWindowRgn.
-        if SetWindowRgn(hwnd.0, region, 1) == 0 {
-            DeleteObject(region);
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-pub fn install(w: &MainWindow) -> Option<slint::Timer> {
-    use std::time::{Duration, Instant};
-    w.set_lyrics_web_required(true);
-    struct Host {
-        view: wry::WebView,
-        _context: wry::WebContext,
-        events: std::sync::mpsc::Receiver<Message>,
-        ready: bool,
-        started: Instant,
-        visible: bool,
-        bounds: (i32, i32, i32, i32),
-        bridge: Bridge,
-        clip_key: String,
-        diagnostic_at: Instant,
-        diagnostics: Vec<serde_json::Value>,
-    }
-    let weak = w.as_weak();
-    let mut host: Option<Host> = None;
-    let mut attempted = false;
-    let mut generation = w.get_lyrics_renderer_generation();
-    let mut retry_at = Instant::now();
-    let smoke = std::env::args().any(|s| s == "--widget-smoke");
-    let mut last_tick: Option<Instant> = None;
-    let timer = slint::Timer::default();
-    timer.start(slint::TimerMode::Repeated, Duration::from_millis(16), move || {
-        let Some(w) = weak.upgrade() else { host.take(); return; };
-        // Native child placement follows the foreground camera at display
-        // cadence. Ordinary lyric/audio updates keep their lower-cost cadence.
-        let moving_player = w.get_page_moving() && w.get_displayed_view() == "lyrics";
-        if !moving_player && last_tick.is_some_and(|at| at.elapsed() < Duration::from_millis(32)) { return; }
-        last_tick = Some(Instant::now());
-        if generation != w.get_lyrics_renderer_generation() {
-            generation = w.get_lyrics_renderer_generation();
-            host.take(); attempted=false;
-            w.set_lyrics_web_ready(false);
-            w.set_lyrics_renderer_error("".into());
-        }
-        if host.as_ref().is_some_and(|h| !h.ready && h.started.elapsed() > Duration::from_secs(10)) {
-            host.take();
-            retry_at=Instant::now()+Duration::from_secs(3);
-            w.set_lyrics_web_ready(false);
-            w.set_lyrics_renderer_error("Braccato не відповідає. Повторюємо запуск…".into());
-        }
-        if host.is_none() && (!attempted || Instant::now() >= retry_at) && w.window().is_visible() {
-            // Do not turn Slint's temporary, pre-HWND handle into a failed
-            // WebView attempt and a five-second retry delay.
-            let Some(parent) = crate::windows_webview::parent(w.window()) else { return; };
-            attempted = true;
-            retry_at=Instant::now()+Duration::from_secs(5);
-            let (tx,rx) = std::sync::mpsc::channel();
-            let mut context = wry::WebContext::new(Some(crate::storage::data_dir().join("braccato-webview")));
-            let result = wry::WebViewBuilder::new_with_web_context(&mut context)
-                // An HWND WebView cannot reliably alpha-compose over Slint's
-                // swap chain. Paint the matching backdrop inside the child.
-                .with_visible(false).with_focused(false).with_transparent(false)
-                .with_background_color((8,8,8,255))
-                .with_custom_protocol("playerlyrics".into(), |_,request| {
-                    use std::borrow::Cow;
-                    let (mime,body):(&str,&'static [u8]) = match request.uri().path() {
-                        "/" | "/index.html" => ("text/html; charset=utf-8",include_bytes!("../web/braccato/index.html")),
-                        "/widget.js" => ("application/javascript; charset=utf-8",include_bytes!("../web/braccato/widget.js")),
-                        "/widget.css" => ("text/css; charset=utf-8",include_bytes!("../web/braccato/widget.css")),
-                        "/LICENSES.txt" => ("text/plain; charset=utf-8",include_bytes!("../web/braccato/LICENSES.txt")),
-                        _ => return wry::http::Response::builder().status(404).body(Cow::Borrowed(&[][..])).unwrap(),
-                    };
-                    wry::http::Response::builder().header("Content-Type",mime)
-                        .header("Cache-Control","no-cache").body(Cow::Borrowed(body)).unwrap()
-                })
-                .with_url("playerlyrics://localhost/index.html")
-                .with_navigation_handler(|url|url.starts_with("http://playerlyrics.localhost/") || url.starts_with("playerlyrics://localhost/"))
-                .with_new_window_req_handler(|_,_|wry::NewWindowResponse::Deny)
-                .with_ipc_handler(move |request| {
-                    if request.uri().to_string().starts_with("http://playerlyrics.localhost/") && request.body().len() < 1_000_000 {
-                        if let Ok(message) = serde_json::from_str::<Message>(request.body()) { let _ = tx.send(message); }
-                    }
-                }).build_as_child(&parent);
-            match result {
-                Ok(view) => {
-                    eprintln!("[braccato] WebView2 initialized");
-                    host=Some(Host {view,_context:context,events:rx,ready:false,started:Instant::now(),visible:false,bounds:(0,0,0,0),bridge:Bridge::default(),clip_key:String::new(),diagnostic_at:Instant::now(),diagnostics:vec![]});
-                }
-                Err(e) => {
-                    // Startup can race native handle creation. Keep retry feedback
-                    // on the lyric surface instead of a persistent Home banner.
-                    w.set_lyrics_renderer_error("Не вдалося запустити слова. Повторюємо запуск…".into());
-                    eprintln!("Braccato WebView2: {e}");
-                },
-            }
-        }
-        let Some(h) = host.as_mut() else {return;};
-        for event in h.events.try_iter() {
-            match event {
-                message @ Message::Ambient { .. } => {
-                    h.bridge.ambient_pending_at = None;
-                    handle(&w,message);
-                },
-                Message::Ready => {h.ready=true; w.set_lyrics_web_ready(true); w.set_lyrics_renderer_error("".into());},
-                Message::Diagnostics {mut data} if smoke => {
-                    data["ambientWidth"] = w.get_ambient_frame().size().width.into();
-                    h.diagnostics.push(data);
-                    let dir=crate::storage::data_dir();
-                    let _=std::fs::create_dir_all(&dir);
-                    let _=std::fs::write(dir.join("braccato-widget-smoke.json"),serde_json::to_vec_pretty(&h.diagnostics).unwrap_or_default());
-                },
-                other => handle(&w,other),
-            }
-        }
-        if !h.ready {return;}
-        let state = h.bridge.state(&w);
-        let scale = w.window().scale_factor();
-        let shift = (
-            state["presentationX"].as_f64().unwrap_or(0.),
-            state["presentationY"].as_f64().unwrap_or(0.),
-        );
-        let bounds=(
-            ((state["bounds"]["x"].as_f64().unwrap_or(0.)+shift.0)*scale as f64).round() as i32,
-            ((state["bounds"]["y"].as_f64().unwrap_or(0.)+shift.1)*scale as f64).round() as i32,
-            (state["bounds"]["width"].as_f64().unwrap_or(0.)*scale as f64).round().max(1.) as i32,
-            (state["bounds"]["height"].as_f64().unwrap_or(0.)*scale as f64).round().max(1.) as i32);
-        let visible=state["visible"] == true && bounds.2 > 8 && bounds.3 > 8;
-        if visible && bounds != h.bounds {
-            let _ = h.view.set_bounds(wry::Rect {position:wry::dpi::PhysicalPosition::new(bounds.0,bounds.1).into(),size:wry::dpi::PhysicalSize::new(bounds.2 as u32,bounds.3 as u32).into()});
-            h.bounds=bounds;
-        }
-        let clip_key = format!("{:?}:{}:{}", bounds, state["stageBounds"], state["overlay"]);
-        if visible && h.clip_key != clip_key {
-            clip_native_view(&h.view, bounds, &state["overlay"], &state["stageBounds"], scale);
-            h.clip_key = clip_key;
-        }
-        if visible != h.visible && crate::windows_webview::set_visible(&h.view, visible).is_ok() { h.visible=visible; }
-        let json = state.to_string();
-        if json != h.bridge.last_state {
-            let _=h.view.evaluate_script(&format!("window.PlayerVFBraccato.update({json})"));
-            h.bridge.last_state=json;
-        }
-        if smoke && state["visible"] == true && h.diagnostic_at.elapsed() > Duration::from_millis(400) {
-            let bounds=state["bounds"].to_string();
-            let _=h.view.evaluate_script(&format!("{{const data=window.PlayerVFBraccato.diagnostics();data.hostBounds={bounds};window.ipc.postMessage(JSON.stringify({{type:'diagnostics',data}}));}}"));
-            h.diagnostic_at=Instant::now();
-        }
-    });
-    Some(timer)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -631,11 +408,6 @@ pub fn install(w: &MainWindow) -> Option<slint::Timer> {
         },
     );
     *owner.borrow_mut() = Some(timer);
-    None
-}
-
-#[cfg(all(not(target_os = "windows"), not(target_arch = "wasm32")))]
-pub fn install(_: &MainWindow) -> Option<slint::Timer> {
     None
 }
 

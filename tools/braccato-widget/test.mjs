@@ -94,7 +94,7 @@ try {
     await update({theme,css:'.blyrics-container { --blyrics-glow-color: red; --blyrics-font-size: 8px; }'});
   }
   assert.equal((await inspect()).themeCompiles,fixedBefore.themeCompiles,'legacy themes and custom CSS cannot change or recompile the standard theme');
-  assert.equal(await page.locator('.blyrics-container').evaluate(el=>getComputedStyle(el).fontSize),'48px');
+  assert.equal(await page.locator('.blyrics-container').evaluate(el=>getComputedStyle(el).fontSize),`${state.size}px`,'ignored legacy CSS must not override the configured font size');
   await update({reduced:true});
   const reduced=await page.locator('.blyrics-container').evaluate(el=>getComputedStyle(el).getPropertyValue('--blyrics-animate-word-wobble').trim());
   assert.equal(reduced,'0');

@@ -221,9 +221,23 @@ mod platform {
         visible: bool,
         retry_at: Option<std::time::Instant>,
         events: Option<std::sync::mpsc::Receiver<serde_json::Value>>,
+        bounds: Option<[u64; 4]>,
+        payload: String,
+        ready: bool,
+        sent_at: Option<std::time::Instant>,
     }
     impl Surface {
         pub fn update(&mut self, w: &MainWindow, mut state: serde_json::Value) {
+            // Cover/audio mode has no browser surface to retain. Hiding first
+            // releases a child's Win32 keyboard focus before its controller drops.
+            if state["url"].as_str().is_none_or(str::is_empty) {
+                if let Some(view) = self.view.take() {
+                    let _ = crate::windows_webview::set_visible(&view, false);
+                }
+                *self = Self::default();
+                w.set_video_ready(false);
+                return;
+            }
             let visible = w.window().is_visible()
                 && state["visible"].as_bool().unwrap_or(false)
                 && !state["url"].as_str().unwrap_or("").is_empty();
@@ -291,19 +305,41 @@ mod platform {
                     })
                     .ok();
             }
+            if !visible && !self.visible {
+                w.set_video_ready(false);
+                return;
+            }
             if let Some(view) = &self.view {
                 use wry::dpi::{LogicalPosition, LogicalSize};
                 let b = &state["bounds"];
                 let num = |k: &str| b[k].as_f64().unwrap_or(0.);
-                let _ = view.set_bounds(wry::Rect {
-                    position: LogicalPosition::new(num("x"), num("y")).into(),
-                    size: LogicalSize::new(num("width").max(1.), num("height").max(1.)).into(),
-                });
+                let bounds = [
+                    num("x").to_bits(),
+                    num("y").to_bits(),
+                    num("width").to_bits(),
+                    num("height").to_bits(),
+                ];
+                if self.bounds != Some(bounds) {
+                    let _ = view.set_bounds(wry::Rect {
+                        position: LogicalPosition::new(num("x"), num("y")).into(),
+                        size: LogicalSize::new(num("width").max(1.), num("height").max(1.)).into(),
+                    });
+                    self.bounds = Some(bounds);
+                }
                 state["native"] = true.into();
                 state["bounds"]["x"] = 0.into();
                 state["bounds"]["y"] = 0.into();
-                let _ = view
-                    .evaluate_script(&format!("window.updateVideo&&window.updateVideo({state})"));
+                let payload = state.to_string();
+                if payload != self.payload
+                    || !self.ready
+                    || self.sent_at.is_none_or(|at| at.elapsed().as_secs() >= 1)
+                {
+                    let _ = view.evaluate_script(&format!(
+                        "window.updateVideo&&window.updateVideo({payload})"
+                    ));
+                    self.payload = payload;
+                    self.sent_at = Some(std::time::Instant::now());
+                }
                 // ShowWindow(SW_SHOW) is not a playback tick operation.
                 if visible != self.visible
                     && crate::windows_webview::set_visible(view, visible).is_ok()
@@ -313,7 +349,8 @@ mod platform {
             }
             if let Some(events) = &self.events {
                 if let Some(sample) = events.try_iter().last() {
-                    w.set_video_ready(visible && sample["ready"].as_bool().unwrap_or(false));
+                    self.ready = sample["ready"].as_bool().unwrap_or(false);
+                    w.set_video_ready(visible && self.ready);
                     w.set_video_muted(sample["muted"].as_bool().unwrap_or(true));
                     if let Some(position) = sample["position"]
                         .as_f64()
