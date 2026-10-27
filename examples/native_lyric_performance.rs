@@ -1,4 +1,6 @@
 //! Repeatable native scene workload; records event-loop and snapshot costs, not audio FPS.
+#[path = "support/native_window.rs"]
+mod native_window;
 use playervf::{BraccatoWord, LyricRow, MainWindow, WordRow};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
@@ -37,6 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1)
     }));
     let label = std::env::args().nth(1).unwrap_or("sample".into());
+    let readback = !std::env::args().any(|arg| arg == "--no-snapshots");
     let w = MainWindow::new()?;
     playervf::native_lyrics::install(&w);
     w.window().set_size(slint::LogicalSize::new(1440., 900.));
@@ -87,6 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated,Duration::from_millis(16),move||{
         let w=weak.upgrade().unwrap();let now=origin.elapsed().as_secs_f64();
+        if !native_window::ready(w.window()) {previous.set(now);return;}
         if now<2. {return;}
         if !attached.get() {
             let rows=w.get_native_lyric_lines();assert!(rows.row_count()>300);
@@ -97,12 +101,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if n<15 {previous.set(now);reads.set(0);return;}
         samples.borrow_mut().push((now-previous.replace(now))*1000.);
         if n%6==0 {w.set_position(100.2+(n-15) as f32*0.016);}
-        if n%4==0 {let at=Instant::now();let _=w.window().take_snapshot().unwrap();snapshots.borrow_mut().push(at.elapsed().as_secs_f64()*1000.);}
+        if readback && n%4==0 {let at=Instant::now();let _=w.window().take_snapshot().unwrap();snapshots.borrow_mut().push(at.elapsed().as_secs_f64()*1000.);}
         if n==94 {
             let mut ticks=samples.borrow_mut();let mut frames=snapshots.borrow_mut();
             let report=serde_json::json!({"lines":300,"words":2400,"samples":ticks.len(),"word_reads":reads.get(),
                 "tick_p50_ms":percentile(&mut ticks,0.5),"tick_p95_ms":percentile(&mut ticks,0.95),
-                "snapshot_p50_ms":percentile(&mut frames,0.5),"snapshot_p95_ms":percentile(&mut frames,0.95)});
+                "snapshots":frames.len(),
+                "snapshot_p50_ms":if frames.is_empty(){None}else{Some(percentile(&mut frames,0.5))},"snapshot_p95_ms":if frames.is_empty(){None}else{Some(percentile(&mut frames,0.95))}});
             std::fs::create_dir_all("target/native-lyrics-check").unwrap();
             std::fs::write(format!("target/native-lyrics-check/performance-{label}.json"),serde_json::to_vec_pretty(&report).unwrap()).unwrap();
             println!("{report}");slint::quit_event_loop().unwrap();

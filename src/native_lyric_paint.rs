@@ -15,6 +15,7 @@ struct Job {
     duration: f32,
     appearance: [f32; 4],
     effects: [bool; 2],
+    color: [u8; 3],
 }
 struct Pixels {
     width: u32,
@@ -22,6 +23,14 @@ struct Pixels {
     bytes: Vec<u8>,
 }
 impl Pixels {
+    fn tint(mut self, color: [u8; 3]) -> Self {
+        for pixel in self.bytes.chunks_exact_mut(4) {
+            // Uniform RGB in transparent texels also avoids bilinear color
+            // fringes when sampling a straight-alpha texture.
+            pixel[..3].copy_from_slice(&color);
+        }
+        self
+    }
     fn atlas(frames: &[(&slint::Image, f32)], padding: f32) -> Self {
         if frames.is_empty() {
             return Self {
@@ -179,7 +188,7 @@ impl WordPaint {
                             generation: job.generation,
                             row: job.row,
                             part: job.part,
-                            wide: if let Some(inner) = inner.as_ref() {
+                            wide: (if let Some(inner) = inner.as_ref() {
                                 Pixels::atlas(
                                     &[
                                         (&glow.wide, glow.padding),
@@ -196,7 +205,8 @@ impl WordPaint {
                                 )
                             } else {
                                 Pixels::atlas(&[], 0.)
-                            },
+                            })
+                            .tint(job.color),
                             padding: glow.padding,
                             levels,
                             glyphs,
@@ -268,6 +278,11 @@ impl WordPaint {
                 },
             duration: word.duration_ms,
             effects: [style.glow, style.wave],
+            color: [
+                style.glow_color.red(),
+                style.glow_color.green(),
+                style.glow_color.blue(),
+            ],
             appearance: [
                 style.glow_radius,
                 style.wave_duration,
@@ -300,6 +315,7 @@ impl WordPaint {
         word.glow_wide = result.wide.upload();
         word.glow_tight = Default::default();
         word.glow_levels = result.levels;
+        word.glow_precolored = result.levels > 0;
         word.glow_padding = result.padding;
         word.glyphs = std::rc::Rc::new(VecModel::from(
             result
@@ -379,6 +395,7 @@ mod tests {
         assert_eq!(finish(&mut worker, &rows), Some((0, 0)));
         let word = rows.row_data(0).unwrap().parts.row_data(0).unwrap();
         assert_eq!(word.glow_levels, 2);
+        assert!(word.glow_precolored);
         assert_eq!(word.glyphs.row_count(), 0);
         assert!(word.glow_wide.size().width > 0);
         let off = crate::LyricStyle {
@@ -390,6 +407,7 @@ mod tests {
         assert_eq!(finish(&mut worker, &rows), Some((0, 0)));
         let word = rows.row_data(0).unwrap().parts.row_data(0).unwrap();
         assert_eq!(word.glow_levels, 0);
+        assert!(!word.glow_precolored);
         assert_eq!(word.glow_wide.size().width, 0);
         assert_eq!(word.glyphs.row_count(), 0);
     }
@@ -411,10 +429,15 @@ mod tests {
         for y in 0..atlas.height() as usize {
             let start = y * atlas.width() as usize * 4;
             let stride = reference.width() as usize * 4;
-            assert_eq!(
-                &atlas.as_bytes()[start..start + stride],
-                &reference.as_bytes()[y * stride..(y + 1) * stride]
-            );
+            for (paint, mask) in atlas.as_bytes()[start..start + stride]
+                .chunks_exact(4)
+                .zip(reference.as_bytes()[y * stride..(y + 1) * stride].chunks_exact(4))
+            {
+                assert_eq!(paint[3], mask[3], "precolor must preserve full mask alpha");
+                if paint[3] > 0 {
+                    assert_eq!(&paint[..3], &[245, 245, 245]);
+                }
+            }
         }
         let tile_width = reference.width() as usize;
         let peaks = (0..4)

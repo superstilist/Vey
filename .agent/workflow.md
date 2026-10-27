@@ -43,6 +43,7 @@ Run commands from the project root in PowerShell unless stated otherwise.
 | Backing-vocal phrase/wrapped fill pixels, including opt-in letter waves | `cargo run --locked --example native_lyric_backing` |
 | Native render workload timings | `cargo run --locked --example native_lyric_performance -- label`; JSON under `target/native-lyrics-check/` |
 | Same native workload with word wobble enabled | `cargo run --locked --example native_lyric_performance -- label --wobble` |
+| Release event-loop/model-read benchmark without GPU snapshot readback | `cargo run --release --locked --example native_lyric_performance -- label --wobble --no-snapshots`; repeat three times per renderer |
 | Native executable release build | `cargo build --release --bin vey --locked`; output `target/release/vey.exe` |
 | Copied renderer unit checks | `cargo test --locked --manifest-path third-party/braccato-rust/Cargo.toml --target-dir target -p braccato-slint -p braccato-engine -p braccato-types -p braccato-themes` |
 | Android bars/cutout layout fixtures (native simulation) | `cargo run --locked --example android_layout` |
@@ -55,6 +56,9 @@ Run commands from the project root in PowerShell unless stated otherwise.
 
 Clear `SLINT_BACKEND` after an explicit software-renderer check so later runs
 use the normal backend selection.
+The performance fixture restores only its own minimized test window without
+activation; production playback still suspends while minimized. Compare matching
+release workloads and separate event-loop intervals from snapshot costs or FPS.
 
 Widget commands run in `tools/braccato-widget/`: `npm ci` for dependency setup,
 `npm run build` to regenerate `web/braccato/`, `npm run serve` for the fixture

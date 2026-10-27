@@ -35,6 +35,7 @@ export struct LyricWord {
     glow-tight: image,
     glow-padding: float,
     glow-levels: int,
+    glow-precolored: bool,
     sustain-blurred: image,
     glyphs: [LyricGlyph],
 }
@@ -230,6 +231,8 @@ component LyricWordView inherits Rectangle {
     in property <image> glow-tight;
     in property <float> glow-padding: 32;
     in property <int> glow-levels: 0;
+    // RGB is prepared once in the host worker; alpha stays full precision.
+    in property <bool> glow-precolored: false;
     in property <image> sustain-blurred;
     in property <[LyricGlyph]> glyphs;
     in property <bool> glow-enabled: true;
@@ -304,13 +307,14 @@ component LyricWordView inherits Rectangle {
     private property <float> glow-attack: root.ease-progress(min(1,max(0,root.glow-elapsed-ms / max(1,min(80,root.glow-window-ms * 0.2)))), "smooth");
     private property <float> glow-release: root.ease-progress(min(1,max(0,(root.glow-window-ms - root.glow-elapsed-ms) / max(1,min(180,root.glow-window-ms * 0.35)))), "smooth");
     private property <float> glow-fade: root.glow-enabled && root.elapsed-ms >= 0 && root.cue-duration-ms > 0 && (!root.finish-fill-at-cue-end || !root.highlight-swipe || root.cue-phase >= root.cue-offset)
-        ? (root.cue-bounded-glow ? root.glow-attack * root.glow-release : root.glow-in) * root.fade : 0;
+        ? (root.cue-bounded-glow ? root.glow-attack * root.glow-release : root.glow-in) * root.fade
+            * (root.glow-precolored ? root.glow-color.alpha / 255.0 : 1) : 0;
     // Only positive-radius shadows have cached paint. The zero-radius resting state is empty.
     private property <float> glow-wide-strength: 1 - root.glow-time;
     private property <float> glow-tight-strength: root.glow-time;
     private property <float> glow-start-texel: root.glow-padding + root.ramp-start * root.width * 64 / max(1px,root.font-size);
     private property <float> glow-end-texel: root.glow-padding + root.ramp-end * root.width * 64 / max(1px,root.font-size);
-    private property <color> glow-highlight: root.glow-color;
+    private property <color> glow-highlight: root.glow-precolored ? transparent : root.glow-color;
     // inject.ts splits every non-joining timed word, including short syllables. The long-word
     // threshold controls emphasis scaling only, never the existence of letter masks or floats.
     private property <float> letter-elapsed-ms: root.elapsed-ms - (root.settled-word-motion ? root.cue-duration-ms * root.cue-offset : 0);
@@ -459,7 +463,7 @@ component LyricWordView inherits Rectangle {
                 source-clip-y: 0;
                 source-clip-width: max(0,self.last - self.first);
                 source-clip-height: root.glow-wide.height;
-                colorize: root.glow-color;
+                colorize: root.glow-highlight;
                 opacity: parent.radius-alpha * self.coverage;
             }
         }
@@ -701,6 +705,7 @@ export component LyricsView inherits Rectangle {
                         cue-offset: part.cue-offset; cue-span: part.cue-span;
                         after-line-ms: root.playback-time-ms - line.end-ms;
                         glow-wide: part.glow-wide; glow-tight: part.glow-tight; glow-padding: part.glow-padding; glow-levels: part.glow-levels;
+                        glow-precolored: part.glow-precolored;
                         glyphs: part.glyphs;
                         glow-enabled: root.highlight-glow && !root.karaoke && !root.sustain;
                         cue-bounded-glow: root.cue-bounded-glow;
@@ -852,6 +857,7 @@ export component LyricsView inherits Rectangle {
                                 cue-offset: part.cue-offset; cue-span: part.cue-span;
                         after-line-ms: root.playback-time-ms - line.end-ms;
                         glow-wide: part.glow-wide; glow-tight: part.glow-tight; glow-padding: part.glow-padding; glow-levels: part.glow-levels;
+                        glow-precolored: part.glow-precolored;
                         glyphs: part.glyphs;
                         glow-enabled: root.highlight-glow && !root.karaoke && !root.sustain;
                         cue-bounded-glow: root.cue-bounded-glow;

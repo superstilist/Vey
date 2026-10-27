@@ -9,6 +9,8 @@ pub(crate) struct FollowIndex {
     pub sources: Vec<Range<usize>>,
     cues: Vec<Vec<(i64, usize)>>,
     row_types: Vec<u8>,
+    word_events: Vec<(i64, usize)>,
+    warm_windows: Vec<Vec<Option<(i64, i64)>>>,
 }
 impl FollowIndex {
     // Scroll ahead independently of the sung source/word. This never changes
@@ -25,6 +27,8 @@ impl FollowIndex {
             sources: vec![0..0; sources],
             cues: vec![vec![]; sources],
             row_types: Vec::with_capacity(rows.row_count()),
+            word_events: Vec::new(),
+            warm_windows: vec![vec![]; rows.row_count()],
         };
         for visual in 0..rows.row_count() {
             let Some(row) = rows.row_data(visual) else {
@@ -45,6 +49,30 @@ impl FollowIndex {
                 range.start = visual;
             }
             range.end = visual + 1;
+            for n in 0..row.parts.row_count() {
+                if let Some(part) = row.parts.row_data(n) {
+                    index.warm_windows[visual].push((part.duration_ms > 0.).then_some((
+                        part.start_ms as i64 - 2000,
+                        (part.start_ms + part.duration_ms.max(1200.)) as i64 + 1500,
+                    )));
+                    index
+                        .word_events
+                        .push((part.start_ms.ceil() as i64, visual));
+                    if part.duration_ms > 0. {
+                        index
+                            .word_events
+                            .push(((part.start_ms + part.duration_ms).ceil() as i64, visual));
+                    }
+                    // Match the retained-paint release predicate exactly: strict
+                    // inequality after the integer end plus 1500ms of residency.
+                    index.word_events.push((
+                        (part.start_ms + part.duration_ms.max(1200.)) as i64 + 1501,
+                        visual,
+                    ));
+                } else {
+                    index.warm_windows[visual].push(None);
+                }
+            }
             if !row.secondary && !row.instrumental {
                 for n in 0..row.parts.row_count() {
                     if let Some(part) = row.parts.row_data(n).filter(|p| !p.background) {
@@ -67,7 +95,27 @@ impl FollowIndex {
         for cues in &mut index.cues {
             cues.sort_unstable();
         }
+        index.word_events.sort_unstable();
+        index.word_events.dedup();
         index
+    }
+    /// A continuous fill reads the clock in Slint. Rust only needs to revisit
+    /// word models at activity/asset deadlines, not once per rendered frame.
+    pub fn changed_words(&self, previous: i64, now: i64, rows: &mut Vec<usize>) {
+        if now <= previous {
+            return;
+        }
+        let first = self.word_events.partition_point(|(at, _)| *at <= previous);
+        let end = self.word_events.partition_point(|(at, _)| *at <= now);
+        rows.extend(self.word_events[first..end].iter().map(|(_, row)| *row));
+    }
+    pub fn can_prepare(&self, row: usize, part: usize, time: i64) -> bool {
+        self.warm_windows
+            .get(row)
+            .and_then(|parts| parts.get(part))
+            .copied()
+            .flatten()
+            .is_some_and(|(first, last)| time >= first && time <= last)
     }
     pub fn visual(&self, source: usize, time: i64) -> Option<usize> {
         let range = self.sources.get(source)?.clone();
@@ -157,6 +205,44 @@ mod tests {
     use crate::BraccatoWord;
     use slint::VecModel;
     use std::rc::Rc;
+    #[test]
+    fn word_events_cover_exact_cues_and_strict_paint_release_without_frame_scans() {
+        let rows: ModelRc<BraccatoRow> = Rc::new(VecModel::from(vec![BraccatoRow {
+            parts: Rc::new(VecModel::from(vec![
+                BraccatoWord {
+                    start_ms: 1000.,
+                    duration_ms: 200.,
+                    ..Default::default()
+                },
+                BraccatoWord {
+                    start_ms: 1200.,
+                    duration_ms: 300.,
+                    ..Default::default()
+                },
+            ]))
+            .into(),
+            ..Default::default()
+        }]))
+        .into();
+        let index = FollowIndex::new(&rows, 1);
+        assert!(!index.can_prepare(0, 0, -1001));
+        assert!(index.can_prepare(0, 0, -1000));
+        assert!(index.can_prepare(0, 0, 3700));
+        assert!(!index.can_prepare(0, 0, 3701));
+        let mut changed = vec![];
+        index.changed_words(1000, 1199, &mut changed);
+        assert!(changed.is_empty());
+        index.changed_words(1199, 1200, &mut changed);
+        assert_eq!(changed, vec![0]); // Adjacent end/start is one row event.
+        changed.clear();
+        index.changed_words(1500, 3700, &mut changed);
+        assert!(changed.is_empty());
+        index.changed_words(3700, 3701, &mut changed);
+        assert_eq!(changed, vec![0]);
+        changed.clear();
+        index.changed_words(4000, 500, &mut changed);
+        assert!(changed.is_empty()); // Seeks are handled by the driver's reset band.
+    }
     #[test]
     fn scroll_lead_is_bounded_and_never_changes_paused_or_reduced_time() {
         assert_eq!(FollowIndex::scroll_time(1000, true, false, 500), 1500);

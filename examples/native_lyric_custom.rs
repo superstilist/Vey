@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(playervf::native_lyric_fonts::register(vec![0; 16]).is_err());
     playervf::i18n::install(&w);
     playervf::native_lyrics::install(&w);
-    let css=":root {--blyrics-font-size:48px;--blyrics-glow-color:#66ccffff;--blyrics-highlight-glow-radius-from:18px;--blyrics-animate-letter-wave:0;--blyrics-animate-word-wobble:0;}";
+    let css=":root {--blyrics-font-size:48px;--blyrics-glow-color:#66ccff80;--blyrics-highlight-glow-radius-from:18px;--blyrics-animate-letter-wave:0;--blyrics-animate-word-wobble:0;}";
     let settings = playervf::services::Settings {
         lyrics_theme_css: format!("{css} :root {{--blyrics-animate-highlight-glow:0;}}"),
         lyrics_font_family: family,
@@ -66,6 +66,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tick = Rc::new(Cell::new(0));
     let done = tick.clone();
     let off = Rc::new(RefCell::new(None));
+    let precolored = Rc::new(RefCell::new(None));
+    let glow_bounds = Rc::new(Cell::new([0u32; 4]));
     let retries = Rc::new(Cell::new(0));
     let weak = w.as_weak();
     let timer = slint::Timer::default();
@@ -104,10 +106,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let lit=count(0.,0.3);let unsung=count(0.7,1.);
             assert!(lit>20,"filled text must gain glow, changed={lit}");
             assert_eq!(unsung,0,"unfilled letters must receive no glow");
-            w.set_dialog("lyric-style".into());
+            assert!(word.glow_precolored,"native glow must share one precolored atlas");
+            // Compare the same word's entire glow footprint. Neighboring blur
+            // masks arrive asynchronously and are unrelated to atlas tinting.
+            let pad=48.*scale;
+            glow_bounds.set([(left-pad).max(0.) as u32,(cy-pad).max(0.) as u32,
+                ((left+width+pad) as u32).min(on.1),((cy+pad) as u32).min(on.2)]);
+            *precolored.borrow_mut()=Some(on);
+            let rows=w.get_native_lyric_lines();let row=rows.row_data(0).unwrap();let mut word=row.parts.row_data(0).unwrap();
+            let mask=word.glow_wide.to_rgba8().unwrap();
+            let mut pixels=slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(mask.width(),mask.height());
+            pixels.make_mut_bytes().copy_from_slice(mask.as_bytes());
+            for rgba in pixels.make_mut_bytes().chunks_exact_mut(4) {if rgba[3]>0 {rgba[..3].fill(255);}}
+            word.glow_wide=slint::Image::from_rgba8(pixels);word.glow_precolored=false;
+            row.parts.set_row_data(0,word);
         } else if phase==2 {
-            capture(&w,"appearance-desktop");w.set_mobile(true);w.window().set_size(slint::LogicalSize::new(390.,844.));
+            let legacy=capture(&w,"legacy-tint-reference");let first=precolored.borrow();let first=first.as_ref().unwrap();
+            assert_eq!((first.1,first.2),(legacy.1,legacy.2));let mut maximum=0u8;let mut changed=0;
+            let [left,top,right,bottom]=glow_bounds.get();
+            for y in top..bottom {for x in left..right {let i=((y*legacy.1+x)*4) as usize;
+                for c in 0..3 {let delta=first.0[i+c].abs_diff(legacy.0[i+c]);maximum=maximum.max(delta);if delta>0 {changed+=1;}}
+            }}
+            println!("precolored/renderer tint: max channel difference={maximum}, changed channels={changed}");
+            assert!(maximum<=3,"precolor changed the glow appearance");
+            w.set_dialog("lyric-style".into());
         } else if phase==3 {
+            capture(&w,"appearance-desktop");w.set_mobile(true);w.window().set_size(slint::LogicalSize::new(390.,844.));
+        } else if phase==4 {
             capture(&w,"appearance-mobile");
             println!("custom lyrics: imported font, theme, filled-only glow and desktop/mobile appearance passed");
             slint::quit_event_loop().unwrap();
@@ -115,6 +140,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tick.set(phase+1);
     });
     w.run()?;
-    assert_eq!(done.get(), 4);
+    assert_eq!(done.get(), 5);
     Ok(())
 }

@@ -34,6 +34,8 @@ real cue. Word motion and soft scrolling provide flowing motion; reduced motion
 disables both while retaining timed fill. Software rendering uses fixed-column
 solid ink for a spatial sweep; empty/completed words use one text body on both
 backends. Custom themes may request stronger effects.
+Glow layers share one worker-colored atlas with unchanged mask alpha; this
+avoids repeated GPU tint textures while retaining theme opacity and fill clipping.
 Normal word wobble gently stretches whole words, sharing an origin across timed
 syllables and settling within the cue. Short cues have reduced motion amplitude.
 Letter waves remain optional and independent of wobble; settled waves return to

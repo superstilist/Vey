@@ -165,6 +165,11 @@ unchanged. See docs/NATIVE-BRACCATO.md for reference-style checks.
 Word glows and glyph plans use a separate single-job worker in
 `src/native_lyric_paint.rs`; layout generations and seek windows reject stale
 results. Focus preparation runs independently so dense word cues cannot starve it.
+Retained cue/release events update word activity and paint residency only at
+deadlines; indexed warm windows skip model reads for ineligible preparation.
+Seeks revisit active/previous/resident rows. Continuous fill still reads the
+16ms clock. The worker precolors one shared glow atlas, preserving mask alpha;
+layer opacity applies theme alpha without per-Image GPU tint textures.
 The visible lyric clock ticks at 16 ms and slews small late media samples.
 Normal mode uses zero scroll offset, zero lookahead and zero ending threshold.
 CSS can opt into anticipatory camera/grouping; sung focus always uses actual

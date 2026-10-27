@@ -86,6 +86,11 @@ Host adaptations (all other copied crate source is unchanged):
   explicitly; software must use the existing fixed-column spatial mask.
   Partially filled whole-word GPU ink uses a padded local surface during
   wobble/line scaling, keeping gradient coordinates attached to its glyphs.
+  Optional `LyricWord.glow-precolored` defaults to false for existing callers.
+  Vey prepares atlas RGB once in its worker, retaining full mask alpha, and
+  applies normalized theme alpha through layer opacity. Feather/radius images
+  then share the atlas without per-Image renderer tint textures. Rust word
+  initializers include the new field; legacy tint behavior remains available.
 - `crates/slint/src/glow.rs`: apply the requested variable-font weight when
   measuring mask bounds and sweep glyphs, matching the native text font instance.
 - Vey's `src/native_lyric_glyphs.rs` is based on demo/src/glyph_plans.rs, with

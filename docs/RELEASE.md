@@ -1,4 +1,16 @@
-# Vey 0.1.24
+# Vey 0.1.25
+
+Native lyric updates now revisit word models only at cue and paint-release
+deadlines, with retained preparation windows instead of per-frame word reads.
+Glow color is prepared once in the worker and shared by its feather/radius
+layers, avoiding separate GPU tint textures. Source timing, spatial fill,
+word wobble and reduced-motion behavior are preserved.
+
+On the same 300-line/2400-word release fixture, median word-model reads fell
+from 788 to 40 on GPU and 806 to 32 on software across three runs each.
+The event-loop interval remained near 16ms; this is reduced model/render work,
+not a measured global FPS increase. Windows GPU/software checks are separate
+from browser and physical-device acceptance.
 
 Native lyrics now select the fill path from the renderer actually created.
 The software renderer uses a spatial mask instead of treating a text gradient

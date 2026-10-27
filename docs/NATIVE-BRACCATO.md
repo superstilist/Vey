@@ -644,3 +644,59 @@ EXE SHA-256: `f84c24abcd6361c768a499ab12de9bec51d03a9a5f8a5b827425afe074416a1b`.
 Local ZIP: `dist/Vey-0.1.24-windows-x64.zip`, SHA-256
 `10a51279dff6b105884dc4efc8a32c330969176f122b61a39d328ff8ab534402`.
 This is a local Windows build; no tag or cross-platform publication was performed.
+
+## 0.1.25 retained word deadlines and shared glow, 2026-10-27
+
+`FollowIndex` retains sorted cue/start/end and paint-release deadlines when
+layout is built. Playback updates only the crossed event rows; seeks revisit
+the active, previous and resident bands. Preparation eligibility uses retained
+integer windows before reading word models. Continuous fill/wobble and camera
+clocks still tick at 16ms; source cues and reduced motion are unchanged. The
+strict paint-release boundary is retained and covered by a focused unit test.
+
+The word worker precolors atlas RGB once, including transparent texels, without
+changing mask alpha. `glow-precolored` lets all feather/radius Images share it
+without per-item GPU colorize textures. Theme alpha is applied as normalized
+layer opacity; existing uncolored upstream atlases retain the legacy tint path.
+The custom-font fixture compares the two paths with translucent cyan glow to
+cover both RGB and alpha. GPU maximum channel difference is 2/255 and software
+1/255; unsung-side glow remains zero.
+
+Release benchmark: 300 source lines / 2400 words, word wobble, 80 samples/run,
+three runs per renderer and version, same Windows host. `--no-snapshots` excludes
+synchronous readback from the event-loop measurement. Reports are
+`target/native-lyrics-check/performance-flow-{before,after}-{gpu,software}-N.json`.
+Medians across the three runs:
+
+| Renderer | Word reads before / after | Tick p50 before / after | Tick p95 before / after |
+| --- | --- | --- | --- |
+| GPU | 788 / 40 | 16.257 / 16.354 ms | 17.187 / 17.144 ms |
+| Software | 806 / 32 | 16.269 / 16.266 ms | 17.107 / 17.123 ms |
+
+Word-model reads fell 94.9% / 96.0%. Event-loop cadence remains timer-limited
+near 16ms; these measurements do not establish a global FPS or GPU-time gain.
+The texture change removes repeated tint intermediates by construction; texture
+memory savings were not independently instrumented.
+The 22 native lyric unit tests and all 10 copied Slint tests passed. GPU and
+software each passed static and 400ms/prefix/wobble spatial matrices (96
+partial-fill comparisons total, including reduced motion), the 15-phase effect
+fixture, 2x/grouped/retarget/paused-seek timing, exact word deadlines and stage
+handoff, and imported font/translucent theme checks. The tint comparison covers
+the current word's complete glow footprint; neighboring inactive blur masks
+may finish asynchronously and are excluded from that comparison.
+
+Software continuity recorded 7968 advancing pixel samples, zero backward
+pixels and advance in 37/40 intervals. All four backing-vocal cases passed;
+premature tails remained zero across 124/759 checked cores, including wrapping
+and optional letter waves. GPU/software expired glow residuals remained zero.
+
+WASM compilation, Rust formatting and whitespace checks passed. The optimized
+Windows EXE and packaged copy match byte-for-byte. Isolated GPU/software
+`--screenshots` runs each exited 0 with 18 frames. GPU desktop/mobile and
+software desktop frames in `target/release-0.1.25-{gpu,software}-ui-check/`
+were inspected. Browser and physical-device runtime acceptance were not run.
+
+EXE SHA-256: `990d24fa34e8177bd2a92c1d92403d9762e0e853da8b5d088a89fceca4da39d1`.
+Local ZIP: `dist/Vey-0.1.25-windows-x64.zip`, SHA-256
+`6700c8d4ae7e7179fa24ca19b58e8406a5c5870a44121b2c40a589159fdd4ecc`.
+This is a local Windows build; no tag or cross-platform publication was performed.

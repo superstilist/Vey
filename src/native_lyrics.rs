@@ -92,6 +92,7 @@ fn word(p: braccato_slint::LyricWord) -> BraccatoWord {
         glow_tight: p.glow_tight,
         glow_padding: p.glow_padding,
         glow_levels: p.glow_levels,
+        glow_precolored: p.glow_precolored,
         sustain_blurred: p.sustain_blurred,
         glyphs: ModelRc::<BraccatoGlyph>::default(),
     }
@@ -634,9 +635,16 @@ pub fn install(w: &MainWindow) {
                 if rebuilt || stage_changed {
                     dirty.extend(0..rows.row_count());
                 } else if w.get_lyrics_timed() {
-                    follow.extend_rows(&active, &mut dirty);
-                    follow.extend_rows(&previous_active, &mut dirty);
-                    dirty.extend(resident.iter().copied());
+                    let seek = last_ms < 0 || ms < last_ms || ms - last_ms > 500;
+                    if seek || active != previous_active {
+                        follow.extend_rows(&active, &mut dirty);
+                        follow.extend_rows(&previous_active, &mut dirty);
+                    }
+                    if seek {
+                        dirty.extend(resident.iter().copied());
+                    } else {
+                        follow.changed_words(last_ms, ms, &mut dirty);
+                    }
                 }
                 dirty.sort_unstable();
                 dirty.dedup();
@@ -674,6 +682,7 @@ pub fn install(w: &MainWindow) {
                             word.glow_wide = Default::default();
                             word.glow_tight = Default::default();
                             word.glow_levels = 0;
+                            word.glow_precolored = false;
                             prepared[i][n] = false;
                         }
                         if word.active != sung || release {
@@ -720,16 +729,7 @@ pub fn install(w: &MainWindow) {
                         continue;
                     };
                     for n in 0..row.parts.row_count() {
-                        if prepared[i][n] {
-                            continue;
-                        }
-                        let Some(word) = row.parts.row_data(n) else {
-                            continue;
-                        };
-                        if word.duration_ms <= 0.
-                            || word.start_ms as i64 > ms + 2000
-                            || ((word.start_ms + word.duration_ms.max(1200.)) as i64) < ms - 1500
-                        {
+                        if prepared[i][n] || !follow.can_prepare(i, n, ms) {
                             continue;
                         }
                         word_paint.submit_style(
