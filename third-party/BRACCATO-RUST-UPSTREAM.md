@@ -91,6 +91,14 @@ Host adaptations (all other copied crate source is unchanged):
   applies normalized theme alpha through layer opacity. Feather/radius images
   then share the atlas without per-Image renderer tint textures. Rust word
   initializers include the new field; legacy tint behavior remains available.
+  Optional `render-windowed`, `render-lines`, `render-start/end` and
+  `render-top/bottom` let the native host keep a bounded row delegate window
+  with exact omitted-row spacers. `BraccatoRow.rendered` drives Vey's notifying
+  filter; boundary insert/remove events preserve overlapping delegates. Defaults
+  retain the full model for existing callers. Nearby sharp row delegates remain alive
+  at zero opacity through focus changes, avoiding reconstruction at cue entry.
+  Optional `focus-values` provides per-row animated floats separately from the
+  word-bearing row model. When absent, `BraccatoRow.focus-mix` remains supported.
 - `crates/slint/src/glow.rs`: apply the requested variable-font weight when
   measuring mask bounds and sweep glyphs, matching the native text font instance.
 - Vey's `src/native_lyric_glyphs.rs` is based on demo/src/glyph_plans.rs, with

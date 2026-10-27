@@ -43,11 +43,38 @@ pub struct FocusPaint {
     in_flight: bool,
     builds: usize,
     blends: Vec<(usize, Blend)>,
+    cleared: Vec<usize>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn focus_frames_change_only_float_cells_and_manual_scroll_restores_sharp_ink() {
+        use slint::{Rgba8Pixel, SharedPixelBuffer, VecModel};
+        use std::rc::Rc;
+        let rows: ModelRc<BraccatoRow> = Rc::new(VecModel::from(vec![BraccatoRow {
+            sustain_blurred: slint::Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::new(1, 1)),
+            ..Default::default()
+        }]))
+        .into();
+        let values: ModelRc<f32> = Rc::new(VecModel::from(vec![0.])).into();
+        let mut focus = FocusPaint::default();
+        focus.sync(&rows, 0, 1, true);
+        focus.painted.push((0, 300));
+        focus.blends.push((0, Blend::default()));
+        focus.animate(&rows, &values, 0., false);
+        focus.animate(&rows, &values, 140., false);
+        assert_eq!(values.row_data(0), Some(0.5));
+        assert_eq!(
+            rows.row_data(0).unwrap().focus_mix,
+            0.,
+            "frame updates must not rewrite the word-bearing row"
+        );
+        focus.sync(&rows, 0, 1, false);
+        focus.animate(&rows, &values, 150., false);
+        assert_eq!(values.row_data(0), Some(0.));
+    }
     use slint::VecModel;
     use std::rc::Rc;
     #[test]
@@ -105,6 +132,7 @@ impl FocusPaint {
         self.painted.clear();
         self.cursor = 0;
         self.blends.clear();
+        self.cleared.clear();
     }
     pub fn poll(&mut self, rows: &ModelRc<BraccatoRow>) {
         let Some(result) = self.worker.as_ref().and_then(MaskWorker::take) else {
@@ -159,6 +187,7 @@ impl FocusPaint {
                     row.sustain_blurred_height = 0.;
                     row.focus_mix = 0.;
                     rows.set_row_data(index, row);
+                    self.cleared.push(index);
                 }
             }
         }
@@ -237,9 +266,18 @@ impl FocusPaint {
     }
     /// Retained frame state survives ordinary VecModel row/word updates. No
     /// rasterization, source reads or allocation once the nearby band is warm.
-    pub fn animate(&mut self, rows: &ModelRc<BraccatoRow>, now: f64, snap: bool) {
+    pub fn animate(
+        &mut self,
+        rows: &ModelRc<BraccatoRow>,
+        values: &ModelRc<f32>,
+        now: f64,
+        snap: bool,
+    ) {
+        for index in self.cleared.drain(..) {
+            values.set_row_data(index, 0.);
+        }
         for &index in &self.near {
-            let Some(mut row) = rows.row_data(index) else {
+            let Some(row) = rows.row_data(index) else {
                 continue;
             };
             let target = if !row.active
@@ -266,9 +304,8 @@ impl FocusPaint {
                 }
             };
             let value = self.blends[position].1.tick(target, now, snap);
-            if row.focus_mix != value {
-                row.focus_mix = value;
-                rows.set_row_data(index, row);
+            if values.row_data(index) != Some(value) {
+                values.set_row_data(index, value);
             }
         }
     }

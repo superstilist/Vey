@@ -44,6 +44,7 @@ Run commands from the project root in PowerShell unless stated otherwise.
 | Native render workload timings | `cargo run --locked --example native_lyric_performance -- label`; JSON under `target/native-lyrics-check/` |
 | Same native workload with word wobble enabled | `cargo run --locked --example native_lyric_performance -- label --wobble` |
 | Release event-loop/model-read benchmark without GPU snapshot readback | `cargo run --release --locked --example native_lyric_performance -- label --wobble --no-snapshots`; repeat three times per renderer |
+| Cold/repeated player entry and dense line handoff stalls | `cargo run --release --locked --example native_lyric_stutter -- label`; add `--no-blur` to isolate capture work; reports under `target/native-lyrics-check/stutter-*.json` |
 | Native executable release build | `cargo build --release --bin vey --locked`; output `target/release/vey.exe` |
 | Copied renderer unit checks | `cargo test --locked --manifest-path third-party/braccato-rust/Cargo.toml --target-dir target -p braccato-slint -p braccato-engine -p braccato-types -p braccato-themes` |
 | Android bars/cutout layout fixtures (native simulation) | `cargo run --locked --example android_layout` |
@@ -59,6 +60,9 @@ use the normal backend selection.
 The performance fixture restores only its own minimized test window without
 activation; production playback still suspends while minimized. Compare matching
 release workloads and separate event-loop intervals from snapshot costs or FPS.
+`VEY_TRACE_LYRIC_FRAMES=1` reports native layout time and UI updates over 8ms;
+clear it after diagnostics. Warm steady playback alone does not cover player
+entry, retargeting or line-boundary stalls.
 
 Widget commands run in `tools/braccato-widget/`: `npm ci` for dependency setup,
 `npm run build` to regenerate `web/braccato/`, `npm run serve` for the fixture

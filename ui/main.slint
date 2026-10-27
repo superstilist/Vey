@@ -88,7 +88,9 @@ export component MainWindow inherits Window {
     private property <float> navigation-distance: max(abs(root.camera-end-x - root.camera-start-x), abs(root.camera-end-y - root.camera-start-y));
     out property <float> navigation-progress: root.navigation-distance < 0.001 ? 1 : clamp(max(abs(root.camera-x - root.camera-start-x), abs(root.camera-y - root.camera-start-y)) / root.navigation-distance, 0, 1);
     out property <float> navigation-pulse: root.camera-travelling && !root.lyrics-reduced-motion && !root.navigation-capture ? 4 * root.navigation-progress * (1 - root.navigation-progress) : 0;
-    private property <float> navigation-blend: root.navigation-blur && root.navigation-fx-ready ? root.navigation-pulse : 0;
+    private property <float> navigation-fx-opacity: root.navigation-fx-ready ? 1 : 0;
+    animate navigation-fx-opacity {duration: root.lyrics-reduced-motion ? 0ms : 80ms; easing: ease-in-out;}
+    private property <float> navigation-blend: root.navigation-blur && root.navigation-fx-ready ? root.navigation-pulse * root.navigation-fx-opacity : 0;
     animate camera-x { duration: root.lyrics-reduced-motion || root.mobile-sheet ? 0ms : root.camera-duration * 1ms; easing: cubic-bezier(0.45, 0, 0.55, 1); }
     animate camera-y { duration: root.lyrics-reduced-motion || root.mobile-sheet ? 0ms : root.camera-duration * 1ms; easing: cubic-bezier(0.45, 0, 0.55, 1); }
     out property <float> player-motion-x: root.mobile ? 0 : (1 - root.camera-x) * content.width / 1px;
@@ -290,6 +292,12 @@ export component MainWindow inherits Window {
     in-out property <string> lyrics-document;
     in-out property <bool> native-lyrics: false;
     in-out property <[BraccatoRow]> native-lyric-lines;
+    in-out property <[float]> native-focus-values;
+    in-out property <[BraccatoRow]> native-render-lines;
+    in-out property <int> native-render-start: 0;
+    in-out property <int> native-render-end: -1;
+    in-out property <float> native-render-top: 0;
+    in-out property <float> native-render-bottom: 0;
     in-out property <BraccatoInstrumental> native-instrumental;
     in-out property <int> native-active-line: -1;
     in-out property <float> native-scroll-position;
@@ -1165,7 +1173,9 @@ export component MainWindow inherits Window {
             x: root.navigation-capture && root.navigation-capture-target ? 0px : self.warming ? content.width - 1px : root.player-motion-x * 1px;
             y: root.navigation-capture && root.navigation-capture-target ? 0px : self.warming ? 0px : root.player-motion-y * 1px; width: 100%; height: 100%;
             opacity: root.navigation-capture && root.navigation-capture-target ? 1 : self.warming ? 0.003922 : root.player-reveal * (1 - root.navigation-blend);
-            cache-rendering-hint: true;
+            // Lyrics change each tick: a permanent full-page cache is redrawn
+            // anyway. Keep it only for camera composition and offscreen warming.
+            cache-rendering-hint: root.page-moving || self.warming;
             background: root.mobile && !root.navigation-capture ? Tokens.neutral-50 : transparent;
             border-radius: root.mobile ? 28px : 0px;
             clip: true;
@@ -1609,6 +1619,10 @@ export component MainWindow inherits Window {
                     if root.player-tab == "lyrics" && root.lyric-lines.length > 0 && root.native-lyrics: NativeLyrics {
                         vertical-stretch: 1;
                         lines: root.native-lyric-lines;
+                        focus-values: root.native-focus-values;
+                        render-lines: root.native-render-lines;
+                        render-start: root.native-render-start; render-end: root.native-render-end;
+                        render-top: root.native-render-top; render-bottom: root.native-render-bottom;
                         instrumental-frames: root.native-instrumental;
                         active-line: root.native-active-line;
                         scroll-position: root.native-scroll-position;

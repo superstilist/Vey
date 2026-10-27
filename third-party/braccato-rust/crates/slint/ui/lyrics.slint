@@ -41,6 +41,7 @@ export struct LyricWord {
 }
 
 export struct BraccatoRow {
+    rendered: bool,
     text: string,
     active: bool,
     secondary: bool,
@@ -575,6 +576,15 @@ component LyricWordView inherits Rectangle {
 }
 
 export component LyricsView inherits Rectangle {
+    // Optional host window: omitted rows retain their exact height as padding.
+    in property <int> render-start: 0;
+    in property <int> render-end: -1;
+    in property <length> render-top: 0px;
+    in property <length> render-bottom: 0px;
+    // Animated focus floats must not invalidate the row's word/font model.
+    in property <[float]> focus-values;
+    in property <bool> render-windowed: false;
+    in property <[BraccatoRow]> render-lines;
     in property <[BraccatoRow]> lines;
     in property <InstrumentalFrames> instrumental-frames;
     in property <string> layout: "scroll";
@@ -794,9 +804,10 @@ export component LyricsView inherits Rectangle {
             spacing: 0px;
             padding-left: root.scroll-padding;
             padding-right: root.scroll-padding;
-            padding-top: root.synchronized ? max(root.scroll-padding, viewport.height * root.target-scroll-pos-ratio - root.lyric-size * root.line-spacing / 2) : root.scroll-padding;
-            padding-bottom: root.synchronized ? max(root.scroll-padding, viewport.height * (1 - root.target-scroll-pos-ratio) - root.lyric-size * root.line-spacing / 2) : root.scroll-padding;
-            for line[index] in lines: Rectangle {
+            padding-top: root.render-top + (root.synchronized ? max(root.scroll-padding, viewport.height * root.target-scroll-pos-ratio - root.lyric-size * root.line-spacing / 2) : root.scroll-padding);
+            padding-bottom: root.render-bottom + (root.synchronized ? max(root.scroll-padding, viewport.height * (1 - root.target-scroll-pos-ratio) - root.lyric-size * root.line-spacing / 2) : root.scroll-padding);
+            for line[offset] in (root.render-windowed ? root.render-lines : root.lines): Rectangle {
+                private property <int> index: root.render-start + offset;
                 private property <length> before: index == 0 || root.lines[index - 1].source-index != line.source-index ? root.line-padding : 0px;
                 private property <length> after: index == root.lines.length - 1 || root.lines[index + 1].source-index != line.source-index ? root.line-padding : 0px;
                 private property <bool> paint-row: self.visible
@@ -812,9 +823,9 @@ export component LyricsView inherits Rectangle {
                     : (line.active || !root.synchronized || root.active-line < 0 || line.source-index == root.lines[root.active-line].source-index ? 1.0 : (index == root.active-line - 1 || index == root.active-line + 1 ? 0.64 : 0.46));
                 animate focus-opacity { duration: root.transition-ms * 1ms; easing: ease-in-out; }
                 private property <bool> sustain-blur: (root.sustain || root.lucid-focus || root.inactive-blur-px > 0) && !line.active && !line.instrumental && root.follow-playback && root.active-line >= 0 && line.sustain-distance > 0 && (!root.sustain || line.sustain-distance <= 4) && line.sustain-blurred.width > 0;
-                private property <float> blur-mix: root.external-focus-mix ? min(1,max(0,line.focus-mix)) : (self.sustain-blur ? 1 : 0);
+                private property <float> blur-mix: root.external-focus-mix ? min(1,max(0,root.focus-values.length == root.lines.length ? root.focus-values[self.index] : line.focus-mix)) : (self.sustain-blur ? 1 : 0);
                 // Complementary, co-located paint only while focus is changing.
-                // At rest the lazy body still creates just one surface.
+                // Retain nearby sharp delegates through the focus handoff.
                 private property <bool> retained-focus: root.external-focus-mix && root.follow-playback && root.active-line >= 0 && root.inactive-blur-px > 0;
                 private property <float> row-scale: self.retained-focus
                     ? root.active-scale + (root.inactive-scale - root.active-scale) * self.blur-mix
@@ -837,7 +848,7 @@ export component LyricsView inherits Rectangle {
                     colorize: root.muted-color;
                     opacity: parent.blur-mix;
                 }
-                if self.paint-row && self.blur-mix < 0.999: HorizontalLayout {
+                if self.paint-row: HorizontalLayout {
                     opacity: 1 - parent.blur-mix;
                     padding-top: parent.before;
                     padding-bottom: parent.after;

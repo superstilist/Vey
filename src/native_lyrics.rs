@@ -403,6 +403,7 @@ pub fn install(w: &MainWindow) {
     let mut key = (0u32, 0u32, 0, false, false, 0u64);
     let mut style_key = w.get_lyric_style();
     let mut rows = ModelRc::<BraccatoRow>::default();
+    let mut paint_band = 0..0;
     let mut offsets = vec![];
     let mut prepared = vec![];
     let mut word_paint = WordPaint::default();
@@ -416,6 +417,7 @@ pub fn install(w: &MainWindow) {
     let mut stage_selection = None;
     let mut roles = vec![];
     let mut focus = FocusPaint::default();
+    let mut focus_values = ModelRc::<f32>::default();
     let mut last_ms = -1;
     let mut snap_until = 0.;
     let mut passive = PassiveScroll::default();
@@ -424,6 +426,7 @@ pub fn install(w: &MainWindow) {
     let mut last_scroll_visual = None;
     let owner: Rc<RefCell<Option<slint::Timer>>> = Rc::new(RefCell::new(None));
     let keep = owner.clone();
+    let trace = std::env::var_os("VEY_TRACE_LYRIC_FRAMES").is_some();
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
@@ -440,6 +443,7 @@ pub fn install(w: &MainWindow) {
                 return;
             }
             let now = origin.elapsed().as_secs_f64() * 1000.;
+            let update_started = trace.then(web_time::Instant::now);
             let playing = w.get_player_state() == "playing";
             clock.sample(w.get_position() as f64, now, playing, w.get_rate() as f64);
             let current = w.get_lyric_lines();
@@ -509,8 +513,16 @@ pub fn install(w: &MainWindow) {
                     .iter()
                     .map(|r| vec![false; r.parts.row_count()])
                     .collect::<Vec<_>>();
+                focus_values = model(vec![0.; new_rows.len()]);
+                w.set_native_focus_values(focus_values.clone());
                 rows = model(new_rows);
+                paint_band = 0..0;
+                w.set_native_render_lines(ModelRc::new(slint::FilterModel::new(
+                    rows.clone(),
+                    |row| row.rendered,
+                )));
                 follow = FollowIndex::new(&rows, lyrics.len());
+                follow.set_geometry(&new_offsets, size, style.line_spacing);
                 focus.reset();
                 word_paint.reset();
                 previous_active.clear();
@@ -524,6 +536,14 @@ pub fn install(w: &MainWindow) {
                     passive = PassiveScroll::default();
                 }
                 last_ms = -1;
+                if let Some(started) = update_started {
+                    eprintln!(
+                        "lyric layout: {:.2}ms, {} rows, width={}",
+                        started.elapsed().as_secs_f64() * 1000.,
+                        rows.row_count(),
+                        w.get_lyrics_widget_width()
+                    );
+                }
             }
             timeline.active_into(ms, &mut active);
             let anchor = timeline.anchor(ms, &active);
@@ -615,6 +635,42 @@ pub fn install(w: &MainWindow) {
             } else if anchor.is_none() {
                 w.set_native_active_line(-1);
                 w.set_native_scroll_position(0.);
+            }
+            // A snap uses its destination immediately; otherwise the first
+            // navigation snapshot could capture the old, now-empty row band.
+            let paint_y = if now < snap_until && !manual && w.get_native_active_line() >= 0 {
+                -w.get_native_scroll_position().max(0.)
+            } else {
+                w.get_native_content_y()
+            };
+            // Full-model delegates made every animated frame visit an entire
+            // song. Keep the viewport band and exact omitted-row spacers only.
+            let window = follow.paint_window(
+                paint_y,
+                w.get_lyrics_viewport_height(),
+                size,
+                style.line_spacing,
+                w.get_lyrics_scroll_ratio(),
+            );
+            w.set_native_render_start(window.0 as i32);
+            w.set_native_render_end(window.1 as i32);
+            w.set_native_render_top(window.2);
+            w.set_native_render_bottom(window.3);
+            let next_band = window.0..window.1;
+            if paint_band != next_band {
+                // Row add/remove notifications retain all overlapping delegates;
+                // moving an integer-indexed repeater would rebind every word.
+                for i in paint_band
+                    .clone()
+                    .filter(|i| !next_band.contains(i))
+                    .chain(next_band.clone().filter(|i| !paint_band.contains(i)))
+                {
+                    if let Some(mut row) = rows.row_data(i) {
+                        row.rendered = next_band.contains(&i);
+                        rows.set_row_data(i, row);
+                    }
+                }
+                paint_band = next_band;
             }
             if ms != last_ms {
                 let stage = if w.get_lyrics_stage() && w.get_lyrics_timed() {
@@ -746,6 +802,7 @@ pub fn install(w: &MainWindow) {
             }
             focus.animate(
                 &rows,
+                &focus_values,
                 now,
                 w.get_lyrics_reduced_motion() || now < snap_until,
             );
@@ -768,6 +825,12 @@ pub fn install(w: &MainWindow) {
                 );
                 if !manual {
                     w.set_native_passive_progress(progress);
+                }
+            }
+            if let Some(started) = update_started {
+                let elapsed = started.elapsed().as_secs_f64() * 1000.;
+                if elapsed > 8. {
+                    eprintln!("lyric update: {elapsed:.2}ms at {ms}, rebuilt={rebuilt}");
                 }
             }
         },

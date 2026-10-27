@@ -182,7 +182,36 @@ fn data(family: &str, weight: u16) -> Option<std::sync::Arc<Vec<u8>>> {
         .cloned()
         .or_else(|| Some(std::sync::Arc::new(bytes.to_vec())))
 }
+#[derive(Default)]
+struct Metrics {
+    revision: u64,
+    families: std::collections::HashMap<(String, String), String>,
+    widths: std::collections::HashMap<(String, String, u32, u16), f32>,
+}
+thread_local! {static METRICS:std::cell::RefCell<Metrics>=Default::default();}
+fn with_metrics<T>(f: impl FnOnce(&mut Metrics) -> T) -> T {
+    METRICS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let next = revision();
+        if cache.revision != next || cache.families.len() > 4096 || cache.widths.len() > 4096 {
+            *cache = Metrics {
+                revision: next,
+                ..Default::default()
+            };
+        }
+        f(&mut cache)
+    })
+}
 pub fn family_for(text: &str, preferred: &str) -> String {
+    let key = (text.to_owned(), preferred.to_owned());
+    if let Some(family) = with_metrics(|cache| cache.families.get(&key).cloned()) {
+        return family;
+    }
+    let family = family_uncached(text, preferred);
+    with_metrics(|cache| cache.families.insert(key, family.clone()));
+    family
+}
+fn family_uncached(text: &str, preferred: &str) -> String {
     if data(preferred, 700).is_some_and(|data| {
         Face::parse(&data, 0).is_ok_and(|f| {
             text.chars()
@@ -195,6 +224,20 @@ pub fn family_for(text: &str, preferred: &str) -> String {
     }
 }
 pub fn measure_with(text: &str, size: f32, preferred: &str, weight: u16) -> f32 {
+    let key = (
+        text.to_owned(),
+        preferred.to_owned(),
+        size.to_bits(),
+        weight,
+    );
+    if let Some(width) = with_metrics(|cache| cache.widths.get(&key).copied()) {
+        return width;
+    }
+    let width = measure_uncached(text, size, preferred, weight);
+    with_metrics(|cache| cache.widths.insert(key, width));
+    width
+}
+fn measure_uncached(text: &str, size: f32, preferred: &str, weight: u16) -> f32 {
     let family = family_for(text, preferred);
     let Some(bytes) = data(&family, weight) else {
         return measure(text, size);
@@ -249,6 +292,22 @@ pub fn padding(size: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retained_metrics_preserve_font_weight_script_and_revision() {
+        for text in ["word\u{a0}", "Ще й забулися", "幅の異なる文字"] {
+            for weight in [500, 700] {
+                let expected = measure_uncached(text, 32., "Satoshi", weight);
+                assert_eq!(measure_with(text, 32., "Satoshi", weight), expected);
+                assert_eq!(measure_with(text, 32., "Satoshi", weight), expected);
+            }
+        }
+        with_metrics(|cache| cache.revision = u64::MAX);
+        assert_eq!(
+            measure_with("revision", 48., "Roboto", 700),
+            measure_uncached("revision", 48., "Roboto", 700)
+        );
+        assert_eq!(with_metrics(|cache| cache.revision), revision());
+    }
     #[test]
     fn native_paint_and_text_use_fonts_covering_the_actual_script() {
         assert_eq!(family("There's a snake"), "Satoshi");

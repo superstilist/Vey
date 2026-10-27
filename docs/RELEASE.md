@@ -1,4 +1,20 @@
-# Vey 0.1.25
+# Vey 0.1.26
+
+This build targets pauses when opening the player and handing off lyric lines.
+Native lyrics retain only a viewport band of row delegates with exact omitted
+scroll height, keep nearby text ready through focus changes and cache repeated
+font measurements. Focus animation updates separate float cells instead of
+rewriting rows containing word/font models. The live player drops its permanent
+full-page render cache outside navigation. Native navigation blur preparation runs on a bounded worker
+while camera travel proceeds, with stale-result rejection on retargets.
+
+The earlier 0.1.25 optimization below reduced steady word-model reads; that
+measurement did not cover cold entry or dense line transitions.
+
+On the local Windows release stress fixture, median p95 event-loop intervals
+fell from about 61ms to 31ms. First-entry maximum intervals were 64–81ms across
+three final runs, compared with 803ms before. These are workload-specific
+measurements; source cue timing and lyric effects remain unchanged.
 
 Native lyric updates now revisit word models only at cue and paint-release
 deadlines, with retained preparation windows instead of per-frame word reads.

@@ -700,3 +700,81 @@ EXE SHA-256: `990d24fa34e8177bd2a92c1d92403d9762e0e853da8b5d088a89fceca4da39d1`.
 Local ZIP: `dist/Vey-0.1.25-windows-x64.zip`, SHA-256
 `6700c8d4ae7e7179fa24ca19b58e8406a5c5870a44121b2c40a589159fdd4ecc`.
 This is a local Windows build; no tag or cross-platform publication was performed.
+
+## 0.1.26 player-entry and lyric handoff stalls, 2026-10-27
+
+The 0.1.25 read-count benchmark covered warm playback, not cold player entry
+or dense wrapped-line handoffs. `native_lyric_stutter` now opens the player,
+plays 300 source lines / 2400 explicit word cues (one source line per second),
+leaves and reopens it. It records 16ms timer intervals without snapshot
+readback, while normal production navigation captures remain enabled. The
+baseline release recorded an 802.68ms maximum interval on first entry and
+182.03ms on reopening. These are local event-loop measurements, not FPS.
+
+The host retains exact full-document geometry but instantiates only an
+overscanned viewport band. `FilterModel` adds/removes boundary rows using the
+presentation-only `rendered` flag, keeping overlapping delegates and their word
+models alive. Omitted heights become top/bottom spacers, preserving actual
+wheel scrolling, source-index seeks, wrapping and the final scroll extent.
+Nearby sharp bodies stay mounted through focus crossfades. Snaps select their
+destination band before the first navigation capture, avoiding an empty entry
+frame. The stutter fixture asserts that the snapped cue is already painted.
+
+Focus updates use a separate float model, avoiding full word-bearing row
+invalidations on every blend frame. The legacy row `focus-mix` API remains
+available to standalone callers. Font family/width measurements have bounded
+thread-local caches keyed by text, family, size and weight, with
+font-revision invalidation. Measurement math is unchanged and compared against
+the uncached implementation for Latin, Cyrillic and Japanese text.
+
+The live player no longer rerenders a permanent full-page cache on every lyric
+tick. Native navigation performs its readbacks once, then a single worker
+crops/downsamples/blurs the raw pixels while the camera continues. Busy workers
+prevent queued retarget captures; obsolete/late/minimized results are discarded.
+Ready blur fades in over 80ms. A late result uses live content instead of holding
+the camera. WASM retains the original synchronous snapshot fallback and never
+spawns the native worker.
+
+Final Windows GPU release comparison (same dense fixture, 1440x900): the
+baseline is one recorded run; final values are medians across three fresh
+process runs. Raw reports are `stutter-release-before.json` and
+`stutter-final-release-{1,2,3}.json` under `target/native-lyrics-check/`.
+
+| Phase | Baseline p95 / max | Final median p95 / max |
+| --- | --- | --- |
+| First player entry + playback | 60.94 / 802.68 ms | 31.22 / 70.71 ms |
+| Return Home | 47.95 / 150.62 ms | 21.56 / 101.08 ms |
+| Reopen player + playback | 59.88 / 182.03 ms | 32.30 / 98.95 ms |
+
+First-entry maxima across the final runs were 63.69 / 70.71 / 80.70ms;
+reopening maxima were 117.37 / 74.23 / 98.95ms. Only 21 row delegates were
+needed for the 900 wrapped rows. Every run verified the bounded transparent
+768x485 blur texture. This removes the large layout pause and substantially
+reduces handoff work; it is not a zero-spike or constant-FPS guarantee.
+Synchronous GPU readback remains for the optional camera blur. A separate
+`final-no-blur` run measured first/reopen maxima 56.27 / 63.92ms, with p95
+31.90 / 32.99ms. Timed fill, word wobble and lyric glow stay enabled there.
+
+All 25 native lyric unit tests and 10 copied Slint tests passed. GPU/software
+fixtures passed cue deadlines, wrapped continuations, focus/unhighlight pixels,
+long-text/mobile/stage bounds, real wheel/resume and spatial fill. GPU short-cue
+motion coverage also passed. The snap fixture verifies the destination band on
+entry. Final imported-font/translucent-theme checks passed on both renderers,
+with legacy/precolored glow differences at most 2/255 GPU and 1/255 software.
+Their unchanged-glyph comparison allows the observed one-level GPU composition
+rounding; unsung glow above that tolerance remained zero. The debug navigation
+fixture verified live fallback, retargeting, the blur switch, reduced motion and
+clipping; its worker was too late to present blur, which the release fixture
+verified separately. WASM compilation, formatting and whitespace checks passed.
+
+The final optimized Windows package passed isolated GPU/software
+`--screenshots` runs, each exiting 0 with 18 frames. GPU desktop/mobile and
+software desktop frames under `target/release-0.1.26-{gpu,software}-ui-check/`
+were inspected. The packaged EXE matches `target/release/vey.exe` byte-for-byte.
+Browser runtime, physical mobile devices and real audio playback were not part
+of these fixture checks.
+
+EXE SHA-256: `50f0f986c57aec8f3a1f7a2c8c323057037ef491d1e00b0dc5af72285d58d16b`.
+Local ZIP: `dist/Vey-0.1.26-windows-x64.zip`, SHA-256
+`2c62b378648371a5b5fa9ea37b9b4e9f570ec732cc4fa69d02f7182e13f3e164`.
+This is a local Windows build; no tag or cross-platform publication was performed.

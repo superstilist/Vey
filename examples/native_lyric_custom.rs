@@ -99,7 +99,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for y in ((cy-40.*scale).max(0.) as u32)..((cy+40.*scale) as u32).min(on.2) {
                     for x in ((left+width*from) as u32)..((left+width*to) as u32).min(on.1) {
                         let i=((y*on.1+x)*4) as usize;
-                        if on.0[i..i+3]!=before.0[i..i+3] {changed+=1;}
+                        // Direct GPU composition can differ by one rounding
+                        // level even in unchanged glyphs; actual glow exceeds it.
+                        if on.0[i..i+3].iter().zip(&before.0[i..i+3]).any(|(a,b)|a.abs_diff(*b)>1) {changed+=1;}
                     }
                 }changed
             };

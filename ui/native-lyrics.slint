@@ -17,6 +17,12 @@ export struct LyricStyle {
 // Vey host bindings; the renderer itself is the copied Rust Braccato component.
 export component NativeLyrics inherits Rectangle {
     in property <[BraccatoRow]> lines;
+    in property <[float]> focus-values;
+    in property <[BraccatoRow]> render-lines;
+    in property <int> render-start: 0;
+    in property <int> render-end: -1;
+    in property <float> render-top: 0;
+    in property <float> render-bottom: 0;
     in property <InstrumentalFrames> instrumental-frames;
     in property <int> active-line;
     in property <float> scroll-position;
@@ -51,6 +57,11 @@ export component NativeLyrics inherits Rectangle {
         view := LyricsView {
             vertical-stretch: 1;
             lines: root.lines;
+            focus-values: root.focus-values;
+            render-lines: root.render-lines;
+            render-windowed: true;
+            render-start: root.render-start; render-end: root.render-end;
+            render-top: root.render-top * 1px; render-bottom: root.render-bottom * 1px;
             instrumental-frames: root.instrumental-frames;
             background-color: transparent;
             foreground-color: root.active-color;

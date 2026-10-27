@@ -11,6 +11,8 @@ pub(crate) struct FollowIndex {
     row_types: Vec<u8>,
     word_events: Vec<(i64, usize)>,
     warm_windows: Vec<Vec<Option<(i64, i64)>>>,
+    row_tops: Vec<f32>,
+    extent: f32,
 }
 impl FollowIndex {
     // Scroll ahead independently of the sung source/word. This never changes
@@ -29,6 +31,8 @@ impl FollowIndex {
             row_types: Vec::with_capacity(rows.row_count()),
             word_events: Vec::new(),
             warm_windows: vec![vec![]; rows.row_count()],
+            row_tops: vec![],
+            extent: 0.,
         };
         for visual in 0..rows.row_count() {
             let Some(row) = rows.row_data(visual) else {
@@ -98,6 +102,66 @@ impl FollowIndex {
         index.word_events.sort_unstable();
         index.word_events.dedup();
         index
+    }
+    pub fn set_geometry(&mut self, offsets: &[f32], size: f32, spacing: f32) {
+        let padding = crate::native_lyric_fonts::padding(size);
+        let mut first = vec![false; offsets.len()];
+        for source in &self.sources {
+            if source.start < source.end {
+                first[source.start] = true;
+            }
+        }
+        self.row_tops = offsets
+            .iter()
+            .enumerate()
+            .map(|(i, y)| y - if first[i] { padding } else { 0. })
+            .collect();
+        self.extent = offsets.last().map_or(0., |last| {
+            last + size
+                * match self.row_types.last() {
+                    Some(2) => 0.7,
+                    Some(1) => 0.95,
+                    _ => spacing,
+                }
+                + padding
+        });
+    }
+    /// Keep exact full-document scroll geometry while instantiating only a
+    /// viewport band. Overscan warms delegates before a line reaches the camera.
+    pub fn paint_window(
+        &self,
+        y: f32,
+        viewport: f32,
+        size: f32,
+        spacing: f32,
+        ratio: f32,
+    ) -> (usize, usize, f32, f32) {
+        if self.row_tops.is_empty() {
+            return (0, 0, 0., 0.);
+        }
+        let padding =
+            (viewport * ratio - size * spacing / 2.).max(if size >= 40. { 36. } else { 24. });
+        let top = (-y - padding).max(0.);
+        let overscan = viewport.max(size * 8.);
+        let first = self
+            .row_tops
+            .partition_point(|at| *at < top - overscan)
+            .saturating_sub(1);
+        let end = self
+            .row_tops
+            .partition_point(|at| *at <= top + viewport + overscan)
+            .min(self.row_tops.len());
+        (
+            first,
+            end,
+            self.row_tops[first],
+            self.extent
+                - if end < self.row_tops.len() {
+                    self.row_tops[end]
+                } else {
+                    self.extent
+                },
+        )
     }
     /// A continuous fill reads the clock in Slint. Rust only needs to revisit
     /// word models at activity/asset deadlines, not once per rendered frame.
@@ -205,6 +269,30 @@ mod tests {
     use crate::BraccatoWord;
     use slint::VecModel;
     use std::rc::Rc;
+    #[test]
+    fn paint_window_retains_full_extent_and_covers_a_middle_seek() {
+        let rows: ModelRc<BraccatoRow> = Rc::new(VecModel::from(
+            (0..300)
+                .map(|i| BraccatoRow {
+                    source_index: i,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into();
+        let offsets = (0..300).map(|i| 32. + i as f32 * 136.).collect::<Vec<_>>();
+        let mut index = FollowIndex::new(&rows, 300);
+        index.set_geometry(&offsets, 48., 1.5);
+        assert_eq!(index.extent, 300. * 136.);
+        let (first, end, top, bottom) = index.paint_window(-13600., 600., 48., 1.5, 0.35);
+        assert!(first > 0 && end < 300 && end - first < 20);
+        assert!(top < 13600. && index.row_tops[end] > 13600. + 600.);
+        assert_eq!(
+            top + (index.row_tops[end] - index.row_tops[first]) + bottom,
+            index.extent
+        );
+        assert_eq!(index.paint_window(0., 600., 48., 1.5, 0.35).0, 0);
+    }
     #[test]
     fn word_events_cover_exact_cues_and_strict_paint_release_without_frame_scans() {
         let rows: ModelRc<BraccatoRow> = Rc::new(VecModel::from(vec![BraccatoRow {

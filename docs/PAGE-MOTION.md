@@ -46,6 +46,12 @@ offscreen once per journey, excluding the ambient backdrop. Each texture is
 downsampled to at most 768 by 640 pixels and blurred once. The camera composites
 these textures through mid-travel and restores live content at the destination;
 there is no per-frame readback or CPU blur, and only two textures are retained.
+On native targets, a bounded worker performs the downsample/blur after readback
+while camera travel continues. Ready textures fade in over 80ms; obsolete or
+late results are discarded. Rapid retargets use live content while the worker
+is busy rather than queueing more readbacks. WASM keeps its existing fallback.
+The live player surface uses a full-page render cache only during travel and
+offscreen warming; ordinary lyric ticks draw without rebuilding that cache.
 Unsupported snapshot renderers retain live content. Native Rust Braccato is
 part of the captured Slint content. External browser lyrics
 blur by 5.5px at mid-travel. Blur can

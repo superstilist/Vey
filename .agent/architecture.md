@@ -187,9 +187,10 @@ independently and instantiate glyph bodies only during their motion window.
 Only viewport-adjacent row bodies instantiate word views. Focus crossfades
 aligned sharp ink/cached blur for 180ms in and 280ms out, sharing one row
 scale/origin. Settled rows retain one paint body; reduced motion switches immediately.
-`FocusPaint` retains blend clocks outside model delegates and updates nearby
-`focus-mix` values only while changing, so ordinary row updates cannot reset
-a handoff. Seeks snap the blend together with the camera.
+`FocusPaint` retains blend clocks outside model delegates and updates a separate
+float model only while changing. Animated focus does not rewrite word-bearing
+rows or invalidate their font/layout bindings. Seeks snap the blend together
+with the camera; manual mode clears retained focus floats.
 Multiword timed cues remain one shaping run until wrapping; normalized cue
 offset/span carries the same fill edge across wrapped fragments without retiming.
 Native fill is bounded by the supplied cue end; each wrapped fragment completes
@@ -210,6 +211,12 @@ spatial mask when native text gradients are unavailable. Both paths use one
 solid text run at empty/completed coverage. Reduced motion retains timed fill.
 Partially filled GPU words compose ink locally before word/line transforms;
 the padded surface is disabled at rest or complete coverage.
+The native host windows row delegates around the actual viewport, retaining
+exact omitted-row height as top/bottom spacers. A filtered notifying model
+adds/removes boundary rows and preserves overlapping delegates. Nearby sharp bodies survive
+focus changes. Font family/width measurements use revision-aware bounded
+thread-local caches; imported fonts invalidate them. The player page caches its
+full surface only during camera travel/warming, not every lyric playback tick.
 Explicit backing phrase intervals survive display conversion as single cues;
 untimed phrases retain line sync and never acquire estimated word timings.
 Glow is clipped at the actual fill edge. Appearance CSS and selected font family
@@ -237,8 +244,11 @@ native lyric component shares the Slint surface and artwork without a child HWND
 Desktop page surfaces stay mounted in a compass grid; one interruptible camera
 moves content and lyric host together. Mobile Player is a retained-page overlay.
 Reduced motion bypasses travel. Details: `docs/PAGE-MOTION.md`.
-`src/navigation_fx.rs` captures two bounded transparent page textures per journey
-for blur; `ui/navigation-streaks.slint` follows the same camera vector. The shared
+`src/navigation_fx.rs` captures two transparent page textures per native journey;
+one bounded worker downsamples/blurs their pixels while the camera proceeds.
+Late/obsolete results are rejected and rapid retargets do not queue more captures.
+WASM retains its existing snapshot fallback. `ui/navigation-streaks.slint` follows
+the same camera vector. The shared
 stage radius drives Slint, DOM and Windows clipping. No snapshot/blur runs per frame.
 
 Avoid duplicate lyric rebuilds, repeated theme compilation, repeated geometry

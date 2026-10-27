@@ -74,6 +74,7 @@ pub fn lyric_rows(
                     .collect()
             });
         rows.push(LyricRow {
+            rendered: false,
             text: lyric.words.clone().into(),
             active: is_active,
             secondary: false,
@@ -242,6 +243,7 @@ fn secondary_row(
     stage_role: &str,
 ) -> LyricRow {
     LyricRow {
+        rendered: false,
         text: text.to_owned().into(),
         active,
         secondary: true,
