@@ -1,4 +1,13 @@
-# Vey 0.1.23
+# Vey 0.1.24
+
+Native lyrics now select the fill path from the renderer actually created.
+The software renderer uses a spatial mask instead of treating a text gradient
+as one color across the whole word. GPU rendering keeps its single-run gradient.
+Reduced motion retains the timed fill while disabling decorative motion.
+Empty/completed words use one solid text run on both renderers.
+GPU word fill is composed locally before wobble/line scaling, so the sweep
+stays attached to the moving word. The temporary surface is used only while
+a partially filled word is transformed; glyph overhang remains padded.
 
 Native fill now uses the same spatial sweep for whole text and optional letter
 waves, including variable-width glyphs and wrapped fragments. Empty/completed

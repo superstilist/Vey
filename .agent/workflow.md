@@ -36,6 +36,7 @@ Run commands from the project root in PowerShell unless stated otherwise.
 | Focus crossfade pixels, no additive duplicate and reduced motion | `cargo run --locked --example native_lyric_handoff` |
 | Whole-word/syllable motion, unsung-word pixels and independent letter waves | `cargo run --locked --example native_lyric_wobble` |
 | Continuous repeated-word/backing fill with no backwards ink | `cargo run --locked --example native_fill_continuity` |
+| Spatial fill inside glyphs, Latin/Cyrillic and reduced motion | `cargo run --locked --example native_fill_spatial`; add `-- --motion` for short cues with wobble/prefix; repeat with `$env:SLINT_BACKEND='winit-software'` |
 | Active/expired glow, atlas feather and letter/whole-run fill conformance | `cargo run --locked --example native_fill_effects` |
 | Continuous camera positions, rapid retarget and no overshoot | `cargo run --locked --example native_lyric_motion` |
 | Imported fonts, custom themes and filled-only glow pixels | `cargo run --locked --example native_lyric_custom` |
@@ -51,6 +52,9 @@ Run commands from the project root in PowerShell unless stated otherwise.
 | Live lyric auth check | `cargo run --bin vey -- --lyrics-auth-check` |
 | Android APK | `./scripts/build-android.ps1` (setup: `docs/ANDROID-BUILD.md`) |
 | Windows packaging | `./scripts/build-release.ps1` (see `docs/RELEASE.md`) |
+
+Clear `SLINT_BACKEND` after an explicit software-renderer check so later runs
+use the normal backend selection.
 
 Widget commands run in `tools/braccato-widget/`: `npm ci` for dependency setup,
 `npm run build` to regenerate `web/braccato/`, `npm run serve` for the fixture

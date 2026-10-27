@@ -1,4 +1,6 @@
 //! Native custom font/theme and fill-only glow regression, isolated from user data.
+#[path = "support/native_window.rs"]
+mod native_window;
 use playervf::{
     braccato,
     lyrics::{self, LyricsAlternative},
@@ -69,6 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated,Duration::from_millis(900),move||{
         let w=weak.upgrade().unwrap();let phase=tick.get();
+        if !native_window::ready(w.window()) { return; }
         if phase==0 {
             assert_eq!(w.get_native_lyric_lines().row_data(0).unwrap().font_family,"Roboto");
             assert!(w.get_native_lyric_lines().row_data(0).unwrap().parts.row_count()>0,"fixture needs real word timing");

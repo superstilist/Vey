@@ -352,6 +352,8 @@ export component MainWindow inherits Window {
     in-out property <int> provider-index;
     in-out property <string> lyrics-provider: "auto";
     in-out property <float> lyric-size: 48;
+    // Set once from the actual native renderer, including automatic GPU fallback.
+    in-out property <bool> native-text-gradients: true;
     in-out property <color> lyric-active: Tokens.ink-100;
     in-out property <color> lyric-inactive: Tokens.ink-300;
     in-out property <int> lyric-weight: 700;
@@ -1624,6 +1626,7 @@ export component MainWindow inherits Window {
                         inactive-color: root.lyric-inactive;
                         weight: root.lyric-weight;
                         style: root.lyric-style;
+                        native-text-gradients: root.native-text-gradients;
                         scroll-duration: root.lyrics-scroll-duration-ms;
                         scroll-snap: root.native-scroll-snap;
                         scroll-ratio: root.lyrics-scroll-ratio;

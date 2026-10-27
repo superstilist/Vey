@@ -577,3 +577,70 @@ EXE SHA-256: `d262556aef2391008e0ade63efa166dde6822d5aaee694bf11e85445dd7b4e32`.
 Local ZIP: `dist/Vey-0.1.23-windows-x64.zip`, SHA-256
 `0ef256d2c739d7d4300ef16e99efa47104f1cc8a713a4f082ba4c72cd2670e2f`.
 This is a local Windows build; no tag or cross-platform publication was performed.
+
+## 0.1.24 renderer-aware spatial fill, 2026-10-27
+
+The native host left `native-text-gradients` enabled for every backend. Slint's
+software text renderer uses a single color from a gradient brush, causing all
+letters to brighten together. Explicit `winit-software` reproduced this with
+381 prematurely bright future-side glyph cores at 25% of a single `H` cue.
+GPU-only monotonicity checks did not cover this failure.
+
+Native installation now selects the path from the renderer actually created,
+using rendering-notifier support once. The bundled FemtoVG renderer supports
+it; software returns `Unsupported`. GPU retains its native text gradient;
+software uses the existing fixed-column spatial mask. Both paths use one solid
+text run at empty/completed coverage, so future and finished words do not
+instantiate the software mask columns.
+
+Reduced motion previously disabled `highlight-swipe`, turning supplied word
+cues into instant whole-word highlights. It now keeps timed fill while still
+disabling wobble, letter waves, glow and animated focus/scrolling. Explicit
+theme swipe disable and genuine untimed/line-sync content retain their existing
+behavior; no cue times are inferred or changed.
+
+`native_fill_spatial` checks single and repeated wide Latin/Cyrillic glyphs plus
+parenthesized backing-style text. It compares actual eroded glyph interiors at
+25%, 50% and 75% with before/full frames, accounting for font bearings/advance.
+The matrix includes ordinary/reduced motion on GPU and software.
+`--motion` adds a preceding word and 400ms cues with normal word wobble. This
+exposed a second GPU defect: a partially scaled word lost its sung-side ink
+(374/374 checked cores on the single-H midpoint). Whole-run ink now resolves
+into a padded local surface before the parent transform, matching the existing
+letter-wave composition strategy. The surface is limited to transformed,
+partially filled ink; resting/completed words keep the direct text path.
+The fixture waits for the native clock to sample each paused seek before
+capturing. On Windows it restores its own minimized window without activation,
+since normal native playback deliberately suspends work while minimized.
+
+All 48 partial-fill comparisons passed across the two renderers (80 snapshots
+including before/full references), with no incorrectly lit future-side or dim
+sung-side cores. The software continuity fixture recorded 7968 advancing pixel
+samples, zero backward pixels and visible advance in 37/40 intervals. All four
+software backing cases passed, including mobile wrapping and optional letters:
+premature-tail counts stayed zero (124/759 checked cores). The 15-phase GPU
+effect fixture and imported font/custom theme checks also passed; cue glow
+residual remained zero and variable-width fill error remained 0.37/255.
+The same 15-phase effect and imported-font fixtures passed on software too:
+active glow changed 2028 pixels, expired glow residual was zero, mixed-width
+fill error was 0.00/255 and radius-tile mean difference was 0.26/255. WASM
+compilation, formatting and diff whitespace checks passed.
+
+The added 400ms/prefix/wobble matrix passed another 48 partial-fill comparisons
+on GPU/software with reduced motion on/off. No future-side core lit early.
+Static cases retain exact sung-side assertions. Moving cases require a bright
+sung-side majority at midpoint, allowing translated glyph edges to leave their
+resting reference pixels. The previous GPU midpoint failure improved from
+374/374 missing sung cores to 50/374 at the moving single-H stem; repeated
+Latin/Cyrillic words had zero missing midpoint cores on GPU.
+
+The final optimized Windows build completed successfully. The packaged EXE
+passed isolated GPU/software `--screenshots` runs, each with exit code 0 and
+18 frames. GPU desktop/mobile and software desktop frames under
+`target/release-0.1.24-final-{gpu,software}-ui-check/docs/screenshots/` were
+inspected. The package matches `target/release/vey.exe` byte-for-byte.
+
+EXE SHA-256: `f84c24abcd6361c768a499ab12de9bec51d03a9a5f8a5b827425afe074416a1b`.
+Local ZIP: `dist/Vey-0.1.24-windows-x64.zip`, SHA-256
+`10a51279dff6b105884dc4efc8a32c330969176f122b61a39d328ff8ab534402`.
+This is a local Windows build; no tag or cross-platform publication was performed.

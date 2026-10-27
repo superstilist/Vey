@@ -81,6 +81,11 @@ Host adaptations (all other copied crate source is unchanged):
   completed ink use solid brushes. With `finish-fill-at-cue-end`, letter masks
   project the whole-run spatial ramp into each measured glyph, including its
   one-pixel feather, instead of mixing grapheme-count and measured-width clocks.
+  `LyricInk` uses one solid text body for empty/completed coverage on software
+  too. Vey detects the created renderer once and passes `native-text-gradients`
+  explicitly; software must use the existing fixed-column spatial mask.
+  Partially filled whole-word GPU ink uses a padded local surface during
+  wobble/line scaling, keeping gradient coordinates attached to its glyphs.
 - `crates/slint/src/glow.rs`: apply the requested variable-font weight when
   measuring mask bounds and sweep glyphs, matching the native text font instance.
 - Vey's `src/native_lyric_glyphs.rs` is based on demo/src/glyph_plans.rs, with

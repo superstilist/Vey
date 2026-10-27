@@ -157,8 +157,9 @@ component LyricInk inherits Rectangle {
     private property <color> right-ink: root.ink.mix(root.base-ink, root.reveal * min(1, max(0, (root.sweep-end - 1) / root.span)));
     private property <float> start-stop: min(1, max(0, root.sweep-start));
     private property <float> end-stop: min(1, max(0, root.sweep-end));
+    private property <bool> solid: root.reveal <= 0 || root.sweep-end <= 0 || root.sweep-start >= 1;
     // One native text run: no per-band scissor edges can cut through the glyphs.
-    if root.native-text-gradients: Text {
+    if root.native-text-gradients || root.solid: Text {
         width: root.width; height: root.height; text: root.text;
         // Avoid coincident gradient stops at complete/empty coverage. Native
         // backends should receive an unambiguous solid brush at those states.
@@ -175,7 +176,7 @@ component LyricInk inherits Rectangle {
     private property <length> ink-padding: ceil(root.font-size / 4px) * 1px;
     private property <length> cell-size: max(1, ceil((root.width + root.ink-padding * 2) / 256px)) * 1px;
     private property <int> cell-count: max(1, ceil((root.width + root.ink-padding * 2) / root.cell-size));
-    if !root.native-text-gradients: Rectangle {
+    if !root.native-text-gradients && !root.solid: Rectangle {
         width: root.width; height: root.height;
         for cell in root.cell-count: Rectangle {
         private property <float> edge-from: self.x / max(0.001px, root.width);
@@ -483,8 +484,17 @@ component LyricWordView inherits Rectangle {
         // Measurement only. Visible ink is shaped/painted once below.
         opacity: 0;
     }
-    if !root.lettered: LyricInk {
-            x: 0px; y: 0px;
+    if !root.lettered: Rectangle {
+        // Resolve the text gradient before the parent's word/line scale.
+        // Native glyph gradients otherwise drift under a non-unit transform.
+        // Padding preserves overhang; resting words retain a direct text run.
+        x: -root.font-size * 0.25; y: -root.font-size * 0.25;
+        width: root.width + root.font-size * 0.5;
+        height: root.height + root.font-size * 0.5;
+        cache-rendering-hint: root.native-text-gradients && root.reveal > 0 && !root.fill-complete
+            && (root.animated-line-scale != 1 || (root.wobble-enabled && root.wobble-phase < root.wobble-settle-offset));
+        LyricInk {
+            x: root.font-size * 0.25; y: root.font-size * 0.25;
             text: root.text;
             ink: root.active-color;
             base-ink: root.foreground-color;
@@ -501,6 +511,7 @@ component LyricWordView inherits Rectangle {
             font-weight: root.font-weight;
             width: word.preferred-width;
             height: word.preferred-height;
+        }
     }
     if root.lettered: Rectangle {
         x: 0px; y: 0px;

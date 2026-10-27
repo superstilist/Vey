@@ -1,4 +1,6 @@
 //! Reproduce stale halos and mismatched fill when letter motion returns to a shaped run.
+#[path = "support/native_window.rs"]
+mod native_window;
 use playervf::{LyricRow, MainWindow, WordRow};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
@@ -108,6 +110,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let timer = slint::Timer::default();
     let on_tick = move || {
         let w = weak.upgrade().unwrap();
+        if !native_window::ready(w.window()) {
+            return;
+        }
         let i = step.get();
         if i == 0 {
             frames.borrow_mut().push(capture(&w, "glow-off-active"));

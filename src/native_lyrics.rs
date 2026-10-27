@@ -334,6 +334,15 @@ fn plan_word_motion(parts: &mut [BraccatoWord], size: f32, weight: u16) {
 
 /// Install once per native window; the browser retains its upstream iframe.
 pub fn install(w: &MainWindow) {
+    // Software Text accepts a gradient brush but paints every glyph with its
+    // first color. Probe the actual renderer once, rather than relying on the
+    // requested backend name (which may have fallen back during creation).
+    // Native GPU renderers support rendering notifications; software does not.
+    let gradients = !matches!(
+        w.window().set_rendering_notifier(|_, _| {}),
+        Err(slint::SetRenderingNotifierError::Unsupported)
+    );
+    w.set_native_text_gradients(gradients);
     w.set_native_lyrics(true);
     w.set_lyrics_web_required(false);
     w.set_lyrics_web_ready(false);

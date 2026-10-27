@@ -34,6 +34,7 @@ export component NativeLyrics inherits Rectangle {
     in property <color> inactive-color;
     in property <int> weight;
     in property <LyricStyle> style;
+    in property <bool> native-text-gradients: true;
     in property <int> scroll-duration;
     in property <bool> scroll-snap;
     in property <float> scroll-ratio;
@@ -77,6 +78,7 @@ export component NativeLyrics inherits Rectangle {
             swipe-duration-ratio: root.style.swipe-duration;
             finish-fill-at-cue-end: true;
             cue-bounded-glow: true;
+            native-text-gradients: root.native-text-gradients;
             swipe-wave-em: 0;
             swipe-lead-ratio: root.style.swipe-lead;
             letter-wave-duration-ms: root.style.wave-duration;
@@ -106,7 +108,8 @@ export component NativeLyrics inherits Rectangle {
             wobble-settle-offset: 0.85;
             letter-wave: !root.reduced && root.richsync && root.style.wave;
             highlight-glow: !root.reduced && root.richsync && root.style.glow;
-            highlight-swipe: !root.reduced && root.richsync && root.style.swipe;
+            // Reduced motion removes transforms, not the cue's reading position.
+            highlight-swipe: root.richsync && root.style.swipe;
             highlight-fade: !root.reduced && root.style.fade;
             line-clicked(line) => {root.seek(line,-1);}
             word-clicked(line,part) => {root.seek(line,part);}

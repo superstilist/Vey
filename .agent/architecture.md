@@ -200,6 +200,11 @@ word-motion groups. Cached glow uses a solid tint and bounded source-texel
 feather bands. Scroll uses a soft-start/stop cubic curve. Highlight fade uses
 smoothstep without delaying cue fill. Reduced motion disables wave, animated
 scrolling and focus crossfade.
+Native installation checks renderer support once and selects the software
+spatial mask when native text gradients are unavailable. Both paths use one
+solid text run at empty/completed coverage. Reduced motion retains timed fill.
+Partially filled GPU words compose ink locally before word/line transforms;
+the padded surface is disabled at rest or complete coverage.
 Explicit backing phrase intervals survive display conversion as single cues;
 untimed phrases retain line sync and never acquire estimated word timings.
 Glow is clipped at the actual fill edge. Appearance CSS and selected font family
