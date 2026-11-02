@@ -67,6 +67,14 @@ async fn browse(Query(q): Query<HashMap<String, String>>) -> Result<Json<Vec<Tra
             .collect(),
     ))
 }
+async fn import_playlist(
+    Json(link): Json<String>,
+) -> Result<Json<crate::library_import::ImportedPlaylist>, ApiError> {
+    native::ytm_import_playlist(link)
+        .await
+        .map(Json)
+        .map_err(error)
+}
 async fn audio(Path(id): Path<String>, request: axum::extract::Request) -> Response {
     match native::ytm_cache_stream(id).await {
         Ok(Some(track)) => match tower_http::services::ServeFile::new(track.path)
@@ -126,6 +134,7 @@ pub fn run() -> Result<(), String> {
         let app = Router::new()
             .route("/api/search", get(search))
             .route("/api/browse", get(browse))
+            .route("/api/playlists/import", post(import_playlist))
             .route("/api/audio/{id}", get(audio))
             .route("/api/video", post(video))
             .route("/api/lyrics", post(lyrics))

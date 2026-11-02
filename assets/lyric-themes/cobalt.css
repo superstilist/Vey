@@ -1,0 +1,19 @@
+/* Original Vey whole-player theme. */
+:root {
+  --blyrics-lyric-active-color:#dce7ff;
+  --blyrics-lyric-inactive-color:#92a5c480;
+  --blyrics-font-family:"Roboto";
+  --blyrics-glow-color:#80a8ff40;
+  --blyrics-highlight-glow-radius-from:6px;
+  --blyrics-line-height:1.45;
+  --vey-word-wobble-strength:0.3;
+  --vey-accent:#93b4ff;
+  --vey-background:#0c1220;
+  --vey-surface:#182137;
+  --vey-corner-radius:16px;
+  --vey-artwork-radius:16px;
+  --vey-control-radius:12px;
+  --vey-artwork-share:0.45;
+  --vey-ambient-strength:0.6;
+  --vey-theme-duration:700ms;
+}

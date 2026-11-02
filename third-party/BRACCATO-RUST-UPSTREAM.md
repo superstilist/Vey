@@ -27,7 +27,9 @@ Host adaptations (all other copied crate source is unchanged):
 
 - `crates/slint/ui/lyrics.slint`: namespace the Slint `LyricRow` struct as
   `BraccatoRow` to avoid a Slint 1.18 generated-export collision with Vey's
-  canonical `LyricRow`. Expose a measured viewport callback so retained native
+  canonical `LyricRow`. Expose an opt-out `interactive` input (default true) so the
+  appearance preview does not consume its containing settings panel's scroll.
+  Expose a measured viewport callback so retained native
   Flickable layout resolves after resize even with a paused playback clock;
   Vey observes those metrics instead of depending on deferred painting.
   Retain an observed scroll target and explicitly apply it when follow resumes:
@@ -41,6 +43,14 @@ Host adaptations (all other copied crate source is unchanged):
   the highlight sweep. Retain whole-word width and normalized glyph positions
   when asynchronous letter plans arrive.
   Clip cached glow at the actual fill edge so unsung letters cannot receive it.
+  Opt-in `filled-glow` keeps the sung lead prefix glowing until its line ends;
+  standalone defaults, secondary layers and backing cue release stay unchanged.
+  Feather clips sample one complete radius tile from one origin on a physical
+  pixel grid, avoiding independently resampled image strips.
+  `LyricInk` is exported for the isolated actual-component pixel regression.
+  Its default `stable-fill` uses solid shaped runs under physical-pixel masks
+  and one GPU composition path before transforms, including neutral endpoints.
+  The old gradient brush is retained only for explicit probe comparison.
   Normal fill mixes base/highlight in one Text brush. Only viewport-adjacent
   scrolling bodies and visible stage roles construct word views. Sharp and blur
   paint share one row transform. Optional `external-focus-mix` consumes the
@@ -54,6 +64,9 @@ Host adaptations (all other copied crate source is unchanged):
   The Vey host selects focus from actual sung cues independently of an optional
   advanced camera clock. Highlighting follows the unshifted word clock. Scroll planning and
   grouping live in Vey's `src/braccato/engine.rs` and `src/native_lyric_follow.rs`.
+  Native Vey now bypasses the Slint scroll easing while its retained-velocity
+  camera (`src/native_lyric_camera.rs`) owns position. This host adaptation
+  prevents an interrupted move from restarting at rest; standalone defaults remain.
 - `crates/slint/src/lib.rs`: retain the Rust `LyricRow` API as a type alias;
   initialize optional glow atlas/focus progress metadata to zero and full cue
   spans for existing callers.
@@ -101,6 +114,12 @@ Host adaptations (all other copied crate source is unchanged):
   word-bearing row model. When absent, `BraccatoRow.focus-mix` remains supported.
 - `crates/slint/src/glow.rs`: apply the requested variable-font weight when
   measuring mask bounds and sweep glyphs, matching the native text font instance.
+- Optional `LyricGlyph.start-em`/`width-em` preserve host-shaped cluster advances
+  without changing the default normalized geometry of existing callers.
+  `LyricInk` allows isolated ink to exceed a kerned advance, samples only the
+  software feather at physical-pixel resolution, and uses premultiplied color
+  samples for translucent gradient consistency. Vey's settled letter motion
+  starts from a neutral phase. Source cue and fill clocks remain unchanged.
 - Vey's `src/native_lyric_glyphs.rs` is based on demo/src/glyph_plans.rs, with
   Vey's generated glyph type and bundled Roboto test font. The original source
   license applies. Integration lives in src/native_lyrics.rs and ui/native-lyrics.slint.

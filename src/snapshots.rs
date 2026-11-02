@@ -62,16 +62,19 @@ pub fn schedule<T>(w: &MainWindow, _: T) {
             id: "liked".into(),
             name: "Музика, яка сподобалась".into(),
             detail: "Створено автоматично".into(),
+            art: slint::Image::default(),
         },
         PlaylistRow {
             id: "ss".into(),
             name: "ss".into(),
             detail: "11 композицій".into(),
+            art: slint::Image::default(),
         },
         PlaylistRow {
             id: "ds".into(),
             name: "ds".into(),
             detail: "Локальний список".into(),
+            art: slint::Image::default(),
         },
     ]));
     w.set_lyric_lines(model(

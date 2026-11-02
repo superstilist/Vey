@@ -1,0 +1,21 @@
+/* Native adaptation inspired by drago-oo/lucid-theme at 193735d5f5de36ea5110417b243e46967f754964. */
+.blyrics-container {
+    --blyrics-lyric-active-color: #ffffff;
+    --blyrics-lyric-inactive-color: #ffffff33;
+    --blyrics-font-family: "Satoshi";
+    --blyrics-font-size: 48px;
+    --blyrics-font-weight: 700;
+    --blyrics-glow-color: #ffffff35;
+    --blyrics-highlight-glow-radius-from: 7px;
+    --blyrics-animate-highlight-glow: 1;
+    --blyrics-animate-highlight-swipe: 1;
+    --blyrics-animate-letter-wave: 0;
+    --blyrics-animate-word-wobble: 0;
+    --vey-word-wobble-strength: 0;
+    --blyrics-letter-wave-duration: 900ms;
+    --blyrics-line-height: 1.47;
+    --blyrics-active-scale: 1.02;
+    --blyrics-scale: 0.92;
+    --blyrics-inactive-blur: 2.5px;
+}
+

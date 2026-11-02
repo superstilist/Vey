@@ -1,7 +1,9 @@
-//! Capture page content once per journey, then composite bounded blur textures.
-//! The backdrop and chrome are excluded; no readback or CPU blur runs per frame.
+//! Normal travel composites live page surfaces with no screenshot readbacks.
+//! The previous snapshot blur is retained as an opt-in native diagnostic.
 use crate::MainWindow;
+#[cfg(not(target_arch = "wasm32"))]
 use image::{imageops, RgbaImage};
+#[cfg(not(target_arch = "wasm32"))]
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
 #[cfg(not(target_arch = "wasm32"))]
 use std::{
@@ -11,12 +13,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Capture {
     pixels: RgbaImage,
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
 }
 #[cfg(not(target_arch = "wasm32"))]
 struct Ready {
@@ -27,6 +26,15 @@ struct Ready {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn install(window: &MainWindow) {
+    if std::env::var("VEY_LEGACY_NAVIGATION_CAPTURE").as_deref() != Ok("1") {
+        return;
+    }
+    window.set_navigation_snapshot_fx(true);
+    install_captured(window);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn install_captured(window: &MainWindow) {
     let (send, jobs) = mpsc::sync_channel::<(u64, Capture, Capture)>(1);
     let (done, ready) = mpsc::channel::<Ready>();
     std::thread::Builder::new()
@@ -107,35 +115,11 @@ pub fn install(window: &MainWindow) {
     *owner.borrow_mut() = Some(timer);
 }
 
-// The browser has no native threads; retain its existing snapshot fallback.
+// Browser lyrics retain compositor blur; the canvas never reads back pages.
 #[cfg(target_arch = "wasm32")]
-pub fn install(window: &MainWindow) {
-    let weak = window.as_weak();
-    window.on_capture_navigation(move || {
-        let Some(window) = weak.upgrade() else {
-            return;
-        };
-        window.set_navigation_fx_ready(false);
-        if !window.get_navigation_blur() || window.get_lyrics_reduced_motion() {
-            window.set_navigation_from_image(Image::default());
-            window.set_navigation_to_image(Image::default());
-            return;
-        }
-        window.set_navigation_capture(true);
-        window.set_navigation_capture_target(false);
-        let from = capture(&window);
-        window.set_navigation_capture_target(true);
-        let to = capture(&window);
-        window.set_navigation_capture_target(false);
-        window.set_navigation_capture(false);
-        if let (Some(from), Some(to)) = (from, to) {
-            window.set_navigation_from_image(upload(prepare(from)));
-            window.set_navigation_to_image(upload(prepare(to)));
-            window.set_navigation_fx_ready(true);
-        }
-    });
-}
+pub fn install(_window: &MainWindow) {}
 
+#[cfg(not(target_arch = "wasm32"))]
 fn upload(pixels: RgbaImage) -> Image {
     Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
         pixels.as_raw(),
@@ -144,6 +128,7 @@ fn upload(pixels: RgbaImage) -> Image {
     ))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn capture(window: &MainWindow) -> Option<Capture> {
     let snapshot = window.window().take_snapshot().ok()?;
     let scale = window.window().scale_factor();
@@ -156,32 +141,29 @@ fn capture(window: &MainWindow) -> Option<Capture> {
     if width == 0 || height == 0 {
         return None;
     }
-    let pixels = RgbaImage::from_raw(
-        snapshot.width(),
-        snapshot.height(),
-        snapshot.as_bytes().to_vec(),
-    )?;
-    Some(Capture {
-        pixels,
-        x,
-        y,
-        width,
-        height,
-    })
+    // Copy only the stage rectangle; background and chrome are excluded from
+    // the blur textures, so a full-window copy would be wasted work.
+    let source = snapshot.as_bytes();
+    let source_stride = snapshot.width() as usize * 4;
+    let row_bytes = width as usize * 4;
+    let mut pixels = RgbaImage::new(width, height);
+    for row in 0..height as usize {
+        let start = (y as usize + row) * source_stride + x as usize * 4;
+        let end = start + row_bytes;
+        let target = row * row_bytes;
+        pixels.as_mut()[target..target + row_bytes].copy_from_slice(&source[start..end]);
+    }
+    Some(Capture { pixels })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn prepare(capture: Capture) -> RgbaImage {
-    let Capture {
-        pixels,
-        x,
-        y,
-        width,
-        height,
-    } = capture;
-    let crop = imageops::crop_imm(&pixels, x, y, width, height);
+    let Capture { pixels } = capture;
+    let width = pixels.width();
+    let height = pixels.height();
     let ratio = (768. / width as f32).min(640. / height as f32).min(1.);
     let small = imageops::resize(
-        &crop.to_image(),
+        &pixels,
         (width as f32 * ratio).round().max(1.) as u32,
         (height as f32 * ratio).round().max(1.) as u32,
         imageops::FilterType::Triangle,

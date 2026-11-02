@@ -1,5 +1,8 @@
 # Per-song lyric choice and compact settings
 
+Lyric appearance now includes 16 offline presets with a color/type preview and
+custom CSS editor. See [theme choices and creator references](LYRIC-THEMES.md).
+
 The provider/variant selected in the player's source selector is remembered for
 that song. Native state and browser local storage serialize `Store.lyrics_choices`.
 Each choice records provider, format, synchronization type and a source-payload
@@ -15,13 +18,15 @@ so a global provider filter cannot silently exclude its saved selection.
 ## Player → track menu → Lyrics
 
 The shared `ui/lyrics-settings.slint` menu uses the app's tonal card, provider
-selector and compact on/off rows. It is embedded in the player's scrollable track
-menu (the … button), with no separate entry in global Settings. The overlay stays
-within the player viewport; opening it does not move the cover or lyric surface.
-The default source, reduced motion, duet stage and passive scrolling are under
-**Advanced**; display toggles and translation language remain immediately visible.
+selector and compact on/off rows. It is available from global Settings → Lyrics
+and the player's scrollable track menu (the … button). The default source,
+reduced motion, duet stage and passive scrolling are under **Advanced**; display
+toggles, romanization spacing and translation language remain immediately visible.
 
 - **Romanization** and **Translation** independently control display, default on.
+- **Spacing** adjusts the gap between a lyric and its romanization/translation
+  from 0% to 150% of the lyric font size. The default is 65%; the setting is
+  saved locally and shared by native and browser renderers.
 - **Translation language** follows the interface by default, or can be selected
   independently (uk/en/cs/pl/de/es/fr/ja).
 - Missing translations and romanization are enriched asynchronously through

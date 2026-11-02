@@ -1,6 +1,7 @@
 //! Slint callbacks are thin controllers over Rust services.
 use crate::audio::AudioEngine;
 use crate::{local_sync, lyrics::*, lyrics_service as ls, native as core, services::*, storage, *};
+use futures_util::future::join_all;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     cell::{Cell, RefCell},
@@ -22,6 +23,10 @@ struct App {
     alternatives: Vec<LyricsAlternative>,
     enrichment_attempts: RefCell<std::collections::HashSet<String>>,
     audio: Arc<core::CoreState>,
+    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+    media_session: Option<crate::media_session::MediaSession>,
+    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+    media_session_retry_at: Option<Instant>,
     rt: Arc<Runtime>,
     tx: mpsc::Sender<Event>,
     loading: bool,
@@ -29,6 +34,15 @@ struct App {
     #[cfg(target_os = "android")]
     permission_wait_started: Option<Instant>,
     search_generation: u64,
+    home_recommendation_generation: u64,
+    home_recommendation_loading: bool,
+    home_recommendation_loaded: bool,
+    home_recommendation_task: Option<tokio::task::JoinHandle<()>>,
+    home_recommendations: Vec<Track>,
+    search_index: crate::search_index::SearchIndex,
+    search_cache: crate::search_index::SearchCache,
+    search_task: Option<tokio::task::JoinHandle<()>>,
+    pending_search: Option<(Instant, String)>,
     lyric_generation: u64,
     lyric_task: Option<tokio::task::JoinHandle<()>>,
     loaded_path: String,
@@ -41,18 +55,55 @@ struct App {
     pending_tag_path: Option<String>,
     art: std::collections::HashMap<String, slint::Image>,
     art_pending: std::collections::HashSet<String>,
-    art_gate: Arc<tokio::sync::Semaphore>,
+    art_failed: std::collections::HashMap<String, Instant>,
+    art_queue: ArtworkQueue,
     jwt: ls::JwtCache,
     snapshot: bool,
     save_due: Cell<Option<Instant>>,
     saver: storage::SaveWorker,
+}
+
+/// Keep pending artwork as lightweight data rather than one task per row.
+#[derive(Default)]
+struct ArtworkQueue {
+    entries: std::collections::VecDeque<Track>,
+    paths: std::collections::HashSet<String>,
+}
+impl ArtworkQueue {
+    fn push(&mut self, track: &Track, priority: bool) {
+        if self.paths.contains(&track.path) {
+            if priority {
+                if let Some(index) = self.entries.iter().position(|item| item.path == track.path) {
+                    self.entries.remove(index);
+                    self.entries.push_front(track.clone());
+                }
+            }
+            return;
+        }
+        self.paths.insert(track.path.clone());
+        if priority {
+            self.entries.push_front(track.clone());
+        } else {
+            self.entries.push_back(track.clone());
+        }
+    }
+    fn pop(&mut self) -> Option<Track> {
+        let track = self.entries.pop_front()?;
+        self.paths.remove(&track.path);
+        Some(track)
+    }
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.paths.clear();
+    }
 }
 enum Event {
     Match(String, Result<local_sync::TagSnapshot, String>),
     Scan(Vec<Track>, String),
     #[cfg(target_os = "android")]
     ScanFailed(String),
-    Search(u64, Result<Vec<Track>, String>),
+    Search(u64, Option<String>, Result<Vec<Track>, String>),
+    HomeRecommendations(u64, Result<(Vec<Track>, bool), String>),
     Loaded(u64, String, Result<String, String>),
     Downloaded(Track, Result<Option<String>, String>),
     Lyrics(String, u64, Result<Vec<LyricsAlternative>, String>),
@@ -99,7 +150,7 @@ fn persist(_w: &MainWindow, a: &App) {
 fn art_image(a: &App, t: &Track) -> slint::Image {
     a.art.get(&t.path).cloned().unwrap_or_default()
 }
-fn row(a: &App, t: &Track) -> TrackRow {
+fn row(a: &App, t: &Track, local_paths: &std::collections::HashSet<String>) -> TrackRow {
     TrackRow {
         title: t.title.clone().into(),
         artist: t.artist.clone().into(),
@@ -108,7 +159,8 @@ fn row(a: &App, t: &Track) -> TrackRow {
         path: t.path.clone().into(),
         art: art_image(a, t),
         liked: a.store.likes.contains(&t.path),
-        downloaded: is_downloaded(a, &t.path),
+        downloaded: a.store.downloads.contains_key(&t.path)
+            || local_paths.contains(&normalize_path(&t.path)),
         downloading: a.download_pending.contains(&t.path),
     }
 }
@@ -129,7 +181,17 @@ fn local_file(a: &App, track: &Track) -> Option<String> {
         a.store.downloads.get(&track.path).cloned()
     }
 }
-fn refresh_media_rows(w: &MainWindow, a: &App) {
+/// Refresh download flags and artwork. `art_changed` limits the pass to the
+/// rows showing one decoded cover: a library load delivers hundreds of covers,
+/// and rescanning every page model for each one is wasted UI-thread work.
+fn refresh_media_rows(w: &MainWindow, a: &App, art_changed: Option<&str>) {
+    if let Some(path) = art_changed {
+        if let Some(art) = a.art.get(path) {
+            crate::track_model::update_path(w, path, |row| row.art = art.clone());
+        }
+        return;
+    }
+    let models = crate::track_model::mounted(w);
     let mut local_paths: std::collections::HashSet<_> = a
         .store
         .downloads
@@ -137,19 +199,11 @@ fn refresh_media_rows(w: &MainWindow, a: &App) {
         .map(|p| normalize_path(p))
         .collect();
     local_paths.extend(a.local_paths.iter().cloned());
-    for model in [
-        w.get_tracks(),
-        w.get_home_page_tracks(),
-        w.get_explore_page_tracks(),
-        w.get_library_page_tracks(),
-        w.get_liked_page_tracks(),
-        w.get_playlist_page_tracks(),
-        w.get_queue_page_tracks(),
-        w.get_search_page_tracks(),
-        w.get_settings_page_tracks(),
-        w.get_queue_tracks(),
-    ] {
-        if let Some(rows) = model.as_any().downcast_ref::<VecModel<TrackRow>>() {
+    for model in models {
+        if let Some(rows) = model
+            .as_any()
+            .downcast_ref::<crate::track_model::TrackModel>()
+        {
             for i in 0..rows.row_count() {
                 if let Some(mut row) = rows.row_data(i) {
                     let downloaded = a.store.downloads.contains_key(row.path.as_str())
@@ -166,7 +220,7 @@ fn refresh_media_rows(w: &MainWindow, a: &App) {
                         }
                     }
                     if changed {
-                        rows.set_row_data(i, row);
+                        rows.update_path(row.path.as_str(), |target| *target = row.clone());
                     }
                 }
             }
@@ -179,6 +233,9 @@ fn refresh_media_rows(w: &MainWindow, a: &App) {
     }
 }
 fn refresh(w: &MainWindow, a: &mut App) {
+    // Build the local-file reverse lookup once, rather than once per row.
+    let mut local_paths = a.local_paths.clone();
+    local_paths.extend(a.store.downloads.values().map(|p| normalize_path(p)));
     let view = w.get_active_view().to_string();
     a.visible = match view.as_str() {
         "home" => {
@@ -196,26 +253,27 @@ fn refresh(w: &MainWindow, a: &mut App) {
             .filter(|t| a.store.likes.contains(&t.path))
             .cloned()
             .collect(),
-        "playlist" => a
-            .store
-            .playlists
-            .iter()
-            .find(|p| p.id == a.playlist)
-            .map(|p| {
-                p.tracks
-                    .iter()
-                    .filter_map(|id| a.store.tracks.iter().find(|t| &t.path == id))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default(),
+        "playlist" => a.store.playlist_tracks(&a.playlist),
         "queue" => a.queue.tracks.clone(),
         _ => a.visible.clone(),
     };
     if !a.snapshot {
-        for track in a.visible.clone() {
-            load_art(a, &track);
+        // A new view supersedes queued offscreen artwork; in-flight work may
+        // finish and still updates every retained model for that track.
+        a.art_queue.clear();
+        if let Some(track) = a.current.clone() {
+            queue_art(a, &track, true);
         }
+        if view == "home" {
+            for track in a.home_recommendations.clone() {
+                load_art(a, &track);
+            }
+        }
+        let visible = std::mem::take(&mut a.visible);
+        for track in &visible {
+            load_art(a, track);
+        }
+        a.visible = visible;
     }
     if matches!(view.as_str(), "search" | "explore") {
         a.page_results.insert(view.clone(), a.visible.clone());
@@ -227,20 +285,67 @@ fn refresh(w: &MainWindow, a: &mut App) {
         } else {
             a.store.history.iter().map(|h| h.track.clone()).collect()
         };
-        w.set_home_page_tracks(model(home.iter().map(|t| row(a, t)).collect()));
-        w.set_library_page_tracks(model(a.library.iter().map(|t| row(a, t)).collect()));
-        w.set_liked_page_tracks(model(
-            a.store
-                .tracks
-                .iter()
-                .filter(|t| a.store.likes.contains(&t.path))
-                .map(|t| row(a, t))
-                .collect(),
-        ));
-        w.set_queue_page_tracks(model(a.queue.tracks.iter().map(|t| row(a, t)).collect()));
+        w.set_home_page_tracks(
+            Rc::new(crate::track_model::TrackModel::new(
+                home.iter().map(|t| row(a, t, &local_paths)).collect(),
+            ))
+            .into(),
+        );
+        w.set_library_page_tracks(
+            Rc::new(crate::track_model::TrackModel::new(
+                a.library.iter().map(|t| row(a, t, &local_paths)).collect(),
+            ))
+            .into(),
+        );
+        w.set_liked_page_tracks(
+            Rc::new(crate::track_model::TrackModel::new(
+                a.store
+                    .tracks
+                    .iter()
+                    .filter(|t| a.store.likes.contains(&t.path))
+                    .map(|t| row(a, t, &local_paths))
+                    .collect(),
+            ))
+            .into(),
+        );
+        w.set_queue_page_tracks(
+            Rc::new(crate::track_model::TrackModel::new(
+                a.queue
+                    .tracks
+                    .iter()
+                    .map(|t| row(a, t, &local_paths))
+                    .collect(),
+            ))
+            .into(),
+        );
         w.set_pages_seeded(true);
     }
-    w.set_tracks(model(a.visible.iter().map(|t| row(a, t)).collect()));
+    crate::track_model::set_tracks(
+        w,
+        a.visible.iter().map(|t| row(a, t, &local_paths)).collect(),
+    );
+    refresh_playlists(w, a);
+    if let Some(t) = &a.current {
+        w.set_current_liked(a.store.likes.contains(&t.path));
+        w.set_current_downloaded(is_downloaded(a, &t.path));
+        w.set_current_downloading(a.download_pending.contains(&t.path));
+        w.set_current_local(local_file(a, t).is_some());
+        w.set_current_art(art_image(a, t));
+        w.set_current_album(t.album.clone().into());
+    }
+}
+fn refresh_playlists(w: &MainWindow, a: &App) {
+    if let Some(p) = a.store.playlists.iter().find(|p| p.id == a.playlist) {
+        let cover = p.tracks.first().and_then(|path| a.store.tracks.iter().find(|t| &t.path == path)).map(|t| art_image(a, t)).unwrap_or_default();
+        w.set_playlist_title(p.name.clone().into());
+        w.set_playlist_detail(playlist_detail(p).into());
+        w.set_playlist_art(cover);
+        w.set_playlist_public(p.is_public);
+    } else {
+        w.set_playlist_detail("".into());
+        w.set_playlist_art(slint::Image::default());
+        w.set_playlist_public(false);
+    }
     let mut playlists = vec![
         PlaylistRow {
             id: "liked".into(),
@@ -251,6 +356,7 @@ fn refresh(w: &MainWindow, a: &mut App) {
                 &format!("{} композицій · локально", a.store.likes.len()),
             )
             .into(),
+            art: slint::Image::default(),
         },
         PlaylistRow {
             id: "history".into(),
@@ -260,17 +366,15 @@ fn refresh(w: &MainWindow, a: &mut App) {
                 "Локальні списки відтворення",
             )
             .into(),
+            art: slint::Image::default(),
         },
     ];
     playlists.extend(a.store.playlists.iter().map(|p| {
         PlaylistRow {
             id: p.id.clone().into(),
             name: p.name.clone().into(),
-            detail: crate::i18n::translate(
-                &a.store.settings.language,
-                &format!("{} композицій", p.tracks.len()),
-            )
-            .into(),
+            detail: playlist_detail(p).into(),
+            art: p.tracks.first().and_then(|path| a.store.tracks.iter().find(|t| &t.path == path)).map(|t| art_image(a, t)).unwrap_or_default(),
         }
     }));
     w.set_playlist_destinations(model(playlists.iter().skip(2).cloned().collect()));
@@ -282,14 +386,12 @@ fn refresh(w: &MainWindow, a: &mut App) {
             .map(|s| s.path.clone().into())
             .collect(),
     ));
-    if let Some(t) = &a.current {
-        w.set_current_liked(a.store.likes.contains(&t.path));
-        w.set_current_downloaded(is_downloaded(a, &t.path));
-        w.set_current_downloading(a.download_pending.contains(&t.path));
-        w.set_current_local(local_file(a, t).is_some());
-        w.set_current_art(art_image(a, t));
-        w.set_current_album(t.album.clone().into());
-    }
+}
+fn playlist_detail(p: &Playlist) -> String {
+    let author = if p.author.trim().is_empty() { "Ви" } else { p.author.trim() };
+    let days = crate::services::now_ms().saturating_sub(p.updated_at) / 86_400_000;
+    let modified = if p.updated_at == 0 { "ще не змінювався".to_string() } else { match days { 0 => "змінено сьогодні".to_string(), 1 => "змінено учора".to_string(), n => format!("змінено {n} дн. тому") } };
+    format!("{} композицій · {} · {}", p.tracks.len(), author, modified)
 }
 fn scan(a: &Shared, w: &MainWindow) {
     let mut a = a.borrow_mut();
@@ -369,11 +471,21 @@ fn scan(a: &Shared, w: &MainWindow) {
 fn browse(a: &Shared, w: &MainWindow, query: Option<String>, radio: bool) {
     let mut a = a.borrow_mut();
     a.search_generation += 1;
+    if let Some(task) = a.search_task.take() {
+        task.abort();
+    }
     let id = a.search_generation;
     let tx = a.tx.clone();
     w.set_status("Завантаження з YouTube Music…".into());
     let video = a.current.as_ref().and_then(|t| t.video_id.clone());
-    a.rt.spawn(async move {
+    if let Some(q) = &query {
+        if let Some(rows) = a.search_cache.get(q) {
+            let _ = tx.send(Event::Search(id, query, Ok(rows)));
+            return;
+        }
+    }
+    let cache_key = query.clone();
+    let task = a.rt.spawn(async move {
         let result = if let Some(q) = query {
             core::ytm_search_songs(q, Some(40)).await.map(|songs| {
                 songs
@@ -417,65 +529,227 @@ fn browse(a: &Shared, w: &MainWindow, query: Option<String>, radio: bool) {
                     .collect()
             })
         };
-        let _ = tx.send(Event::Search(id, result));
+        let _ = tx.send(Event::Search(id, cache_key, result));
     });
+    a.search_task = Some(task);
 }
-fn load_art(a: &mut App, track: &Track) {
-    if a.art.contains_key(&track.path) || !a.art_pending.insert(track.path.clone()) {
+
+async fn fetch_home_recommendations(
+    profile: crate::home::RecommendationProfile,
+) -> Result<(Vec<Track>, bool), String> {
+    let resolved = join_all(profile.seeds.iter().cloned().map(|track| async move {
+        let video_id = if let Some(id) = track.video_id.as_deref().filter(|id| !id.is_empty()) {
+            Some(id.to_string())
+        } else if let Some(query) = crate::home::recommendation_query(&track) {
+            core::ytm_search_songs(query, Some(8))
+                .await
+                .ok()
+                .and_then(|songs| {
+                    songs
+                        .into_iter()
+                        .find(|song| !song.video_id.is_empty())
+                        .map(|song| song.video_id)
+                })
+        } else {
+            None
+        };
+        video_id
+    }))
+    .await;
+    let mut seen_seeds = std::collections::HashSet::new();
+    let seed_ids: Vec<_> = resolved
+        .into_iter()
+        .flatten()
+        .filter(|id| seen_seeds.insert(id.clone()))
+        .collect();
+
+    let batches = join_all(seed_ids.iter().cloned().map(|seed_id| async move {
+        core::ytm_recommendations(Some(seed_id.clone()), None, Some(32))
+            .await
+            .ok()
+            .map(|songs| {
+                songs
+                    .into_iter()
+                    .filter(|song| !song.video_id.is_empty() && song.video_id != seed_id)
+                    .map(|song| Track {
+                        path: format!("yt://{}", song.video_id),
+                        title: song.title,
+                        artist: song.artist,
+                        album: song.album,
+                        duration_secs: song.duration_secs as f64,
+                        video_id: Some(song.video_id),
+                        clip_video_id: (!song.clip_video_id.is_empty())
+                            .then_some(song.clip_video_id),
+                        thumbnail_url: song.thumbnail_url,
+                    })
+                    .collect::<Vec<_>>()
+            })
+    }))
+    .await
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+
+    let mut recommendations = crate::home::rank_recommendations(batches, &profile, 12);
+    let personalized = !recommendations.is_empty();
+    if !personalized {
+        let songs = core::ytm_recommendations(None, None, Some(40)).await?;
+        let general = songs
+            .into_iter()
+            .filter(|song| !song.video_id.is_empty())
+            .map(|song| Track {
+                path: format!("yt://{}", song.video_id),
+                title: song.title,
+                artist: song.artist,
+                album: song.album,
+                duration_secs: song.duration_secs as f64,
+                video_id: Some(song.video_id),
+                clip_video_id: (!song.clip_video_id.is_empty()).then_some(song.clip_video_id),
+                thumbnail_url: song.thumbnail_url,
+            })
+            .collect();
+        recommendations = crate::home::rank_recommendations(vec![general], &profile, 12);
+    }
+    Ok((recommendations, personalized))
+}
+
+fn load_home_recommendations(a: &Shared, w: &MainWindow) {
+    let mut a = a.borrow_mut();
+    if a.snapshot {
+        a.home_recommendation_loaded = true;
         return;
     }
-    let track = track.clone();
-    let local = local_file(a, &track);
+    if a.home_recommendation_loading {
+        return;
+    }
+    a.home_recommendation_generation = a.home_recommendation_generation.wrapping_add(1);
+    let generation = a.home_recommendation_generation;
+    let profile = crate::home::recommendation_profile(&a.store, a.current.as_ref());
     let tx = a.tx.clone();
-    let gate = a.art_gate.clone();
-    a.rt.spawn(async move {
-        // Keep permits until decode completes, including slow local metadata IO.
-        let Ok(_permit) = gate.acquire_owned().await else {
-            return;
+    w.set_home_recommendation_loading(true);
+    w.set_home_recommendation_failed(false);
+    a.home_recommendation_loading = true;
+    a.home_recommendation_task = Some(a.rt.spawn(async move {
+        let result = fetch_home_recommendations(profile).await;
+        let _ = tx.send(Event::HomeRecommendations(generation, result));
+    }));
+}
+
+fn show_saved_recommendations(w: &MainWindow, a: &mut App) {
+    a.home_recommendations = a.store.recommendations.tracks.clone();
+    w.set_home_recommendation_personalized(a.store.recommendations.personalized);
+    let mut local_paths = a.local_paths.clone();
+    local_paths.extend(a.store.downloads.values().map(|p| normalize_path(p)));
+    crate::track_model::set_home_recommendations(w, a.home_recommendations.iter().map(|t| row(a, t, &local_paths)).collect());
+    for track in a.home_recommendations.clone() { load_art(a, &track); }
+}
+
+fn load_art(a: &mut App, track: &Track) {
+    queue_art(a, track, false);
+}
+
+fn queue_art(a: &mut App, track: &Track, priority: bool) {
+    if a.art.contains_key(&track.path) || a.art_pending.contains(&track.path)
+        || a.art_failed.get(&track.path).is_some_and(|failed| failed.elapsed() < Duration::from_secs(30)) {
+        return;
+    }
+    a.art_queue.push(track, priority);
+    pump_art(a);
+}
+
+fn can_start_art(pending: usize, current_waiting: bool) -> bool {
+    pending < 2 || (pending == 2 && current_waiting)
+}
+
+fn pump_art(a: &mut App) {
+    loop {
+        // Keep one extra slot for the selected track when background artwork
+        // is slow; never start more than three requests in total.
+        let current_waiting = a.art_queue.entries.front().is_some_and(|queued| {
+            a.current
+                .as_ref()
+                .is_some_and(|current| current.path == queued.path)
+        });
+        if !can_start_art(a.art_pending.len(), current_waiting) {
+            break;
+        }
+        let Some(track) = a.art_queue.pop() else {
+            break;
         };
-        let key = track.path.clone();
-        let result = async {
+        if a.art.contains_key(&track.path) || !a.art_pending.insert(track.path.clone()) {
+            continue;
+        }
+        let local = local_file(a, &track);
+        let tx = a.tx.clone();
+        a.rt.spawn(async move {
+            let key = track.path.clone();
             use sha1::{Digest, Sha1};
             let dir = storage::data_dir().join("artwork");
             let path = dir.join(format!("{:x}.png", Sha1::digest(track.path.as_bytes())));
-            let cache = path.clone();
-            if let Some(img) = tokio::task::spawn_blocking(move || crate::artwork::cached(&cache))
-                .await
-                .map_err(|e| e.to_string())?
-            {
-                return Ok(img);
-            }
-            let embedded = if let Some(local) = local {
-                tokio::task::spawn_blocking(move || crate::artwork::local(&local))
-                    .await
-                    .map_err(|e| e.to_string())?
-            } else {
-                None
-            };
-            let bytes = if let Some(bytes) = embedded {
-                bytes
-            } else if !track.thumbnail_url.is_empty() {
-                crate::media_library::fetch_cover(&track.thumbnail_url).await?
-            } else {
-                return Err("No artwork".into());
-            };
-            tokio::task::spawn_blocking(move || {
-                let img = crate::artwork::decode(&bytes)?;
-                // Cache writes are best effort; a read-only cache must not hide art.
-                if std::fs::create_dir_all(&dir).is_ok() {
-                    let tmp = path.with_extension("pending.png");
-                    if img.save_with_format(&tmp, image::ImageFormat::Png).is_ok() {
-                        let _ = std::fs::rename(tmp, path);
+            // User-edited covers use `path`; downloaded artwork uses a separate
+            // disposable cache so recovery can never replace a user's cover.
+            let downloaded = path.with_extension("cache.png");
+            let result = async {
+                let cache = path.clone();
+                if let Some(img) =
+                    tokio::task::spawn_blocking(move || crate::artwork::cached(&cache))
+                        .await
+                        .map_err(|e| e.to_string())?
+                {
+                    return Ok((img, false));
+                }
+                let cache = downloaded.clone();
+                if let Some(img) =
+                    tokio::task::spawn_blocking(move || crate::artwork::cached(&cache))
+                        .await
+                        .map_err(|e| e.to_string())?
+                {
+                    return Ok((img, false));
+                }
+                let embedded = if let Some(local) = local {
+                    tokio::task::spawn_blocking(move || crate::artwork::local_decoded(&local))
+                        .await
+                        .map_err(|e| e.to_string())?
+                } else {
+                    None
+                };
+                let mut decoded = embedded;
+                if decoded.is_none() {
+                    for url in crate::artwork::remote_urls(&track) {
+                        if let Ok(data) = crate::media_library::fetch_cover(&url).await {
+                            if let Ok(Ok(img)) = tokio::task::spawn_blocking(move || crate::artwork::decode(&data)).await {
+                                decoded = Some(img);
+                                break;
+                            }
+                        }
                     }
                 }
-                Ok(img)
-            })
-            .await
-            .map_err(|e| e.to_string())?
-        }
-        .await;
-        let _ = tx.send(Event::Art(key, result));
-    });
+                decoded.map(|img| (img, true)).ok_or_else(|| "No artwork".to_string())
+            }
+            .await;
+            match result {
+                Ok((img, should_cache)) => {
+                    // Paint immediately; PNG compression and disk I/O run afterwards.
+                    let cached = should_cache.then(|| img.clone());
+                    let _ = tx.send(Event::Art(key, Ok(img)));
+                    if let Some(img) = cached {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            if std::fs::create_dir_all(&dir).is_ok() {
+                                let tmp = path.with_extension(format!("{}.pending.png", std::process::id()));
+                                if img.save_with_format(&tmp, image::ImageFormat::Png).is_ok() {
+                                    // This file is disposable; the primary user cover always wins.
+                                    let _ = std::fs::remove_file(&downloaded);
+                                    let _ = std::fs::rename(&tmp, &downloaded);
+                                    let _ = std::fs::remove_file(tmp);
+                                }
+                            }
+                        }).await;
+                    }
+                }
+                Err(error) => { let _ = tx.send(Event::Art(key, Err(error))); }
+            }
+        });
+    }
 }
 fn start(a: &Shared, w: &MainWindow, track: Track) {
     let shared = a.clone();
@@ -503,7 +777,22 @@ fn start(a: &Shared, w: &MainWindow, track: Track) {
     }
     a.alternatives.clear();
     a.current = Some(track.clone());
-    refresh_media_rows(w, &a);
+    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+    if let Some(session) = a.media_session.as_mut() {
+        session.set_track(&track);
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = crate::android::media_update(
+            &serde_json::json!({
+                "title": track.title, "artist": track.artist, "album": track.album,
+                "duration": track.duration_secs, "position": 0.0, "playing": false, "active": true
+            }).to_string(),
+        );
+    }
+    w.set_current_downloaded(is_downloaded(&a, &track.path));
+    w.set_current_downloading(a.download_pending.contains(&track.path));
+    w.set_current_local(local_file(&a, &track).is_some());
     w.set_current_track_key(track.path.clone().into());
     w.set_current_video_id(track.video_id.clone().unwrap_or_default().into());
     w.set_current_clip_video_id(track.clip_video_id.clone().unwrap_or_default().into());
@@ -539,7 +828,7 @@ fn start(a: &Shared, w: &MainWindow, track: Track) {
     if let Some(previous) = a.load_task.take() {
         previous.abort();
     }
-    load_art(&mut a, &track);
+    queue_art(&mut a, &track, true);
     a.load_task = Some(a.rt.spawn(async move {
         let path = if let Some(path) = saved_path {
             Ok(path)
@@ -703,12 +992,92 @@ fn report(w: &MainWindow, result: Result<(), String>) {
     }
 }
 
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+fn handle_media_event(a: &Shared, w: &MainWindow, event: souvlaki::MediaControlEvent) {
+    use souvlaki::{MediaControlEvent as E, SeekDirection};
+    match event {
+        E::Play => {
+            let app = a.borrow();
+            if app.current.is_none() {
+                drop(app);
+                w.invoke_select_track(0);
+            } else {
+                report(w, core::player_play(&app.audio));
+            }
+        }
+        E::Pause | E::Stop => report(w, core::player_pause(&a.borrow().audio)),
+        E::Toggle => {
+            let app = a.borrow();
+            if app.current.is_none() {
+                drop(app);
+                w.invoke_select_track(0);
+            } else {
+                report(w, core::player_toggle(&app.audio).map(|_| ()));
+            }
+        }
+        E::Previous => {
+            if w.get_position() > 3. {
+                report(w, a.borrow().audio.seek(0.));
+            } else {
+                let track = a.borrow_mut().queue.advance(true, false);
+                if let Some(track) = track {
+                    start(a, w, track);
+                }
+            }
+        }
+        E::Next => {
+            if let Some(track) = a.borrow_mut().queue.advance(false, false) {
+                start(a, w, track);
+            }
+        }
+        E::SetPosition(position) => {
+            report(w, a.borrow().audio.seek(position.0.as_secs_f64()));
+        }
+        E::SeekBy(direction, duration) => {
+            let delta = duration.as_secs_f64()
+                * if direction == SeekDirection::Forward { 1. } else { -1. };
+            let target = (w.get_position() as f64 + delta).clamp(0., w.get_duration() as f64);
+            report(w, a.borrow().audio.seek(target));
+        }
+        E::Seek(direction) => {
+            let delta = if direction == SeekDirection::Forward { 10. } else { -10. };
+            let target = (w.get_position() as f64 + delta).clamp(0., w.get_duration() as f64);
+            report(w, a.borrow().audio.seek(target));
+        }
+        _ => {}
+    }
+}
+
+#[cfg(target_os = "android")]
+fn handle_android_media_event(a: &Shared, w: &MainWindow, raw: &str) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else { return; };
+    match value.get("action").and_then(|action| action.as_str()).unwrap_or("") {
+        "play" => {
+            let app = a.borrow();
+            if app.current.is_none() { drop(app); w.invoke_select_track(0); }
+            else { report(w, core::player_play(&app.audio)); }
+        }
+        "pause" => report(w, core::player_pause(&a.borrow().audio)),
+        "next" | "previous" => {
+            let previous = value["action"] == "previous";
+            let track = a.borrow_mut().queue.advance(previous, false);
+            if let Some(track) = track { start(a, w, track); }
+        }
+        "seek" => {
+            let seconds = value.get("position").and_then(|position| position.as_f64()).unwrap_or(0.) / 1000.;
+            report(w, a.borrow().audio.seek(seconds));
+        }
+        _ => {}
+    }
+}
+
 pub fn run() -> Result<(), slint::PlatformError> {
     let w = MainWindow::new()?;
+    w.set_app_version(env!("CARGO_PKG_VERSION").into());
     #[cfg(target_os = "android")]
     w.set_android_platform(true);
     crate::i18n::install(&w);
-    crate::material::install(&w);
+    crate::player_themes::install(&w);
     crate::native_lyrics::install(&w);
     crate::navigation_fx::install(&w);
     let (tx, rx) = mpsc::channel();
@@ -747,6 +1116,10 @@ pub fn run() -> Result<(), slint::PlatformError> {
         alternatives: vec![],
         enrichment_attempts: RefCell::default(),
         audio,
+        #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+        media_session: None,
+        #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+        media_session_retry_at: None,
         rt,
         tx,
         loading: false,
@@ -754,6 +1127,15 @@ pub fn run() -> Result<(), slint::PlatformError> {
         #[cfg(target_os = "android")]
         permission_wait_started: None,
         search_generation: 0,
+        home_recommendation_generation: 0,
+        home_recommendation_loading: false,
+        home_recommendation_loaded: false,
+        home_recommendation_task: None,
+        home_recommendations: vec![],
+        search_index: Default::default(),
+        search_cache: Default::default(),
+        search_task: None,
+        pending_search: None,
         lyric_generation: 0,
         lyric_task: None,
         loaded_path: String::new(),
@@ -766,7 +1148,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
         pending_tag_path: None,
         art: Default::default(),
         art_pending: Default::default(),
-        art_gate: Arc::new(tokio::sync::Semaphore::new(2)),
+        art_failed: Default::default(),
+        art_queue: ArtworkQueue::default(),
         jwt: ls::JwtCache::load(),
         snapshot,
         save_due: Cell::new(None),
@@ -802,13 +1185,41 @@ pub fn run() -> Result<(), slint::PlatformError> {
         w.set_status(format!("Помилка читання даних: {e}. Оригінальний файл збережено.").into());
     }
     macro_rules! bind {($method:ident, |$ui:ident,$state:ident $(,$arg:ident)*| $body:block)=>{{let weak=w.as_weak();let shared=a.clone();w.$method(move|$($arg),*|{if let Some($ui)=weak.upgrade(){let $state=&shared;$body}});}};}
-    bind!(on_search_edited, |_ui, state, _query| {
-        // Do not navigate or rebuild results while the TextInput is active.
-        state.borrow_mut().search_generation += 1;
+    bind!(on_search_edited, |ui, state, query| {
+        ui.set_status("".into());
+        let mut a = state.borrow_mut();
+        a.search_generation += 1;
+        if let Some(task) = a.search_task.take() {
+            task.abort();
+        }
+        a.pending_search = None;
+        if ui.get_active_view() == "search" {
+            let App {
+                search_index,
+                library,
+                ..
+            } = &mut *a;
+            let rows = search_index.find(library, &query);
+            a.visible = rows;
+            refresh(&ui, &mut a);
+            if query.trim().chars().count() >= 2 {
+                a.pending_search = Some((Instant::now(), query.to_string()));
+            }
+        }
     });
     bind!(on_navigate, |ui, state, view| {
         ui.set_status("".into());
         state.borrow_mut().search_generation += 1;
+        state.borrow_mut().pending_search = None;
+        if let Some(task) = state.borrow_mut().search_task.take() {
+            task.abort();
+        }
+        if view == "home" && ui.get_home_rotate() {
+            ui.invoke_home_choose(-1);
+        }
+        if view == "home" && !state.borrow().home_recommendation_loaded {
+            ui.invoke_request_home_recommendations();
+        }
         let cached = state.borrow().page_results.get(view.as_str()).cloned();
         if matches!(view.as_str(), "search" | "explore") {
             state.borrow_mut().visible = cached.clone().unwrap_or_default();
@@ -823,21 +1234,41 @@ pub fn run() -> Result<(), slint::PlatformError> {
     bind!(on_refresh_explore, |ui, state| {
         browse(state, &ui, None, false);
     });
+    bind!(on_request_home_recommendations, |ui, state| {
+        load_home_recommendations(state, &ui);
+    });
+    bind!(on_select_home_recommendation, |ui, state, index| {
+        let track = {
+            let mut a = state.borrow_mut();
+            a.queue.shuffle = a.store.settings.shuffle;
+            a.queue.repeat = a.store.settings.repeat.clone();
+            let recommendations = a.home_recommendations.clone();
+            a.queue.select(recommendations, index.max(0) as usize)
+        };
+        if let Some(track) = track {
+            start(state, &ui, track);
+        }
+    });
+    bind!(on_play_home_recommendations, |ui, _state| {
+        ui.invoke_select_home_recommendation(0);
+    });
     bind!(on_search, |ui, state, query| {
+        ui.set_status("".into());
         ui.set_active_view("search".into());
-        let needle = query.trim().to_lowercase();
         {
             let mut a = state.borrow_mut();
-            a.visible = a
-                .library
-                .iter()
-                .filter(|t| {
-                    format!("{} {} {}", t.title, t.artist, t.album)
-                        .to_lowercase()
-                        .contains(&needle)
-                })
-                .cloned()
-                .collect();
+            a.search_generation += 1;
+            a.pending_search = None;
+            if let Some(task) = a.search_task.take() {
+                task.abort();
+            }
+            let App {
+                search_index,
+                library,
+                ..
+            } = &mut *a;
+            let rows = search_index.find(library, &query);
+            a.visible = rows;
             refresh(&ui, &mut a);
         }
         if !query.trim().is_empty() {
@@ -966,8 +1397,20 @@ pub fn run() -> Result<(), slint::PlatformError> {
         if let Some(t) = selected(&a, index) {
             a.store.remember(t.clone());
             a.store.toggle_like(&t.path);
+            let liked = a.store.likes.contains(&t.path);
+            crate::track_model::update_path(&ui, &t.path, |row| row.liked = liked);
+            if a.current
+                .as_ref()
+                .is_some_and(|current| current.path == t.path)
+            {
+                ui.set_current_liked(liked);
+            }
             persist(&ui, &a);
-            refresh(&ui, &mut a);
+            if ui.get_active_view() == "liked" {
+                refresh(&ui, &mut a);
+            } else {
+                refresh_playlists(&ui, &a);
+            }
         }
     });
     bind!(on_scan, |ui, state| {
@@ -1056,6 +1499,19 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
         refresh(&ui, &mut a);
     });
+    bind!(on_play_playlist, |ui, state, id| {
+        let track = {
+            let mut a = state.borrow_mut();
+            a.playlist = id.to_string();
+            ui.set_active_view("playlist".into());
+            refresh(&ui, &mut a);
+            a.queue.shuffle = a.store.settings.shuffle;
+            a.queue.repeat = a.store.settings.repeat.clone();
+            let visible = a.visible.clone();
+            a.queue.select(visible, 0)
+        };
+        if let Some(track) = track { start(&state, &ui, track); }
+    });
     bind!(on_add_to_playlist, |ui, state, id| {
         let mut a = state.borrow_mut();
         if let Some(t) = a.current.clone() {
@@ -1070,7 +1526,9 @@ pub fn run() -> Result<(), slint::PlatformError> {
         let id = a.playlist.clone();
         if let Some(t) = a.visible.get(index.max(0) as usize).cloned() {
             if let Some(p) = a.store.playlists.iter_mut().find(|p| p.id == id) {
+                let before = p.tracks.len();
                 p.tracks.retain(|path| path != &t.path);
+                if before != p.tracks.len() { p.updated_at = crate::services::now_ms(); }
             }
             persist(&ui, &a);
             refresh(&ui, &mut a);
@@ -1083,6 +1541,26 @@ pub fn run() -> Result<(), slint::PlatformError> {
         persist(&ui, &a);
         ui.set_active_view("library".into());
         refresh(&ui, &mut a);
+    });
+    bind!(on_set_playlist_public, |ui, state, is_public| {
+        let mut a = state.borrow_mut();
+        let id = a.playlist.clone();
+        if let Some(p) = a.store.playlists.iter_mut().find(|p| p.id == id) {
+            p.is_public = is_public;
+            p.updated_at = crate::services::now_ms();
+            persist(&ui, &a);
+            refresh(&ui, &mut a);
+            if ui.get_account_signed_in() {
+                if ui.get_account_busy() {
+                    ui.set_status("Зміни збережено. Після поточної операції синхронізуйте бібліотеку".into());
+                } else {
+                    ui.invoke_account_command("push".into());
+                    ui.set_status(if is_public { "Плейлист опубліковано; синхронізацію бібліотеки запущено".into() } else { "Плейлист приховано; синхронізацію бібліотеки запущено".into() });
+                }
+            } else {
+                ui.set_status(if is_public { "Плейлист позначено публічним. Під’єднайте акаунт Vey для показу у профілі".into() } else { "Плейлист приховано з профілю".into() });
+            }
+        }
     });
     bind!(on_request_lyrics, |ui, state| {
         if state.borrow().alternatives.is_empty() {
@@ -1136,30 +1614,30 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
     );
 
+    crate::lyric_appearance::install(&w);
     bind!(on_apply_lyric_style, |ui, state| {
-        let mut a = state.borrow_mut();
-        if ui.get_lyric_theme_source().len() > 65536 {
-            ui.set_lyric_style_status("Theme exceeds 64 KiB".into());
+        if let Err(error) = crate::lyric_appearance::draft(&ui) {
+            ui.set_lyric_style_status(error.into());
+            ui.set_lyric_draft_valid(false);
             return;
         }
+        let mut a = state.borrow_mut();
         a.store.settings.lyrics_theme_css = ui.get_lyric_theme_source().to_string();
         a.store.settings.lyrics_font_family = ui.get_lyric_font_family().to_string();
+        a.store.settings.theme_entire_player = ui.get_theme_entire_player_draft();
         crate::themes::apply_settings(&ui, &a.store.settings);
         persist(&ui, &a);
+        ui.set_dialog("".into());
     });
-    bind!(on_import_lyric_font, |ui, state| {
+    bind!(on_import_lyric_font, |ui, _state| {
         if let Some(path) = crate::dialogs::FileDialog::new()
             .add_filter("TTF / OTF", &["ttf", "otf"])
             .pick_file()
         {
             match crate::native_lyric_fonts::import(&path) {
                 Ok(family) => {
-                    let draft = ui.get_lyric_theme_source();
-                    let mut a = state.borrow_mut();
-                    a.store.settings.lyrics_font_family = family;
-                    crate::themes::apply_settings(&ui, &a.store.settings);
-                    ui.set_lyric_theme_source(draft);
-                    persist(&ui, &a);
+                    ui.set_lyric_font_family(family.into());
+                    crate::lyric_appearance::preview(&ui);
                 }
                 Err(error) => ui.set_lyric_style_status(error.into()),
             }
@@ -1222,7 +1700,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 .is_some_and(|p| !std::path::Path::new(p).is_file())
             {
                 a.store.downloads.remove(&t.path);
-                refresh_media_rows(&ui, &a);
+                refresh_media_rows(&ui, &a, None);
             }
             if let Some(path) = local_file(&a, &t).filter(|p| std::path::Path::new(p).is_file()) {
                 ui.set_status(format!("Файл доступний локально: {path}").into());
@@ -1233,7 +1711,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     return;
                 }
                 let tx = a.tx.clone();
-                refresh_media_rows(&ui, &a);
+                refresh_media_rows(&ui, &a, None);
                 ui.set_status("Завантаження файлу й обкладинки…".into());
                 a.rt.spawn(async move {
                     let result = core::ytm_download_track_with_cover(
@@ -1509,8 +1987,13 @@ pub fn run() -> Result<(), slint::PlatformError> {
     let shared = a.clone();
     let timer = slint::Timer::default();
     let mut last_status = Instant::now();
+    let mut last_seek_serial = 0;
     #[cfg(target_os = "android")]
     let mut last_permission_check = Instant::now();
+    #[cfg(target_os = "android")]
+    let mut last_android_media_update = Instant::now();
+    #[cfg(target_os = "android")]
+    let mut last_android_playing = None;
     timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(16),
@@ -1518,6 +2001,41 @@ pub fn run() -> Result<(), slint::PlatformError> {
             let Some(w) = weak.upgrade() else {
                 return;
             };
+            #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+            {
+                let now = Instant::now();
+                let need_session = {
+                    let app = shared.borrow();
+                    app.media_session.is_none()
+                        && app.media_session_retry_at.is_none_or(|retry| now >= retry)
+                };
+                if need_session {
+                    match crate::media_session::MediaSession::new(&w) {
+                        Ok(mut session) => {
+                            if let Some(track) = shared.borrow().current.as_ref() {
+                                session.set_track(track);
+                            }
+                            let mut app = shared.borrow_mut();
+                            app.media_session = Some(session);
+                            app.media_session_retry_at = None;
+                        }
+                        Err(error) => {
+                            eprintln!("Vey system media controls unavailable: {error}");
+                            shared.borrow_mut().media_session_retry_at =
+                                Some(now + Duration::from_secs(5));
+                        }
+                    }
+                }
+                let events: Vec<_> = shared
+                    .borrow()
+                    .media_session
+                    .as_ref()
+                    .map(|session| session.drain_events().collect())
+                    .unwrap_or_default();
+                for event in events {
+                    handle_media_event(&shared, &w, event);
+                }
+            }
             #[cfg(target_os = "android")]
             if last_permission_check.elapsed() >= Duration::from_millis(500) {
                 last_permission_check = Instant::now();
@@ -1559,25 +2077,38 @@ pub fn run() -> Result<(), slint::PlatformError> {
                             .filter(|t| t.video_id.is_none())
                             .map(|t| normalize_path(&t.path))
                             .collect();
-                        a.library = tracks;
-                        let tracks = a.library.clone();
-                        for t in tracks {
-                            a.store.remember(t);
-                        }
+                        a.store.remember_all(tracks);
+                        let saved: std::collections::HashSet<_> = a
+                            .store
+                            .playlists
+                            .iter()
+                            .flat_map(|p| p.tracks.iter().cloned())
+                            .chain(a.store.likes.iter().cloned())
+                            .collect();
+                        a.library = a
+                            .store
+                            .tracks
+                            .iter()
+                            .filter(|t| t.video_id.is_none() || saved.contains(&t.path))
+                            .cloned()
+                            .collect();
                         w.set_status(status.into());
                         persist(&w, &a);
                         refresh(&w, &mut a);
-                        refresh_media_rows(&w, &a);
+                        refresh_media_rows(&w, &a, None);
                     }
                     #[cfg(target_os = "android")]
                     Event::ScanFailed(error) => {
                         a.scanning = false;
                         w.set_status(error.into());
                     }
-                    Event::Search(id, result) => {
+                    Event::Search(id, key, result) => {
                         if id == a.search_generation {
                             match result {
                                 Ok(tracks) => {
+                                    if let Some(key) = key {
+                                        a.search_cache.put(&key, tracks.clone());
+                                    }
                                     let mut seen = std::collections::HashSet::new();
                                     let mut merged = if w.get_active_view() == "search" {
                                         a.visible.clone()
@@ -1588,13 +2119,48 @@ pub fn run() -> Result<(), slint::PlatformError> {
                                     merged.retain(|t| seen.insert(t.path.clone()));
                                     a.visible = merged;
                                     let tracks = a.visible.clone();
-                                    for t in tracks.iter() {
-                                        a.store.remember(t.clone());
-                                    }
+                                    a.store.remember_all(tracks);
                                     refresh(&w, &mut a);
                                     w.set_status("".into());
                                 }
                                 Err(e) => w.set_status(e.into()),
+                            }
+                        }
+                    }
+                    Event::HomeRecommendations(id, result) => {
+                        if id == a.home_recommendation_generation {
+                            a.home_recommendation_task.take();
+                            a.home_recommendation_loading = false;
+                            a.home_recommendation_loaded = true;
+                            w.set_home_recommendation_loading(false);
+                            match result {
+                                Ok((tracks, personalized)) if !tracks.is_empty() => {
+                                    a.store.recommendations = crate::services::RecommendationModel { updated_at: crate::services::now_ms(), personalized, tracks: tracks.clone() };
+                                    persist(&w, &a);
+                                    a.home_recommendations = tracks;
+                                    w.set_home_recommendation_failed(false);
+                                    w.set_home_recommendation_personalized(personalized);
+                                    let mut local_paths = a.local_paths.clone();
+                                    local_paths.extend(
+                                        a.store.downloads.values().map(|p| normalize_path(p)),
+                                    );
+                                    crate::track_model::set_home_recommendations(
+                                        &w,
+                                        a.home_recommendations
+                                            .iter()
+                                            .map(|track| row(&a, track, &local_paths))
+                                            .collect(),
+                                    );
+                                    for track in a.home_recommendations.clone().into_iter().rev() {
+                                        queue_art(&mut a, &track, true);
+                                    }
+                                    if let Some(track) = a.current.clone() {
+                                        queue_art(&mut a, &track, true);
+                                    }
+                                }
+                                Ok(_) | Err(_) => {
+                                    w.set_home_recommendation_failed(true);
+                                }
                             }
                         }
                     }
@@ -1632,7 +2198,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                             Ok(None) => w.set_status("Завантаження недоступне".into()),
                             Err(error) => w.set_status(error.into()),
                         }
-                        refresh_media_rows(&w, &a);
+                        refresh_media_rows(&w, &a, None);
                     }
                     Event::Loaded(serial, path, result) => {
                         if a.load_generation.load(std::sync::atomic::Ordering::SeqCst) == serial
@@ -1748,22 +2314,27 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     }
                     Event::Art(path, result) => {
                         a.art_pending.remove(&path);
-                        // Remember misses for this session as well, avoiding request loops.
-                        let art = match result {
-                            Ok(img) => slint::Image::from_rgba8(
+                        if let Ok(img) = result {
+                            a.art_failed.remove(&path);
+                            let art = slint::Image::from_rgba8(
                                 slint::SharedPixelBuffer::clone_from_slice(
                                     img.as_raw(),
                                     img.width(),
                                     img.height(),
                                 ),
-                            ),
-                            Err(_) => slint::Image::default(),
-                        };
-                        a.art.insert(path.clone(), art.clone());
-                        refresh_media_rows(&w, &a);
-                        if a.current.as_ref().is_some_and(|t| t.path == path) {
-                            w.set_current_art(art);
+                            );
+                            a.art.insert(path.clone(), art.clone());
+                            refresh_media_rows(&w, &a, Some(&path));
+                            refresh_playlists(&w, &a);
+                            if a.current.as_ref().is_some_and(|t| t.path == path) {
+                                w.set_current_art(art);
+                            }
+                        } else {
+                            a.art_failed.retain(|_, failed| failed.elapsed() < Duration::from_secs(30));
+                            if a.art_failed.len() >= 256 { a.art_failed.clear(); }
+                            a.art_failed.insert(path, Instant::now());
                         }
+                        pump_art(&mut a);
                     }
                     Event::Message(msg) => w.set_status(msg.into()),
                     Event::AuthReady(result) => match result {
@@ -1788,6 +2359,14 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     break;
                 }
             }
+            #[cfg(target_os = "android")]
+            if last_status.elapsed() >= Duration::from_millis(100) {
+                if let Ok(event) = crate::android::media_poll() {
+                    if !event.is_empty() {
+                        handle_android_media_event(&shared, &w, &event);
+                    }
+                }
+            }
             let mut a = shared.borrow_mut();
             if a.save_due.get().is_some_and(|due| Instant::now() >= due) {
                 a.save_due.set(None);
@@ -1802,6 +2381,10 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 if let Ok(s) = core::player_status(&a.audio) {
                     if s.current_path.as_deref() != Some(a.loaded_path.as_str()) {
                         return;
+                    }
+                    if s.seek_serial != last_seek_serial {
+                        last_seek_serial = s.seek_serial;
+                        w.set_native_seek_revision(w.get_native_seek_revision().wrapping_add(1));
                     }
                     w.set_position(s.position_secs as f32);
                     w.set_duration(s.duration_secs as f32);
@@ -1821,6 +2404,29 @@ pub fn run() -> Result<(), slint::PlatformError> {
                         }
                         .into(),
                     );
+                    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+                    if let Some(session) = a.media_session.as_mut() {
+                        session.set_playback(
+                            s.state == core::PlaybackState::Playing,
+                            s.position_secs,
+                        );
+                    }
+                    #[cfg(target_os = "android")]
+                    if let Some(track) = a.current.as_ref().filter(|_| {
+                        last_android_media_update.elapsed() >= Duration::from_secs(1)
+                            || last_android_playing
+                                != Some(s.state == core::PlaybackState::Playing)
+                    }) {
+                        last_android_media_update = Instant::now();
+                        last_android_playing = Some(s.state == core::PlaybackState::Playing);
+                        let _ = crate::android::media_update(
+                            &serde_json::json!({
+                                "title": track.title, "artist": track.artist, "album": track.album,
+                                "duration": s.duration_secs, "position": s.position_secs,
+                                "playing": s.state == core::PlaybackState::Playing, "active": true
+                            }).to_string(),
+                        );
+                    }
                     if s.ended && !a.ended {
                         a.ended = true;
                         let next = a.queue.advance(false, true);
@@ -1860,11 +2466,21 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 state.store.likes = cloud.likes;
                 state.store.playlists = cloud.playlists;
                 state.store.history = cloud.history;
+                let newer_recommendations = cloud.recommendations.updated_at > state.store.recommendations.updated_at;
+                state.store.recommendations = cloud.recommendations;
                 state.store.offsets = cloud.offsets;
                 state.store.lyrics_choices = cloud.lyrics_choices;
                 state.store.settings = cloud.settings;
                 state.store.downloads = cloud.downloads;
                 state.library = state.store.tracks.clone();
+                if newer_recommendations {
+                    state.home_recommendation_generation = state.home_recommendation_generation.wrapping_add(1);
+                    if let Some(task) = state.home_recommendation_task.take() { task.abort(); }
+                    state.home_recommendation_loading = false;
+                    state.home_recommendation_loaded = !state.store.recommendations.tracks.is_empty();
+                    ui.set_home_recommendation_loading(false);
+                }
+                show_saved_recommendations(&ui, &mut state);
                 crate::preferences::apply(&ui, &state.store.settings);
                 ui.set_volume(state.store.settings.volume);
                 ui.set_color_mode(state.store.settings.color_mode.as_str().into());
@@ -1883,12 +2499,101 @@ pub fn run() -> Result<(), slint::PlatformError> {
             }
         })
     };
+    crate::home::install(&w, account_get.clone(), account_apply.clone());
+    let _music_timer = crate::music_accounts::install(
+        &w,
+        account_get.clone(),
+        account_apply.clone(),
+        a.borrow().rt.clone(),
+    );
     let _account_timer =
         crate::account::install(&w, account_get, account_apply, a.borrow().rt.clone());
+    let _search_timer = slint::Timer::default();
+    let weak = w.as_weak();
+    let state = a.clone();
+    _search_timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(80),
+        move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let query = {
+                let mut a = state.borrow_mut();
+                if a.pending_search
+                    .as_ref()
+                    .is_some_and(|(at, _)| at.elapsed() >= Duration::from_millis(280))
+                {
+                    a.pending_search.take().map(|(_, q)| q)
+                } else {
+                    None
+                }
+            };
+            if let Some(query) = query {
+                if ui.get_active_view() == "search" {
+                    browse(&state, &ui, Some(query), false);
+                }
+            }
+        },
+    );
+    {
+        let mut state = a.borrow_mut();
+        show_saved_recommendations(&w, &mut state);
+        state.home_recommendation_loaded = !state.home_recommendations.is_empty();
+    }
+    if a.borrow().store.recommendations.updated_at.saturating_add(3_600_000) <= crate::services::now_ms() || a.borrow().home_recommendations.is_empty() {
+        load_home_recommendations(&a, &w);
+    }
+    let recommendation_timer = slint::Timer::default();
+    let recommendation_state = a.clone();
+    let recommendation_window = w.as_weak();
+    recommendation_timer.start(slint::TimerMode::Repeated, Duration::from_secs(60), move || {
+        if let Some(ui) = recommendation_window.upgrade() {
+            if recommendation_state.borrow().store.recommendations.updated_at.saturating_add(3_600_000) <= crate::services::now_ms() {
+                load_home_recommendations(&recommendation_state, &ui);
+            }
+        }
+    });
     let result = w.run();
     let app = a.borrow();
     if app.save_due.take().is_some() {
         app.saver.request(app.store.clone());
     }
     result
+}
+
+#[cfg(test)]
+mod artwork_queue_tests {
+    use super::*;
+
+    fn track(path: &str) -> Track {
+        Track {
+            path: path.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn priority_deduplication_and_reset_preserve_order() {
+        let mut queue = ArtworkQueue::default();
+        queue.push(&track("a"), false);
+        queue.push(&track("b"), false);
+        queue.push(&track("c"), false);
+        queue.push(&track("c"), true);
+        queue.push(&track("a"), false);
+        assert_eq!(queue.pop().unwrap().path, "c");
+        assert_eq!(queue.pop().unwrap().path, "a");
+        queue.clear();
+        queue.push(&track("b"), true);
+        assert_eq!(queue.pop().unwrap().path, "b");
+        assert!(queue.pop().is_none());
+    }
+
+    #[test]
+    fn selected_cover_has_one_reserved_slot() {
+        assert!(can_start_art(1, false));
+        assert!(!can_start_art(2, false));
+        assert!(can_start_art(2, true));
+        assert!(!can_start_art(3, true));
+    }
 }

@@ -24,11 +24,15 @@ pub struct Source {
     pub path: String,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Playlist {
     pub id: String,
     pub name: String,
     pub tracks: Vec<String>,
+    pub author: String,
+    pub updated_at: u64,
+    pub is_public: bool,
+    pub source_playlist_id: String,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -37,9 +41,19 @@ pub struct History {
     pub played_at: u64,
     pub play_count: u32,
 }
+/// Cached personalized recommendations, shared between an account's devices.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RecommendationModel {
+    pub updated_at: u64,
+    pub personalized: bool,
+    pub tracks: Vec<Track>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub home_layout: u8,
+    pub home_rotate: bool,
     pub language: String,
     pub kawarp: KawarpSettings,
     pub volume: f32,
@@ -55,8 +69,10 @@ pub struct Settings {
     pub lyrics_provider: String,
     pub lyrics_theme_css: String,
     pub lyrics_font_family: String,
+    pub theme_entire_player: bool,
     pub lyrics_romanization: bool,
     pub lyrics_translation: bool,
+    pub lyrics_secondary_gap: f32,
     pub lyrics_translation_language: String,
     pub lyrics_stage: bool,
     pub lyrics_reduced_motion: bool,
@@ -135,6 +151,8 @@ fn normal_playback_rate() -> f32 {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            home_layout: 0,
+            home_rotate: false,
             language: "uk".into(),
             kawarp: KawarpSettings::default(),
             volume: 1.,
@@ -148,8 +166,10 @@ impl Default for Settings {
             lyrics_provider: "auto".into(),
             lyrics_theme_css: String::new(),
             lyrics_font_family: String::new(),
+            theme_entire_player: true,
             lyrics_romanization: true,
             lyrics_translation: true,
+            lyrics_secondary_gap: 0.65,
             lyrics_translation_language: "auto".into(),
             lyrics_stage: false,
             lyrics_reduced_motion: false,
@@ -193,9 +213,10 @@ pub struct Store {
     pub likes: BTreeSet<String>,
     pub playlists: Vec<Playlist>,
     pub history: Vec<History>,
+    pub recommendations: RecommendationModel,
     pub offsets: BTreeMap<String, i64>,
     pub legacy: BTreeMap<String, Value>,
-    pub lyrics_cache: BTreeMap<String, CachedLyrics>,
+    pub lyrics_cache: BTreeMap<String, std::sync::Arc<CachedLyrics>>,
     /// Public track key -> complete permanent local file, never the stream cache.
     pub downloads: BTreeMap<String, String>,
     pub lyrics_choices: BTreeMap<String, LyricsChoice>,
@@ -212,6 +233,7 @@ impl Default for Store {
             likes: BTreeSet::new(),
             playlists: vec![],
             history: vec![],
+            recommendations: RecommendationModel::default(),
             offsets: BTreeMap::new(),
             legacy: BTreeMap::new(),
             lyrics_cache: BTreeMap::new(),
@@ -345,6 +367,39 @@ impl Store {
             self.tracks.push(track);
         }
     }
+    /// Merge a scan/search batch in linear time, preserving catalog order and
+    /// the single-track API's last-update-wins behavior.
+    pub fn remember_all(&mut self, tracks: impl IntoIterator<Item = Track>) {
+        let mut indices: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::with_capacity(self.tracks.len());
+        for (i, track) in self.tracks.iter().enumerate() {
+            indices.entry(track.path.clone()).or_insert(i);
+        }
+        for track in tracks {
+            if let Some(&i) = indices.get(&track.path) {
+                self.tracks[i] = track;
+            } else {
+                indices.insert(track.path.clone(), self.tracks.len());
+                self.tracks.push(track);
+            }
+        }
+    }
+    /// Resolve in playlist order, including repeats; ignore missing references.
+    pub fn playlist_tracks(&self, id: &str) -> Vec<Track> {
+        let Some(playlist) = self.playlists.iter().find(|p| p.id == id) else {
+            return vec![];
+        };
+        let mut tracks = std::collections::HashMap::with_capacity(self.tracks.len());
+        for track in &self.tracks {
+            tracks.entry(track.path.as_str()).or_insert(track);
+        }
+        playlist
+            .tracks
+            .iter()
+            .filter_map(|path| tracks.get(path.as_str()))
+            .map(|track| (*track).clone())
+            .collect()
+    }
     pub fn record(&mut self, track: &Track) {
         self.remember(track.clone());
         let count = self
@@ -377,11 +432,11 @@ impl Store {
     ) {
         self.lyrics_cache.insert(
             path,
-            CachedLyrics {
+            std::sync::Arc::new(CachedLyrics {
                 parser_version: 4,
                 saved_at: now_ms(),
                 alternatives,
-            },
+            }),
         );
     }
     pub fn offset_for(&self, track: &Track) -> i64 {
@@ -413,6 +468,9 @@ impl Store {
             id: id.clone(),
             name: name.into(),
             tracks: vec![],
+            updated_at: now_ms(),
+            is_public: true,
+            ..Default::default()
         });
         Some(id)
     }
@@ -420,6 +478,7 @@ impl Store {
         if let Some(p) = self.playlists.iter_mut().find(|p| p.id == id) {
             if !p.tracks.iter().any(|t| t == path) {
                 p.tracks.push(path.into());
+                p.updated_at = now_ms();
             }
         }
     }
@@ -516,6 +575,7 @@ impl Store {
                                     id: p.get("id").and_then(Value::as_str).unwrap_or(name).into(),
                                     name: name.into(),
                                     tracks,
+                                    ..Default::default()
                                 })
                             })
                             .collect();
@@ -541,10 +601,12 @@ impl Store {
             self.legacy.insert(key, decoded);
             count += 1;
         }
-        let history = self.history.clone();
-        for h in history {
-            self.remember(h.track);
-        }
+        let history = self
+            .history
+            .iter()
+            .map(|h| h.track.clone())
+            .collect::<Vec<_>>();
+        self.remember_all(history);
         self.migrated = true;
         Ok(count)
     }
@@ -597,6 +659,65 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn batched_catalog_merge_matches_sequential_updates_and_serializes_identically() {
+        let make = |path: &str, title: &str| Track {
+            path: path.into(),
+            title: title.into(),
+            ..Default::default()
+        };
+        let initial = vec![
+            make("a", "old"),
+            make("b", "keep"),
+            make("a", "legacy duplicate"),
+        ];
+        let updates = vec![make("c", "first"), make("a", "updated"), make("c", "last")];
+        let mut sequential = Store {
+            tracks: initial.clone(),
+            ..Default::default()
+        };
+        for track in updates.clone() {
+            sequential.remember(track);
+        }
+        let mut batched = Store {
+            tracks: initial,
+            ..Default::default()
+        };
+        batched.remember_all(updates);
+        assert_eq!(
+            serde_json::to_value(&batched).unwrap(),
+            serde_json::to_value(&sequential).unwrap()
+        );
+    }
+    #[test]
+    fn indexed_playlist_preserves_order_repeats_and_first_catalog_match() {
+        let make = |path: &str, title: &str| Track {
+            path: path.into(),
+            title: title.into(),
+            ..Default::default()
+        };
+        let store = Store {
+            tracks: vec![
+                make("a", "first"),
+                make("b", "second"),
+                make("a", "duplicate"),
+            ],
+            playlists: vec![Playlist {
+                id: "p".into(),
+                name: "Test".into(),
+                tracks: ["b", "missing", "a", "b"].map(str::to_string).to_vec(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let titles: Vec<_> = store
+            .playlist_tracks("p")
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
+        assert_eq!(titles, ["second", "first", "second"]);
+        assert!(store.playlist_tracks("missing").is_empty());
+    }
     #[test]
     fn source_roots_and_dedup() {
         assert_eq!(normalize_path(" C:\\\\ ".trim()), "C:/");

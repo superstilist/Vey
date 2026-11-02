@@ -135,6 +135,21 @@ pub fn bridge_poll() -> Result<String, String> {
     })
 }
 
+pub fn media_update(payload: &str) -> Result<(), String> {
+    bridge_call("media", payload)
+}
+
+pub fn media_poll() -> Result<String, String> {
+    with_activity(&app()?, |env, activity| {
+        let class = bridge_class(env, activity)?;
+        let class: &JClass = class.as_obj().into();
+        let value = env
+            .call_static_method(class, "mediaPoll", "()Ljava/lang/String;", &[])?
+            .l()?;
+        Ok(env.get_string(&JString::from(value))?.into())
+    })
+}
+
 fn app() -> Result<AndroidApp, String> {
     APP.lock()
         .unwrap()

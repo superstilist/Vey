@@ -26,6 +26,15 @@ player settings, lyric offsets and per-song lyric choices. Local filesystem path
 provider credentials and lyric caches are excluded. An unuploaded local song stays
 on its device; its audio and local-only references are not part of Basic sync.
 
+While signed in, Settings > Vey account lets you edit the display name, email,
+nickname, bio and Discord name, change the password, and upload or remove an
+avatar. Changing the email or password requires the current password. Passwords
+are sent only to the configured Blueberry API and cleared from the form after the
+request. A password change keeps the current device session and revokes the other
+Vey sessions. Avatar uploads accept JPEG, PNG or WebP up to 2 MiB; Blueberry
+stores the image in its MEDIA R2 bucket and serves a versioned profile image.
+Account profile edits do not change roles, Premium access or cloud-library data.
+
 Sign in with your Vey email/password, or choose website login and approve the
 matching code in your signed-in site account. When Turnstile is enabled, use the
 website flow. A new registration requires a password of at least 10 characters.

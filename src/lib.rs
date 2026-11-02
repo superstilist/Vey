@@ -1,8 +1,15 @@
 mod account;
+pub mod library_import;
+pub mod home;
+#[cfg(not(target_arch = "wasm32"))]
+mod music_accounts;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod youtube_browser;
+pub mod search_index;
 #[cfg(any(test, not(target_arch = "wasm32")))]
 mod ambient_motion;
 #[cfg(not(target_arch = "wasm32"))]
-mod ambient_native;
+pub mod ambient_native;
 #[cfg(not(target_arch = "wasm32"))]
 mod app;
 mod artwork;
@@ -13,10 +20,13 @@ mod challenge;
 pub mod i18n;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod local_sync;
+pub mod lyric_appearance;
 pub mod lyrics;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lyrics_service;
 pub mod lyrics_translation;
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+mod media_session;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod lyrics_widget;
 mod material;
@@ -24,6 +34,8 @@ mod material;
 mod media_library;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_lyric_camera;
 #[cfg(not(target_arch = "wasm32"))]
 mod native_lyric_focus;
 #[cfg(not(target_arch = "wasm32"))]
@@ -39,6 +51,7 @@ mod native_lyric_paint;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native_lyrics;
 pub mod navigation_fx;
+pub mod player_themes;
 mod preferences;
 #[cfg(target_arch = "wasm32")]
 mod renderer;
@@ -47,7 +60,10 @@ pub mod services;
 mod snapshots;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod storage;
+mod theme_colors;
+pub mod theme_presets;
 pub mod themes;
+pub mod track_model;
 pub mod video;
 #[cfg(target_arch = "wasm32")]
 mod web;

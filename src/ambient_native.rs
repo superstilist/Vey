@@ -5,7 +5,14 @@ use slint::ComponentHandle;
 use std::time::{Duration, Instant};
 const W: u32 = 256;
 const H: u32 = 144;
+const TRAVEL_FRAME_INTERVAL: Duration = Duration::from_millis(100);
+
+fn present_during_travel(moving: bool, reduced: bool, has_frame: bool, elapsed: Duration) -> bool {
+    !moving || reduced || !has_frame || elapsed >= TRAVEL_FRAME_INTERVAL
+}
+
 pub fn install(w: &MainWindow) -> slint::Timer {
+    let throttle_travel = std::env::var("VEY_LEGACY_AMBIENT_TRAVEL").as_deref() != Ok("1");
     let weak = w.as_weak();
     let timer = slint::Timer::default();
     let mut art = slint::Image::default();
@@ -18,6 +25,7 @@ pub fn install(w: &MainWindow) -> slint::Timer {
     let mut started = Instant::now();
     let mut phase = 0.;
     let mut last = Instant::now();
+    let mut last_presented = Instant::now();
     timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(33),
@@ -29,7 +37,7 @@ pub fn install(w: &MainWindow) -> slint::Timer {
             let elapsed = now.duration_since(last).as_secs_f32().min(0.2);
             last = now;
             if w.window().is_minimized()
-                || w.get_color_mode() == "static"
+                || (w.get_color_mode() == "static" && !w.get_player_theme_style().enabled)
                 || w.get_ambient_opacity() <= 0.001
             {
                 return;
@@ -86,6 +94,16 @@ pub fn install(w: &MainWindow) -> slint::Timer {
             if moving {
                 phase += elapsed * 0.24;
             }
+            if throttle_travel
+                && !present_during_travel(
+                    w.get_page_moving(),
+                    reduced,
+                    !shown.is_empty(),
+                    now.duration_since(last_presented),
+                )
+            {
+                return;
+            }
             let mix = t * t * t * (t * (t * 6. - 15.) + 10.);
             crate::ambient_motion::compose(
                 &target,
@@ -101,9 +119,30 @@ pub fn install(w: &MainWindow) -> slint::Timer {
             w.set_ambient_frame(slint::Image::from_rgba8(
                 slint::SharedPixelBuffer::clone_from_slice(&shown, W, H),
             ));
+            last_presented = now;
         },
     );
     timer
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn travel_throttles_only_existing_non_reduced_frames() {
+        let short = Duration::from_millis(33);
+        assert!(!present_during_travel(true, false, true, short));
+        assert!(present_during_travel(
+            true,
+            false,
+            true,
+            TRAVEL_FRAME_INTERVAL
+        ));
+        assert!(present_during_travel(false, false, true, short));
+        assert!(present_during_travel(true, true, true, short));
+        assert!(present_during_travel(true, false, false, short));
+    }
 }
 fn prepare(image: &image::RgbaImage, k: &KawarpSettings) -> Vec<u8> {
     let small = image::imageops::resize(image, W, H, image::imageops::FilterType::Triangle);

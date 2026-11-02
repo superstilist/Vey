@@ -1,4 +1,5 @@
 // Generated from assets/design-tokens.json.
+import { PlayerTheme } from "player-theme.slint";
 export global Tokens {
     in-out property <color> neutral-0: #101110;
     in-out property <color> neutral-50: #161716;
@@ -39,9 +40,9 @@ export global Tokens {
     out property <length> space-10: 48px;
     out property <length> radius-xs: 4px;
     out property <length> radius-sm: 8px;
-    out property <length> radius-md: 20px;
-    out property <length> radius-lg: 28px;
-    out property <length> radius-pill: 999px;
+    out property <length> radius-md: PlayerTheme.enabled ? PlayerTheme.corner * 1px : 20px;
+    out property <length> radius-lg: PlayerTheme.corner * 1px;
+    out property <length> radius-pill: PlayerTheme.control-corner * 1px;
     out property <length> metric-sidebar-width: 240px;
     out property <length> metric-sidebar-rail: 72px;
     out property <length> metric-topbar-height: 64px;

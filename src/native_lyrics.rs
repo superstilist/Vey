@@ -5,12 +5,12 @@ use crate::{
         PassiveScroll, PlaybackClock, ScrollPlan, ScrollPolicy, ScrollState, Timeline,
     },
     native_lyric_focus::FocusPaint,
-    native_lyric_follow::FollowIndex,
+    native_lyric_follow::{FollowIndex, ScrollTargets},
     native_lyric_fonts as fonts,
     native_lyric_paint::WordPaint,
     BraccatoGlyph, BraccatoInstrumental, BraccatoRow, BraccatoWord, LyricRow, MainWindow,
 };
-use braccato_slint::{LayoutOptions, Lyric, LyricPart, StageRole};
+use braccato_slint::{LayoutOptions, Lyric, LyricPart, LyricSyncType, StageRole};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
@@ -79,6 +79,7 @@ fn word(p: braccato_slint::LyricWord) -> BraccatoWord {
         text,
         active: false,
         background: p.background,
+        line_synced: p.line_synced,
         start_ms: p.start_ms,
         duration_ms: p.duration_ms,
         cue_offset: p.cue_offset,
@@ -104,6 +105,7 @@ fn layout(
     lyrics: &[Lyric],
     width: f32,
     size: f32,
+    secondary_gap: f32,
     stage: bool,
 ) -> (Vec<BraccatoRow>, Vec<f32>) {
     styled_layout(
@@ -111,19 +113,74 @@ fn layout(
         lyrics,
         width,
         size,
+        secondary_gap,
         stage,
         &crate::themes::NativeTheme::default().style(),
         700,
+        true,
     )
 }
+
+// Instant punctuation/symbols have no duration. Give their presentation motion
+// a positive interval; the renderer uses the theme's full wobble period.
+const INSTANT_MOTION_MS: f32 = 1000.;
+// Line-synced lyrics have no per-word timing; keep presentation motion together.
+const LINE_SYNC_MOTION_DELAY_MS: f32 = 0.;
+
+// Adapt line-synced lyrics into word runs without changing their cue times.
+fn line_synced_words(text: &str, start_ms: f32) -> Vec<braccato_slint::LyricWord> {
+    let mut tokens = vec![];
+    let mut token = String::new();
+    let mut whitespace = false;
+    for character in text.chars() {
+        let space = character.is_whitespace();
+        // Keep trailing spaces in their word's shaping run. A separate Slint
+        // word delegate for every space doubles layout/animation work while
+        // painting no ink. The source text and line cue remain exact.
+        if whitespace && !space {
+            tokens.push(std::mem::take(&mut token));
+        }
+        whitespace = space;
+        token.push(character);
+    }
+    if !token.is_empty() {
+        tokens.push(token);
+    }
+    let mut word_index = 0;
+    tokens
+        .into_iter()
+        .enumerate()
+        .map(|(part_index, text)| {
+            let motion_start_ms = start_ms + word_index as f32 * LINE_SYNC_MOTION_DELAY_MS;
+            if !text.chars().all(char::is_whitespace) {
+                word_index += 1;
+            }
+            braccato_slint::LyricWord {
+                text: text.into(),
+                start_ms,
+                duration_ms: 0.,
+                cue_offset: 0.,
+                cue_span: 1.,
+                motion_start_ms,
+                motion_duration_ms: INSTANT_MOTION_MS,
+                source_part: part_index as i32,
+                line_synced: true,
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
 fn styled_layout(
     source: &ModelRc<LyricRow>,
     lyrics: &[Lyric],
     width: f32,
     size: f32,
+    secondary_gap: f32,
     stage: bool,
     style: &crate::LyricStyle,
     weight: i32,
+    timed: bool,
 ) -> (Vec<BraccatoRow>, Vec<f32>) {
     let raw = braccato_slint::lyric_rows(lyrics, None, -1.);
     let mut normalized = vec![];
@@ -132,19 +189,28 @@ fn styled_layout(
             continue;
         };
         let original = source.row_data(row.source_index as usize).unwrap();
-        // Upstream's optional visual stagger creates 50ms word starts for line
-        // lyrics. Vey explicitly does not use it. One whole-line fragment allows
-        // native wrapping while keeping every fragment on the actual line cue.
+        // Timed line lyrics keep their canonical line cue but split into words so
+        // every word and symbol can wobble. Plain lyrics stay one wrapping run.
+        let lyric = &lyrics[row.source_index as usize];
+        let line_synced = timed
+            && !row.secondary
+            && !row.instrumental
+            && lyric.parts.is_none()
+            && lyric.sync_type() == LyricSyncType::Synced;
         if !row.instrumental
             && (row.parts.row_count() == 0
                 || !row.secondary && lyrics[row.source_index as usize].parts.is_none())
         {
-            row.parts = model(vec![braccato_slint::LyricWord {
-                text: row.text.clone(),
-                start_ms: row.start_ms,
-                source_part: -1,
-                ..Default::default()
-            }]);
+            row.parts = if line_synced {
+                model(line_synced_words(&row.text, row.start_ms))
+            } else {
+                model(vec![braccato_slint::LyricWord {
+                    text: row.text.clone(),
+                    start_ms: row.start_ms,
+                    source_part: -1,
+                    ..Default::default()
+                }])
+            };
         }
         normalized.push(row.clone());
         if !row.secondary && original.words.row_count() == 0 && !original.background_text.is_empty()
@@ -179,10 +245,12 @@ fn styled_layout(
         .map(|r| {
             let family = fonts::family_for(&r.text, &style.family);
             let source_index = r.source_index;
+            let synthetic_line =
+                !r.romanization && r.parts.row_data(0).is_some_and(|p| p.line_synced);
             let line_only = if r.romanization {
                 lyrics[source_index as usize].timed_romanization.is_none()
             } else {
-                lyrics[source_index as usize].parts.is_none()
+                !synthetic_line && lyrics[source_index as usize].parts.is_none()
             };
             BraccatoRow {
                 text: r.text,
@@ -194,8 +262,8 @@ fn styled_layout(
                 instrumental: r.instrumental,
                 stage_role: r.stage_role,
                 source_index,
-                // Text stays in a single shaping run for line sync, translations and
-                // untimed romanization. No visual fragments become canonical cues.
+                // Plain/translation rows stay in a single shaping run. Timed
+                // line-synced tokens keep the line cue but render per word.
                 parts: if line_only || r.translation {
                     ModelRc::default()
                 } else {
@@ -262,7 +330,7 @@ fn styled_layout(
                 + after
                 + size
                     * if r.secondary {
-                        0.7
+                        1.15 + secondary_gap.clamp(0., 1.5)
                     } else if r.parts.row_data(0).is_some_and(|p| p.background) {
                         0.95
                     } else {
@@ -293,19 +361,34 @@ fn plan_word_motion(parts: &mut [BraccatoWord], size: f32, weight: u16) {
             end += 1;
         }
         let group = &mut parts[first..end];
-        if group.iter().all(|p| p.duration_ms > 0.) {
-            let start = group
+        let line_synced = group[0].line_synced;
+        let timed = group.iter().any(|p| p.duration_ms > 0.);
+        let start = if line_synced {
+            group
+                .iter()
+                .map(|p| p.motion_start_ms)
+                .fold(f32::INFINITY, f32::min)
+        } else {
+            group
                 .iter()
                 .map(|p| p.start_ms + p.duration_ms * p.cue_offset)
-                .fold(f32::INFINITY, f32::min);
-            let until = group
-                .iter()
-                .map(|p| {
-                    p.start_ms
-                        + p.duration_ms
-                            * (p.cue_offset + if p.cue_span > 0. { p.cue_span } else { 1. })
-                })
-                .fold(start, f32::max);
+                .fold(f32::INFINITY, f32::min)
+        };
+        let until = group
+            .iter()
+            .map(|p| {
+                p.start_ms
+                    + p.duration_ms * (p.cue_offset + if p.cue_span > 0. { p.cue_span } else { 1. })
+            })
+            .fold(start, f32::max);
+        // Line-synced words stagger at 50ms intervals and instant symbols still
+        // wobble once. The renderer expands both to the theme's wobble duration.
+        let duration = if line_synced || !timed {
+            INSTANT_MOTION_MS
+        } else {
+            (until - start).max(0.)
+        };
+        if start.is_finite() && duration > 0. {
             let measure = |p: &BraccatoWord, text: &str| {
                 fonts::measure_with(
                     text,
@@ -324,7 +407,7 @@ fn plan_word_motion(parts: &mut [BraccatoWord], size: f32, weight: u16) {
             let mut offset = 0.;
             for (part, width) in group.iter_mut().zip(widths) {
                 part.motion_start_ms = start;
-                part.motion_duration_ms = (until - start).max(0.);
+                part.motion_duration_ms = duration;
                 part.motion_origin_em = (center - offset) / size.max(1.);
                 offset += width;
             }
@@ -400,7 +483,7 @@ pub fn install(w: &MainWindow) {
     let mut source = ModelRc::<LyricRow>::default();
     let mut timeline = Timeline::default();
     let mut clock = PlaybackClock::default();
-    let mut key = (0u32, 0u32, 0, false, false, 0u64);
+    let mut key = (0u32, 0u32, 0u32, 0, false, false, 0u64);
     let mut style_key = w.get_lyric_style();
     let mut rows = ModelRc::<BraccatoRow>::default();
     let mut paint_band = 0..0;
@@ -413,12 +496,19 @@ pub fn install(w: &MainWindow) {
     let mut dirty = Vec::<usize>::new();
     let mut warm = Vec::<usize>::new();
     let mut follow = FollowIndex::default();
+    let mut scroll_targets = ScrollTargets::default();
     let mut has_roman = false;
     let mut stage_selection = None;
     let mut roles = vec![];
     let mut focus = FocusPaint::default();
+    let mut camera = crate::native_lyric_camera::Camera::default();
+    let mut was_driven = false;
+    let camera_enabled = std::env::var_os("VEY_LEGACY_LYRIC_SCROLL").is_none();
     let mut focus_values = ModelRc::<f32>::default();
     let mut last_ms = -1;
+    let mut was_visible = false;
+    let mut seek_revision = w.get_native_seek_revision();
+    let mut offset_key = None;
     let mut snap_until = 0.;
     let mut passive = PassiveScroll::default();
     let mut scroll_plan: Option<ScrollPlan> = None;
@@ -440,7 +530,14 @@ pub fn install(w: &MainWindow) {
                 || w.get_player_tab() != "lyrics"
                 || w.window().is_minimized()
             {
+                was_visible = false;
                 return;
+            }
+            let resumed = !std::mem::replace(&mut was_visible, true);
+            let explicit_seek = seek_revision != w.get_native_seek_revision();
+            seek_revision = w.get_native_seek_revision();
+            if resumed || explicit_seek {
+                clock = PlaybackClock::default();
             }
             let now = origin.elapsed().as_secs_f64() * 1000.;
             let update_started = trace.then(web_time::Instant::now);
@@ -475,13 +572,25 @@ pub fn install(w: &MainWindow) {
             let next_key = (
                 w.get_lyrics_widget_width().to_bits(),
                 size.to_bits(),
+                w.get_lyrics_secondary_gap().to_bits(),
                 w.get_lyric_weight(),
                 w.get_lyrics_stage(),
                 !rich,
                 fonts::revision(),
             );
             let rebuilt = replaced || key != next_key || style_key != style;
-            if rebuilt || last_ms >= 0 && (ms < last_ms || ms - last_ms > 500) {
+            let offsets_changed =
+                offset_key.is_some_and(|key| key != (w.get_lyrics_offset(), shift));
+            offset_key = Some((w.get_lyrics_offset(), shift));
+            // Only a confirmed transport seek, entry, or a presentation change
+            // may cancel the camera. Sample corrections during playback are
+            // not seeks, regardless of their direction or size.
+            if rebuilt
+                || resumed
+                || explicit_seek
+                || offsets_changed
+                || (!playing && last_ms >= 0 && ms != last_ms)
+            {
                 snap_until = now + 200.;
             }
             w.set_native_scroll_snap(now < snap_until);
@@ -505,9 +614,11 @@ pub fn install(w: &MainWindow) {
                     &lyrics,
                     w.get_lyrics_widget_width(),
                     size,
+                    w.get_lyrics_secondary_gap().clamp(0., 1.5),
                     w.get_lyrics_stage(),
                     &style,
                     w.get_lyric_weight(),
+                    w.get_lyrics_timed(),
                 );
                 prepared = new_rows
                     .iter()
@@ -522,7 +633,12 @@ pub fn install(w: &MainWindow) {
                     |row| row.rendered,
                 )));
                 follow = FollowIndex::new(&rows, lyrics.len());
-                follow.set_geometry(&new_offsets, size, style.line_spacing);
+                follow.set_geometry(
+                    &new_offsets,
+                    size,
+                    style.line_spacing,
+                    w.get_lyrics_secondary_gap().clamp(0., 1.5),
+                );
                 focus.reset();
                 word_paint.reset();
                 previous_active.clear();
@@ -571,6 +687,17 @@ pub fn install(w: &MainWindow) {
                 ending_threshold_ms: w.get_lyrics_ending_threshold_ms() as i64,
                 ..Default::default()
             };
+            if rebuilt || scroll_key != next_scroll_key {
+                scroll_targets = follow.prepare_targets(
+                    &timeline,
+                    &policy,
+                    &offsets,
+                    size,
+                    style.line_spacing,
+                    w.get_lyrics_viewport_height(),
+                    w.get_lyrics_scroll_ratio(),
+                );
+            }
             let plan = scroll.borrow_mut().plan(
                 &timeline,
                 scroll_ms,
@@ -615,16 +742,20 @@ pub fn install(w: &MainWindow) {
                                 let target_source = if committed { plan.anchor } else { index };
                                 let target_visual =
                                     follow.visual(target_source, scroll_ms).unwrap_or(visual);
-                                let (position, overflows) = follow.target(
-                                    &plan.sources,
-                                    target_source,
-                                    target_visual,
-                                    &offsets,
-                                    size,
-                                    style.line_spacing,
-                                    w.get_lyrics_viewport_height(),
-                                    w.get_lyrics_scroll_ratio(),
-                                );
+                                let (position, overflows) = scroll_targets
+                                    .get(&plan.sources, target_source, target_visual)
+                                    .unwrap_or_else(|| {
+                                        follow.target(
+                                            &plan.sources,
+                                            target_source,
+                                            target_visual,
+                                            &offsets,
+                                            size,
+                                            style.line_spacing,
+                                            w.get_lyrics_viewport_height(),
+                                            w.get_lyrics_scroll_ratio(),
+                                        )
+                                    });
                                 w.set_native_scroll_position(position);
                                 scroll.borrow_mut().pin(overflows.then_some(target_source));
                             }
@@ -636,9 +767,43 @@ pub fn install(w: &MainWindow) {
                 w.set_native_active_line(-1);
                 w.set_native_scroll_position(0.);
             }
-            // A snap uses its destination immediately; otherwise the first
-            // navigation snapshot could capture the old, now-empty row band.
-            let paint_y = if now < snap_until && !manual && w.get_native_active_line() >= 0 {
+            let driven = camera_enabled
+                && w.get_lyrics_timed()
+                && !w.get_lyrics_stage()
+                && !manual
+                && w.get_native_active_line() >= 0;
+            let upcoming = timeline.latest_started(ms).map_or(0, |i| i + 1);
+            let preload = if upcoming < timeline.lookahead_end(ms, 1000) {
+                follow.visual(upcoming, ms)
+            } else {
+                None
+            };
+            w.set_native_preload_line(preload.map_or(-1, |i| i as i32));
+            if !driven || !was_driven {
+                camera.reset(-w.get_native_content_y());
+            }
+            let duration = if w.get_lyrics_scroll_duration_ms() >= 0 {
+                w.get_lyrics_scroll_duration_ms() as f64
+            } else {
+                480.
+            };
+            let camera_position = if driven {
+                camera.advance(
+                    w.get_native_scroll_position(),
+                    now,
+                    duration,
+                    w.get_lyrics_reduced_motion() || now < snap_until,
+                )
+            } else {
+                -w.get_native_content_y()
+            };
+            w.set_native_camera_position(camera_position);
+            w.set_native_camera_driven(driven);
+            was_driven = driven;
+            // Select the upcoming frame's band, including exact seek destinations.
+            let paint_y = if driven {
+                -camera_position
+            } else if now < snap_until && !manual && w.get_native_active_line() >= 0 {
                 -w.get_native_scroll_position().max(0.)
             } else {
                 w.get_native_content_y()
@@ -691,7 +856,11 @@ pub fn install(w: &MainWindow) {
                 if rebuilt || stage_changed {
                     dirty.extend(0..rows.row_count());
                 } else if w.get_lyrics_timed() {
-                    let seek = last_ms < 0 || ms < last_ms || ms - last_ms > 500;
+                    let seek = explicit_seek
+                        || resumed
+                        || last_ms < 0
+                        || ms < last_ms
+                        || ms - last_ms > 500;
                     if seek || active != previous_active {
                         follow.extend_rows(&active, &mut dirty);
                         follow.extend_rows(&previous_active, &mut dirty);
@@ -731,8 +900,7 @@ pub fn install(w: &MainWindow) {
                                 || (ms as f32) < word.start_ms + word.duration_ms);
                         let release = prepared[i][n]
                             && (word.start_ms as i64 > ms + 2000
-                                || ((word.start_ms + word.duration_ms.max(1200.)) as i64)
-                                    < ms - 1500);
+                                || crate::native_lyric_paint::residency_end(&row, &word) < ms);
                         if release {
                             word.glyphs = ModelRc::default();
                             word.glow_wide = Default::default();
@@ -842,6 +1010,26 @@ pub fn install(w: &MainWindow) {
 mod tests {
     use super::*;
     use crate::lyrics::LyricsAlternative;
+    #[test]
+    fn line_word_runs_preserve_spacing_without_empty_space_delegates() {
+        let text = "One  two\tтри !";
+        let parts = line_synced_words(text, 9000.);
+        assert_eq!(parts.len(), 4);
+        assert_eq!(
+            parts.iter().map(|p| p.text.as_str()).collect::<String>(),
+            text
+        );
+        assert!(parts
+            .iter()
+            .all(|p| p.start_ms == 9000. && p.line_synced && p.duration_ms == 0.));
+        assert_eq!(
+            line_synced_words("  one ", 0.)
+                .iter()
+                .map(|p| p.text.as_str())
+                .collect::<String>(),
+            "  one "
+        );
+    }
     #[test]
     fn hyphenated_syllables_share_motion_but_keep_their_fill_times() {
         let mut parts = vec![
@@ -957,9 +1145,13 @@ mod tests {
             .filter(|r| r.source_index == 0)
             .collect::<Vec<_>>();
         assert!(first.len() > 1);
-        assert!(first
-            .iter()
-            .all(|r| r.parts.row_count() == 0 && r.start_ms == 1000.));
+        assert!(first.iter().all(|row| {
+            row.start_ms == 1000.
+                && (0..row.parts.row_count()).all(|index| {
+                    let part = row.parts.row_data(index).unwrap();
+                    part.line_synced && part.start_ms == 1000. && part.motion_start_ms == 1000.
+                })
+        }));
         assert_eq!(
             first.iter().map(|r| r.text.as_str()).collect::<String>(),
             "A very long line with many words"

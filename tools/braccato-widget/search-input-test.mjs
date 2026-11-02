@@ -51,10 +51,9 @@ try {
     await submit('after song');
     if(mobile){
       const count=queries.length;
-      const response=page.waitForResponse(r=>r.url().includes('/api/search?'));
-      await page.mouse.click(34,height<500?26:32);await response;
+      await page.mouse.click(34,height<500?26:32);
       await page.waitForTimeout(600);
-      assert.equal(queries.length,count+1,'phone search icon submits the visible query');
+      assert.equal(queries.length,count,'repeated phone search reuses the bounded query cache');
       assert.equal(queries.at(-1),'after song');
     }
     if(height>=500){
@@ -73,6 +72,15 @@ try {
       await page.waitForFunction(()=>!window.fixtureAudio.paused);
       await submit(query);
     }
+    // On the Search page, rapid edits debounce into one request. Leaving the
+    // page invalidates a pending query before its debounce expires.
+    const count=queries.length;
+    await page.mouse.click(mobile?180:450,32);
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.type('debounced final query',{delay:10});
+    await page.waitForTimeout(850);
+    assert.equal(queries.length,count+1,'typing sends one final debounced request');
+    assert.equal(queries.at(-1),'debounced final query');
     await page.screenshot({path:fileURLToPath(new URL(`../../target/search-compact-${width}.png`,import.meta.url))});
     assert.deepEqual(errors,[]);
     results.push({width,height,passed:true,queries});

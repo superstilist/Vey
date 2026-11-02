@@ -1,0 +1,21 @@
+/* Native adaptation inspired by tposejank/blyrics-am-theme at 64191f7f096cc5e05e19b36de5c69780ff536c30. */
+.blyrics-container {
+    --blyrics-lyric-active-color: #ffffff;
+    --blyrics-lyric-inactive-color: #ffffff33;
+    --blyrics-font-family: "Satoshi";
+    --blyrics-font-size: 48px;
+    --blyrics-font-weight: 700;
+    --blyrics-glow-color: #ffffff24;
+    --blyrics-highlight-glow-radius-from: 5px;
+    --blyrics-animate-highlight-glow: 1;
+    --blyrics-animate-highlight-swipe: 1;
+    --blyrics-animate-letter-wave: 0;
+    --blyrics-animate-word-wobble: 0;
+    --vey-word-wobble-strength: 0;
+    --blyrics-letter-wave-duration: 900ms;
+    --blyrics-line-height: 1.5;
+    --blyrics-active-scale: 1.03;
+    --blyrics-scale: 0.94;
+    --blyrics-inactive-blur: 1.5px;
+}
+

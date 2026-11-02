@@ -19,6 +19,10 @@ fn fixture(w: &MainWindow, text: &str, motion: bool) {
     if motion {
         words.push(WordRow {
             text: "Hi ".into(),
+            // A finished finite cue is neutral in every reference frame. An
+            // untimed prefix still wobbles at 500ms and pollutes the fill mask.
+            start_ms: 0,
+            end_ms: 200,
             ..Default::default()
         });
     }

@@ -85,6 +85,46 @@ impl Timeline {
         self.starts
             .partition_point(|s| *s <= time.saturating_add(lead))
     }
+    /// Enumerate geometry groups once, rather than discovering their layout at
+    /// a cue boundary. Changes can only occur at starts, ends or policy edges.
+    pub fn scroll_groups(&self, policy: &ScrollPolicy) -> Vec<Vec<usize>> {
+        let mut times = Vec::with_capacity(self.len() * 4);
+        for (&start, &end) in self.starts.iter().zip(&self.ends) {
+            times.extend([
+                start,
+                end,
+                start.saturating_sub(policy.lookahead_ms.max(0)),
+                end.saturating_sub(policy.ending_threshold_ms.max(0)),
+            ]);
+        }
+        times.sort_unstable();
+        times.dedup();
+        let mut groups = vec![];
+        let mut candidates = vec![];
+        let mut budget = 32768usize;
+        for time in times {
+            self.scroll_candidates(time, policy.lookahead_ms, &mut candidates);
+            if candidates.len() > budget {
+                break;
+            }
+            budget -= candidates.len();
+            let last = candidates.last().copied();
+            let group = candidates
+                .iter()
+                .copied()
+                .filter(|i| {
+                    Some(*i) == last
+                        || time < self.ends[*i].saturating_sub(policy.ending_threshold_ms.max(0))
+                })
+                .collect::<Vec<_>>();
+            if !group.is_empty() {
+                groups.push(group);
+            }
+        }
+        groups.sort_unstable();
+        groups.dedup();
+        groups
+    }
     /// Braccato's active scroll group: running tails, the latest started line,
     /// and nearby future lines. Merely entering this window does not commit it.
     fn scroll_candidates(&self, time: i64, lead: i64, out: &mut Vec<usize>) {
@@ -153,6 +193,7 @@ pub struct PlaybackClock {
     smoothed: f64,
     wall: f64,
     rate: f64,
+    slew: f64,
     playing: bool,
     initialized: bool,
 }
@@ -168,19 +209,19 @@ impl PlaybackClock {
         {
             let predicted = self.position_ms(wall_ms, 0) as f64 / 1000.;
             let error = seconds - predicted;
-            // Upstream smoothedPlaybackTime: slew small late samples instead
-            // of stepping the lyric clock backwards. Real seeks remain exact.
-            self.smoothed = if self.initialized
+            // Compare actual samples, not a late sample against extrapolated
+            // presentation time. Two 100ms pollers can differ by almost 100ms
+            // without the media ever seeking backwards.
+            let late = self.initialized
                 && playing
                 && self.playing
                 && rate == self.rate
                 && error < 0.
-                && error.abs() < 0.06
-            {
-                predicted + error * ((wall_ms - self.wall).max(0.) / 1000. * 0.1).min(1.)
-            } else {
-                seconds.max(0.)
-            };
+                && seconds >= self.sample;
+            self.smoothed = if late { predicted } else { seconds.max(0.) };
+            // Correct future speed rather than moving already-painted time
+            // backwards. Limit the correction so time always advances.
+            self.slew = if late { error.max(-rate * 0.1) } else { 0. };
             self.sample = seconds.max(0.);
             self.wall = wall_ms;
             self.playing = playing;
@@ -198,7 +239,7 @@ impl PlaybackClock {
         } else {
             0.
         };
-        let value = (self.smoothed * 1000. + elapsed * self.rate).max(0.) as i64;
+        let value = (self.smoothed * 1000. + elapsed * (self.rate + self.slew)).max(0.) as i64;
         if duration_ms > 0 {
             value.min(duration_ms)
         } else {
@@ -563,6 +604,39 @@ mod tests {
         assert_eq!(c.position_ms(116., 0), 500);
         c.sample(0.51, 132., false, 1.);
         assert_eq!(c.position_ms(500., 0), 510);
+    }
+    #[test]
+    fn out_of_phase_audio_and_ui_polling_never_rewind_presentation_time() {
+        for rate in [0.5, 1., 2.] {
+            let mut clock = PlaybackClock::default();
+            clock.sample(31., 0., true, rate);
+            let mut last = 31000;
+            let mut poll = 0;
+            for wall in (16..8000).step_by(16) {
+                if wall / 112 > poll {
+                    poll = wall / 112;
+                    let audio_ms = wall / 100 * 100;
+                    clock.sample(
+                        31. + audio_ms as f64 / 1000. * rate,
+                        wall as f64,
+                        true,
+                        rate,
+                    );
+                }
+                let now = clock.position_ms(wall as f64, 300000);
+                assert!(
+                    now >= last,
+                    "late status sample rewound the lyric clock at {wall}ms"
+                );
+                last = now;
+            }
+            clock.sample(4., 8000., true, rate);
+            assert_eq!(
+                clock.position_ms(8000., 300000),
+                4000,
+                "a real backwards seek remains exact"
+            );
+        }
     }
     #[test]
     fn lookahead_groups_commit_only_at_a_new_scroll_cue() {

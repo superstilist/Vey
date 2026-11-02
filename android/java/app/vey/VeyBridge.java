@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.app.Dialog;
 import android.graphics.SurfaceTexture;
 import android.media.MediaPlayer;
+import android.media.MediaMetadata;
+import android.media.session.MediaSession;
+import android.media.session.PlaybackState;
 import android.media.PlaybackParams;
 import android.net.Uri;
 import android.view.Surface;
@@ -22,6 +25,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 /** Small platform surfaces. Rust owns credentials, requests, audio and lyric parsing. */
 public final class VeyBridge {
     private static final ConcurrentLinkedQueue<String> messages = new ConcurrentLinkedQueue<>();
+    private static final ConcurrentLinkedQueue<String> mediaMessages = new ConcurrentLinkedQueue<>();
     private static WebView auth;
     private static Dialog dialog;
     private static java.lang.ref.WeakReference<View> authReturnFocus = new java.lang.ref.WeakReference<>(null);
@@ -33,18 +37,48 @@ public final class VeyBridge {
     private static String videoUrl = "";
     private static boolean prepared, failed;
     private static boolean windowVisible=true;
+    private static MediaSession mediaSession;
 
     public static String poll() { String value=messages.poll(); return value==null ? "" : value; }
+    public static String mediaPoll() { String value=mediaMessages.poll(); return value==null ? "" : value; }
     public static void call(Activity activity, String method, String payload) {
         try {
             if (method.equals("challenge")) challenge(activity,new JSONObject(payload));
             else if (method.equals("cancelChallenge")) closeAuth();
             else if (method.equals("video")) video(activity,new JSONObject(payload));
-            else if (method.equals("shutdown")) { closeAuth(); closeVideo(); }
+            else if (method.equals("media")) media(activity,new JSONObject(payload));
+            else if (method.equals("shutdown")) { closeAuth(); closeVideo(); if(mediaSession!=null){mediaSession.setActive(false);mediaSession.release();mediaSession=null;} }
         } catch (Exception e) {
             if (method.equals("challenge")) messages.offer("{\"type\":\"turnstile-error\",\"error\":\"android-host\"}");
             else { failed=true; if(texture!=null)texture.setVisibility(View.INVISIBLE); }
         }
+    }
+    private static void media(Activity activity, JSONObject data) {
+        if(mediaSession==null) {
+            mediaSession=new MediaSession(activity,"Vey");
+            mediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS|MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
+            mediaSession.setCallback(new MediaSession.Callback(){
+                private void post(String action){mediaMessages.offer("{\"action\":\""+action+"\"}");}
+                @Override public void onPlay(){post("play");}
+                @Override public void onPause(){post("pause");}
+                @Override public void onSkipToNext(){post("next");}
+                @Override public void onSkipToPrevious(){post("previous");}
+                @Override public void onSeekTo(long position){mediaMessages.offer("{\"action\":\"seek\",\"position\":"+Math.max(0,position)+"}");}
+            });
+        }
+        String title=data.optString("title","Vey"), artist=data.optString("artist"), album=data.optString("album");
+        long duration=Math.max(0,(long)(data.optDouble("duration",0)*1000));
+        long position=Math.max(0,(long)(data.optDouble("position",0)*1000));
+        boolean playing=data.optBoolean("playing",false), active=data.optBoolean("active",false);
+        mediaSession.setMetadata(new MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE,title)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST,artist).putString(MediaMetadata.METADATA_KEY_ALBUM,album)
+            .putLong(MediaMetadata.METADATA_KEY_DURATION,duration).build());
+        long actions=PlaybackState.ACTION_PLAY|PlaybackState.ACTION_PAUSE|PlaybackState.ACTION_PLAY_PAUSE
+            |PlaybackState.ACTION_SKIP_TO_NEXT|PlaybackState.ACTION_SKIP_TO_PREVIOUS|PlaybackState.ACTION_SEEK_TO;
+        mediaSession.setPlaybackState(new PlaybackState.Builder().setActions(actions)
+            .setState(playing?PlaybackState.STATE_PLAYING:(active?PlaybackState.STATE_PAUSED:PlaybackState.STATE_STOPPED),position,1f)
+            .build());
+        mediaSession.setActive(active);
     }
     private static boolean allowed(Uri uri) {
         return "https".equals(uri.getScheme()) && ("lyrics.api.dacubeking.com".equals(uri.getHost()) || "challenges.cloudflare.com".equals(uri.getHost()));

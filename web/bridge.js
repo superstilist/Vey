@@ -1,5 +1,40 @@
 import { CameraPresentation } from './player-motion.js';
 const files = new Map();
+export function installMediaSession(handler) {
+  const session = navigator.mediaSession;
+  if (!session) return false;
+  for (const action of ['play','pause','previoustrack','nexttrack','seekto','seekbackward','seekforward']) {
+    try { session.setActionHandler(action, details => handler(action, details?.seekTime ?? details?.seekOffset ?? 0)); }
+    catch (_) { /* Some browsers omit individual media actions. */ }
+  }
+  return true;
+}
+export function setMediaMetadata(title, artist, album, artwork, duration) {
+  const session = navigator.mediaSession;
+  if (!session || typeof MediaMetadata === 'undefined') return;
+  session.metadata = new MediaMetadata({
+    title: title || 'Vey', artist: artist || '', album: album || '',
+    artwork: artwork ? [{src: artwork, sizes: '512x512'}] : [],
+  });
+  if (Number.isFinite(duration) && duration > 0) {
+    try { session.setPositionState({duration, position: 0, playbackRate: 1}); } catch (_) {}
+  }
+}
+export function setMediaPlayback(playing, position, duration, rate) {
+  const session = navigator.mediaSession;
+  if (!session) return;
+  session.playbackState = playing ? 'playing' : 'paused';
+  if (Number.isFinite(duration) && duration > 0 && Number.isFinite(position)) {
+    try { session.setPositionState({duration, position: Math.min(duration, Math.max(0, position)), playbackRate: rate || 1}); } catch (_) {}
+  }
+}
+// Flush the latest coalesced Rust state before a hidden page is suspended.
+export function onStoreFlush(callback) {
+  addEventListener('pagehide', () => callback());
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) callback();
+  });
+}
 // DOM host for the original, locally bundled Braccato renderer. Playback and
 // authenticated provider traffic remain in Rust.
 let braccatoFrame;

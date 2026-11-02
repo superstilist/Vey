@@ -7,10 +7,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../..');
 const packages = resolve(root, 'third-party/braccato/packages');
 const out = resolve(root, 'web/braccato');
+const motionPath = resolve(root,'web/player-motion.js');
 await mkdir(out, { recursive: true });
 // Publish changed assets by replacement: Windows can keep embedded inputs mapped.
 async function writeFile(path, content) {
-  if (dirname(path) !== out) throw new Error('Asset output escaped the widget directory');
+  if (dirname(path) !== out && path !== motionPath) throw new Error('Asset output escaped the widget directory');
   const bytes = Buffer.from(content);
   try { if ((await readFile(path)).equals(bytes)) return; } catch (error) {
     if (error.code !== 'ENOENT') throw error;
@@ -21,6 +22,10 @@ async function writeFile(path, content) {
     await rename(temporary, path);
   } finally { await rm(temporary, { force: true }); }
 }
+const motion = await build({entryPoints:[resolve(here,'player-motion-source.js')],outfile:motionPath,
+  write:false,bundle:true,platform:'browser',format:'esm',target:['chrome110'],minify:true,
+  legalComments:'inline',metafile:true});
+for(const file of motion.outputFiles) await writeFile(file.path,file.contents);
 const result = await build({
   entryPoints: [resolve(here, 'widget.ts')], outfile: resolve(out, 'widget.js'),
   write: false, bundle: true, platform: 'browser', format: 'iife', globalName: 'PlayerVFBraccato',
@@ -60,7 +65,7 @@ const result = await build({
 for (const file of result.outputFiles) await writeFile(file.path, file.contents);
 const licenses = [await readFile(resolve(root,'third-party/braccato/LICENSE'),'utf8'),await readFile(resolve(root,'assets/fonts/OFL-Roboto.txt'),'utf8'),await readFile(resolve(root,'assets/fonts/OFL-NotoSansJP.txt'),'utf8')];
 const licensed = new Set();
-for (const input of Object.keys(result.metafile.inputs)) {
+for (const input of new Set([...Object.keys(result.metafile.inputs),...Object.keys(motion.metafile.inputs)])) {
   let folder=dirname(resolve(process.cwd(),input));
   while(folder.startsWith(resolve(here,'node_modules'))) {
     try {
@@ -87,5 +92,7 @@ await writeFile(resolve(out, 'manifest.json'), JSON.stringify({
   commit: '1e6b6954b1c18136274681a9bf4985efb2332b01',
   packages: ['core', 'parsers', 'highlight', 'provider-blyrics', 'types'],
   bundledModules: Object.keys(result.metafile.inputs).length, assets,
+  motion:{engine:'gsap',version:JSON.parse(await readFile(resolve(here,'node_modules/gsap/package.json'),'utf8')).version,
+    bytes:(await readFile(motionPath)).length,sha256:createHash('sha256').update(await readFile(motionPath)).digest('hex')},
 }, null, 2) + '\n');
 console.log(JSON.stringify(assets, null, 2));

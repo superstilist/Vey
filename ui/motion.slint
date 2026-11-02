@@ -1,11 +1,12 @@
 // Shared semantic motion values; all decorative animation observes one switch.
+import { PlayerTheme } from "player-theme.slint";
 export global Motion {
     in-out property <bool> reduced: false;
-    out property <duration> feedback: reduced ? 0ms : 120ms;
-    out property <duration> panel: reduced ? 0ms : 180ms;
-    out property <duration> sheet: reduced ? 0ms : 220ms;
-    out property <duration> palette: reduced ? 0ms : 1000ms;
-    out property <int> navigation-min: reduced ? 0 : 240;
-    out property <int> navigation-max: reduced ? 0 : 520;
-    out property <int> navigation-distance: reduced ? 0 : 140;
+    out property <duration> feedback: reduced ? 0ms : 70ms;
+    out property <duration> panel: reduced ? 0ms : 100ms;
+    out property <duration> sheet: reduced ? 0ms : 140ms;
+    out property <duration> palette: reduced ? 0ms : PlayerTheme.motion-ms * 1ms;
+    out property <int> navigation-min: reduced ? 0 : 100;
+    out property <int> navigation-max: reduced ? 0 : 180;
+    out property <int> navigation-distance: reduced ? 0 : 60;
 }

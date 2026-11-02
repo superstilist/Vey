@@ -11,8 +11,8 @@ pub struct CompileOptions {
 impl Default for CompileOptions {
     fn default() -> Self {
         Self {
-            timeout_ms: 3000,
-            max_iterations: 10000,
+            timeout_ms: 100,
+            max_iterations: 1_000_000,
         }
     }
 }
@@ -42,9 +42,24 @@ impl Compiler {
     fn expand(&mut self, s: &str) -> Result<String, String> {
         let mut out = String::new();
         let mut chars = s.chars().peekable();
+        let mut quote = None;
         while let Some(c) = chars.next() {
             self.check()?;
-            if c == '$' {
+            if c == '\\' {
+                out.push(c);
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+                continue;
+            }
+            if c == '\'' || c == '"' {
+                if quote == Some(c) {
+                    quote = None;
+                } else if quote.is_none() {
+                    quote = Some(c);
+                }
+            }
+            if c == '$' && quote.is_none() {
                 let mut name = String::new();
                 while chars
                     .peek()
@@ -96,7 +111,7 @@ impl Compiler {
             if c == b'/' && bytes.get(i + 1) == Some(&b'*') {
                 let end = src[i + 2..].find("*/").ok_or("Unterminated comment")? + i + 4;
                 declarations.push_str(&src[i..end]);
-                if start == i {
+                if src[start..i].trim().is_empty() {
                     start = end;
                 }
                 i = end;
@@ -141,6 +156,9 @@ impl Compiler {
                         if b == q {
                             q = 0;
                         }
+                    } else if b == b'/' && bytes.get(end + 1) == Some(&b'*') {
+                        end = src[end + 2..].find("*/").ok_or("Unterminated comment")? + end + 4;
+                        continue;
                     } else if b == b'\'' || b == b'"' {
                         q = b;
                     } else if b == b'{' {
@@ -196,6 +214,12 @@ impl Compiler {
             }
             i += 1;
         }
+        if quote != 0 {
+            return Err("Unterminated string".into());
+        }
+        if parens != 0 {
+            return Err("Unclosed parentheses".into());
+        }
         let tail = src[start..].trim();
         if !tail.is_empty() {
             declarations.push_str(&self.expand(tail)?);
@@ -238,6 +262,21 @@ pub fn compile(source: &str, options: CompileOptions) -> CompileResult {
 mod tests {
     use super::*;
     #[test]
+    fn comments_do_not_change_selectors_and_quoted_dollars_stay_literal() {
+        let r=compile("  /* theme { } */ :root { font-family:'Price $5'; /* } */ --blyrics-active-color:#abc; }", Default::default());
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert!(r.css.contains(":root{"));
+        assert!(r.css.contains("Price $5"));
+        assert!(r.css.contains("--blyrics-active-color:#abc"));
+    }
+    #[test]
+    fn normal_sized_theme_fits_the_scan_budget() {
+        let source = (0..1000)
+            .map(|i| format!(".blyrics-line-{i} {{color:#abc;}}"))
+            .collect::<String>();
+        assert!(compile(&source, Default::default()).errors.is_empty());
+    }
+    #[test]
     fn variables_nesting_and_parent_selectors() {
         let r=compile("$color: #f00; .parent { color: $color; .child { color: green; } &:hover {opacity:1;} }",CompileOptions::default());
         assert!(r.errors.is_empty(), "{:?}", r.errors);
@@ -249,6 +288,9 @@ mod tests {
     fn bounds_and_invalid_input_return_source() {
         let src = "bad {{";
         assert!(!compile(src, CompileOptions::default()).errors.is_empty());
+        for source in [":root{font-family:'broken;}", ":root{color:rgb(1 2 3;}"] {
+            assert!(!compile(source, Default::default()).errors.is_empty());
+        }
         assert!(
             compile(
                 ".a {color:red;}",

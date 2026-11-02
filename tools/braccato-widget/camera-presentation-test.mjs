@@ -12,10 +12,11 @@ try {
     const element = document.querySelector('#lyrics');
     const stage = document.querySelector('#stage');
     const motion = new CameraPresentation(element, stage);
+    const engine = motion.engine;
     const camera = {epoch:1,fromX:0,fromY:0,toX:1,toY:-1,width:800,height:600,duration:380,elapsed:0};
     const started = motion.update(camera, false, true, false);
     motion.animation.pause(); motion.stageAnimation.pause();
-    motion.animation.currentTime = 182.4; motion.stageAnimation.currentTime = 182.4;
+    motion.animation.currentTime = 76; motion.stageAnimation.currentTime = 76;
     const peak = {filter:getComputedStyle(element).filter, stageFilter:getComputedStyle(stage).filter};
     const original = motion.animation;
     motion.update({...camera,elapsed:200}, false, true, false);
@@ -26,7 +27,15 @@ try {
     motion.update(camera, true);
     const reduced = element.getAnimations().length === 0 && stage.getAnimations().length === 0;
     const invalid = motion.update({...camera,width:NaN}, false);
-    return {started, peak, retained, disabled, reduced, invalid};
+    element.style.transform='translate(3px, 4px)';
+    motion.update({...camera,epoch:3,elapsed:190},false,false,true);
+    motion.animation.pause(); motion.animation.currentTime=76;
+    const midpoint=getComputedStyle(element).transform;
+    motion.animation.currentTime=380;
+    const endpoint=getComputedStyle(element).transform;
+    motion.cancel();
+    const restored=element.style.transform;
+    return {started, peak, retained, disabled, reduced, invalid, engine,midpoint,endpoint,restored};
   }, source);
   assert.equal(result.started,true,'boolean flags must not reject valid camera coordinates');
   assert.match(result.peak.filter,/blur\([1-9]/,'lyric content blurs during travel');
@@ -36,5 +45,10 @@ try {
   assert.equal(result.disabled.stage,false);
   assert.equal(result.reduced,true,'reduced motion cancels both layers');
   assert.equal(result.invalid,false,'invalid geometry is rejected');
+  assert.equal(result.engine,'gsap');
+  const midpoint=result.midpoint.match(/matrix\(1, 0, 0, 1, ([\d.-]+), ([\d.-]+)\)/);
+  assert.ok(midpoint && Math.abs(Number(midpoint[1])-400)<1 && Math.abs(Number(midpoint[2])+300)<1,'GSAP follows the host ease-out midpoint');
+  assert.equal(result.endpoint,'matrix(1, 0, 0, 1, 0, 0)');
+  assert.equal(result.restored,'translate(3px, 4px)','cancel restores the host-owned transform');
   console.log('PASS camera presentation: blur, boolean flags, interruption, duplicate samples, reduced motion');
 } finally { await browser.close(); }

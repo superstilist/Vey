@@ -2,6 +2,10 @@ export struct LyricGlyph {
     text: string,
     start: float,
     width: float,
+    // Optional shaped em geometry; zero width keeps the standalone ratio path.
+    start-em: float,
+    width-em: float,
+    isolated-advance-em: float,
     delay-ms: float,
     wave-ms: float,
     sweep-delay-ms: float,
@@ -22,6 +26,9 @@ export struct LyricWord {
     text: string,
     active: bool,
     background: bool,
+    // Synthetic word from a line-synced cue. It keeps the line's fill time and
+    // only participates in presentation motion.
+    line-synced: bool,
     start-ms: float,
     duration-ms: float,
     cue-offset: float,
@@ -139,7 +146,7 @@ component InstrumentalNote inherits Rectangle {
 
 // Clip geometry and text offsets stay on a fixed integer-pixel grid. Moving the clips and
 // cancelling their offsets re-rasterizes text at changing phases and makes slow fills flicker.
-component LyricInk inherits Rectangle {
+export component LyricInk inherits Rectangle {
     in property <string> text;
     in property <string> font-family;
     in property <length> font-size;
@@ -152,34 +159,109 @@ component LyricInk inherits Rectangle {
     in property <length> wave-amplitude;
     in property <float> wave-phase;
     in property <bool> native-text-gradients: true;
+    // Solid shaped text under fixed pixel clips avoids the GPU gradient/glyph
+    // interaction. False retains the old brush only for isolated diagnostics.
+    in property <bool> stable-fill: true;
+    cache-rendering-hint: root.native-text-gradients && root.stable-fill;
+    in property <length> text-origin-x: 0px;
+    in property <length> text-advance: 0px;
+    // Kerning may make a cluster's advance narrower than its isolated ink.
+    // Keep that advance for placement/fill, but give Text enough paint bounds.
+    private property <length> paint-width: max(root.width, ink-metrics.preferred-width);
+    private property <length> text-width: root.text-origin-x + (root.text-advance > 0px ? root.text-advance : root.paint-width);
+    private property <float> origin-span: root.text-origin-x / max(0.0001px, root.width);
+    private property <float> paint-span: root.text-width / max(0.0001px, root.width);
+    // Keep the shared GPU origin off exact half-pixel ties. Accumulated float
+    // translations can otherwise round adjacent clusters in opposite directions.
+    private property <length> origin-bias: root.native-text-gradients ? 0.001phx : 0px;
+    ink-metrics := Text {
+        visible: false; text: root.text;
+        font-family: root.font-family; font-size: root.font-size; font-weight: root.font-weight;
+        wrap: no-wrap;
+    }
     private property <angle> wave-angle: sin(root.wave-phase * 180deg)
         * min(0.12, root.wave-amplitude * 2 / max(1px, root.height)) * 57.2958deg;
     private property <float> span: max(0.0001, root.sweep-end - root.sweep-start);
-    private property <color> left-ink: root.ink.mix(root.base-ink, root.reveal * min(1, max(0, root.sweep-end / root.span)));
-    private property <color> right-ink: root.ink.mix(root.base-ink, root.reveal * min(1, max(0, (root.sweep-end - 1) / root.span)));
-    private property <float> start-stop: min(1, max(0, root.sweep-start));
-    private property <float> end-stop: min(1, max(0, root.sweep-end));
+    // Match the native gradient's premultiplied interpolation. Color.mix uses
+    // Sass alpha weighting, which changes a translucent custom color's hue.
+    pure function blend-ink(coverage: float) -> color {
+        let amount = min(1, max(0, root.reveal * coverage));
+        let active-alpha = root.ink.alpha / 255.0 * amount;
+        let base-alpha = root.base-ink.alpha / 255.0 * (1 - amount);
+        let alpha = active-alpha + base-alpha;
+        let weight = active-alpha / max(0.000001, alpha);
+        return rgba(root.ink.red * weight + root.base-ink.red * (1 - weight),
+            root.ink.green * weight + root.base-ink.green * (1 - weight),
+            root.ink.blue * weight + root.base-ink.blue * (1 - weight), alpha);
+    }
+    private property <color> left-ink: root.blend-ink(min(1, max(0, (root.sweep-end + root.origin-span) / root.span)));
+    private property <color> right-ink: root.blend-ink(min(1, max(0, (root.sweep-end + root.origin-span - root.paint-span) / root.span)));
+    private property <float> start-stop: min(1, max(0, (root.sweep-start + root.origin-span) / root.paint-span));
+    private property <float> end-stop: min(1, max(0, (root.sweep-end + root.origin-span) / root.paint-span));
+    pure function feather-ink(part: float) -> color {
+        let at = (root.start-stop + (root.end-stop - root.start-stop) * part) * root.paint-span - root.origin-span;
+        return root.blend-ink(min(1, max(0, (root.sweep-end - at) / root.span)));
+    }
+    pure function feather-stop(part: float) -> float {
+        return root.start-stop + (root.end-stop - root.start-stop) * part;
+    }
     private property <bool> solid: root.reveal <= 0 || root.sweep-end <= 0 || root.sweep-start >= 1;
+    out property <bool> gradient-ink: root.native-text-gradients && !root.stable-fill && !root.solid;
     // One native text run: no per-band scissor edges can cut through the glyphs.
-    if root.native-text-gradients || root.solid: Text {
-        width: root.width; height: root.height; text: root.text;
+    if (root.native-text-gradients && !root.stable-fill) || root.solid: Text {
+        // All clusters retain one Text origin. Fractional cluster placement is
+        // inside the shaped run's right alignment, beyond GPU origin snapping.
+        x: -root.text-origin-x + root.origin-bias; width: root.text-width; height: root.height; text: root.text;
         // Avoid coincident gradient stops at complete/empty coverage. Native
         // backends should receive an unambiguous solid brush at those states.
         color: root.reveal <= 0 || root.sweep-end <= 0 ? root.base-ink
-            : root.sweep-start >= 1 ? root.ink.mix(root.base-ink,root.reveal)
+            : root.sweep-start >= 1 ? root.blend-ink(1)
             : @linear-gradient(90deg + root.wave-angle,
             root.left-ink 0%, root.left-ink root.start-stop * 100%,
+            // Femtovg interpolates straight RGBA while Skia interpolates premultiplied.
+            // Sampling the same feather bounds their difference for translucent colors.
+            root.feather-ink(0.125) root.feather-stop(0.125) * 100%,
+            root.feather-ink(0.25) root.feather-stop(0.25) * 100%,
+            root.feather-ink(0.375) root.feather-stop(0.375) * 100%,
+            root.feather-ink(0.5) root.feather-stop(0.5) * 100%,
+            root.feather-ink(0.625) root.feather-stop(0.625) * 100%,
+            root.feather-ink(0.75) root.feather-stop(0.75) * 100%,
+            root.feather-ink(0.875) root.feather-stop(0.875) * 100%,
             root.right-ink root.end-stop * 100%, root.right-ink 100%);
         font-family: root.font-family; font-size: root.font-size; font-weight: root.font-weight;
-        wrap: no-wrap; horizontal-alignment: left; vertical-alignment: center;
+        wrap: no-wrap; horizontal-alignment: root.text-advance > 0px ? right : left; vertical-alignment: center;
     }
-    // Slint's software text rasterizer only supports solid brushes. Retain the fixed
-    // integer-pixel feather for hosts using that backend instead of a native GPU renderer.
-    private property <length> ink-padding: ceil(root.font-size / 4px) * 1px;
-    private property <length> cell-size: max(1, ceil((root.width + root.ink-padding * 2) / 256px)) * 1px;
-    private property <int> cell-count: max(1, ceil((root.width + root.ink-padding * 2) / root.cell-size));
-    if !root.native-text-gradients && !root.solid: Rectangle {
+    // Software Text accepts solid brushes only. Keep the shaped run's origin
+    // fixed, paint solid regions once, and sample just the feather at physical
+    // pixel resolution. Bound broad custom feathers without coarsening normal ink.
+    private property <length> ink-padding: ceil(root.font-size / 4phx) * 1phx;
+    private property <length> ink-right: ceil((root.paint-width + root.ink-padding) / 1phx) * 1phx;
+    private property <length> feather-first: max(-root.ink-padding, min(root.ink-right, floor(root.sweep-start * root.width / 1phx) * 1phx));
+    private property <length> feather-last: max(root.feather-first, min(root.ink-right, ceil(root.sweep-end * root.width / 1phx) * 1phx));
+    private property <length> cell-size: max(1, ceil((root.feather-last - root.feather-first) / 512phx)) * 1phx;
+    private property <int> cell-count: max(0, ceil((root.feather-last - root.feather-first) / root.cell-size));
+    if (!root.native-text-gradients || root.stable-fill) && !root.solid: Rectangle {
         width: root.width; height: root.height;
+        Rectangle {
+            x: -root.ink-padding; width: root.feather-first + root.ink-padding;
+            height: root.height; clip: true;
+            Text {
+                x: -parent.x - root.text-origin-x + root.origin-bias; width: root.text-width; height: root.height;
+                text: root.text; color: root.blend-ink(1);
+                font-family: root.font-family; font-size: root.font-size; font-weight: root.font-weight;
+                wrap: no-wrap; horizontal-alignment: root.text-advance > 0px ? right : left; vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            x: root.feather-last; width: root.ink-right - root.feather-last;
+            height: root.height; clip: true;
+            Text {
+                x: -parent.x - root.text-origin-x + root.origin-bias; width: root.text-width; height: root.height;
+                text: root.text; color: root.base-ink;
+                font-family: root.font-family; font-size: root.font-size; font-weight: root.font-weight;
+                wrap: no-wrap; horizontal-alignment: root.text-advance > 0px ? right : left; vertical-alignment: center;
+            }
+        }
         for cell in root.cell-count: Rectangle {
         private property <float> edge-from: self.x / max(0.001px, root.width);
         private property <float> edge-to: (self.x + self.width) / max(0.001px, root.width);
@@ -193,15 +275,15 @@ component LyricInk inherits Rectangle {
                 + max(0, self.feather-to - self.feather-from)
                 * min(1, max(0, (self.end - (self.feather-from + self.feather-to) / 2)
                     / max(0.0001, self.end - self.start)))) / max(0.0001, self.edge-to - self.edge-from)));
-        x: cell * root.cell-size - root.ink-padding;
-        width: root.cell-size; height: root.height; clip: true;
+        x: root.feather-first + cell * root.cell-size;
+        width: min(root.cell-size, root.feather-last - self.x); height: root.height; clip: true;
         Text {
-            x: -parent.x;
-            width: root.width; height: root.height; text: root.text;
+            x: -parent.x - root.text-origin-x + root.origin-bias;
+            width: root.text-width; height: root.height; text: root.text;
             // Paint alpha directly; container opacity would switch offscreen compositing at 1.0.
-            color: root.ink.mix(root.base-ink, root.reveal * parent.coverage);
+            color: root.blend-ink(parent.coverage);
             font-family: root.font-family; font-size: root.font-size; font-weight: root.font-weight;
-            wrap: no-wrap; horizontal-alignment: left; vertical-alignment: center;
+            wrap: no-wrap; horizontal-alignment: root.text-advance > 0px ? right : left; vertical-alignment: center;
         }
         }
     }
@@ -211,6 +293,7 @@ component LyricWordView inherits Rectangle {
     in property <string> text;
     in property <bool> active;
     in property <bool> background-vocal;
+    in property <bool> line-synced: false;
     in property <color> foreground-color;
     in property <color> muted-color;
     in property <color> active-color;
@@ -238,6 +321,7 @@ component LyricWordView inherits Rectangle {
     in property <[LyricGlyph]> glyphs;
     in property <bool> glow-enabled: true;
     in property <bool> cue-bounded-glow: false;
+    in property <bool> filled-glow: false;
     in property <float> elapsed-ms: -1;
     in property <string> motion: "stretch";
     in property <int> font-weight: 700;
@@ -300,15 +384,24 @@ component LyricWordView inherits Rectangle {
     private property <float> fade-phase: min(1, max(0, root.after-line-ms / max(1, root.highlight-fade-out-ms)));
     private property <float> fade: !root.highlight-fade ? 1 : root.smooth-highlight-fade
         ? 1 - root.fade-phase * root.fade-phase * (3 - 2 * root.fade-phase) : 1 - root.fade-phase;
-    private property <float> reveal: (root.cue-duration-ms <= 0 ? min(1, max(0, root.elapsed-ms / max(1, root.highlight-fade-in-ms))) : (root.elapsed-ms >= 0 && (!root.finish-fill-at-cue-end || !root.highlight-swipe || root.cue-phase >= root.cue-offset) ? 1 : 0)) * root.fade;
-    private property <float> glow-time: root.ease-progress(min(1, max(0, root.elapsed-ms / max(root.glow-min-duration-ms, root.cue-duration-ms * root.glow-duration-ratio))), root.glow-easing);
+    // Line-synced words share the line's fill clock, so they light at once and
+    // then follow the same post-line fade the old whole-line run used.
+    private property <float> line-fade: root.after-line-ms < 0 ? 1
+        : root.smooth-highlight-fade && root.highlight-fade
+            ? 1 - root.fade-phase * root.fade-phase * (3 - 2 * root.fade-phase) : 0;
+    private property <float> reveal: root.line-synced
+        ? (root.elapsed-ms >= 0 ? 1 : 0) * root.line-fade
+        : (root.cue-duration-ms <= 0 ? min(1, max(0, root.elapsed-ms / max(1, root.highlight-fade-in-ms))) : (root.elapsed-ms >= 0 && (!root.finish-fill-at-cue-end || !root.highlight-swipe || root.cue-phase >= root.cue-offset) ? 1 : 0)) * root.fade;
+    private property <bool> hold-filled-glow: root.filled-glow && root.after-line-ms < 0;
+    private property <float> glow-time: min(root.hold-filled-glow ? 0.25 : 1,
+        root.ease-progress(min(1, max(0, root.elapsed-ms / max(root.glow-min-duration-ms, root.cue-duration-ms * root.glow-duration-ratio))), root.glow-easing));
     private property <float> glow-in: root.ease-progress(min(1, max(0, root.elapsed-ms / 80)), "ease-out");
     private property <float> glow-elapsed-ms: root.elapsed-ms - root.cue-duration-ms * root.cue-offset;
     private property <float> glow-window-ms: root.cue-duration-ms * root.fragment-span;
     private property <float> glow-attack: root.ease-progress(min(1,max(0,root.glow-elapsed-ms / max(1,min(80,root.glow-window-ms * 0.2)))), "smooth");
     private property <float> glow-release: root.ease-progress(min(1,max(0,(root.glow-window-ms - root.glow-elapsed-ms) / max(1,min(180,root.glow-window-ms * 0.35)))), "smooth");
     private property <float> glow-fade: root.glow-enabled && root.elapsed-ms >= 0 && root.cue-duration-ms > 0 && (!root.finish-fill-at-cue-end || !root.highlight-swipe || root.cue-phase >= root.cue-offset)
-        ? (root.cue-bounded-glow ? root.glow-attack * root.glow-release : root.glow-in) * root.fade
+        ? max(root.hold-filled-glow ? root.glow-attack * 0.72 : 0, root.cue-bounded-glow ? root.glow-attack * root.glow-release : root.glow-in) * root.fade
             * (root.glow-precolored ? root.glow-color.alpha / 255.0 : 1) : 0;
     // Only positive-radius shadows have cached paint. The zero-radius resting state is empty.
     private property <float> glow-wide-strength: 1 - root.glow-time;
@@ -319,15 +412,20 @@ component LyricWordView inherits Rectangle {
     // inject.ts splits every non-joining timed word, including short syllables. The long-word
     // threshold controls emphasis scaling only, never the existence of letter masks or floats.
     private property <float> letter-elapsed-ms: root.elapsed-ms - (root.settled-word-motion ? root.cue-duration-ms * root.cue-offset : 0);
-    private property <float> letter-plan-ms: root.glyphs.length > 0 ? root.glyphs[root.glyphs.length - 1].delay-ms + root.glyphs[root.glyphs.length - 1].wave-ms : 0;
+    private property <float> letter-plan-start-ms: root.settled-word-motion && root.glyphs.length > 0 ? min(0,root.glyphs[0].delay-ms) : 0;
+    private property <float> letter-plan-ms: root.glyphs.length > 0 ? root.glyphs[root.glyphs.length - 1].delay-ms + root.glyphs[root.glyphs.length - 1].wave-ms - root.letter-plan-start-ms : 0;
     private property <float> letter-window-ms: root.settled-word-motion ? min(root.letter-plan-ms,root.cue-duration-ms * root.fragment-span) : root.letter-plan-ms;
-    private property <float> letter-motion-ms: root.settled-word-motion ? root.letter-elapsed-ms * root.letter-plan-ms / max(1,root.letter-window-ms) : root.letter-elapsed-ms;
+    private property <float> letter-motion-ms: root.settled-word-motion ? root.letter-plan-start-ms + root.letter-elapsed-ms * root.letter-plan-ms / max(1,root.letter-window-ms) : root.letter-elapsed-ms;
     private property <float> letter-amount: root.settled-word-motion ? min(1,max(0,root.cue-duration-ms * root.fragment-span / 240)) : 1;
     private property <bool> lettered: root.letter-wave && root.glyphs.length > 0
         && root.cue-duration-ms > 0 && root.motion != "karaoke"
         && (!root.settled-word-motion || (root.letter-elapsed-ms >= 0 && root.letter-elapsed-ms < root.letter-window-ms));
-    private property <float> wobble-period: root.settled-word-motion ? min(root.wobble-duration-ms,root.wobble-cue-duration-ms) : root.wobble-duration-ms;
-    private property <float> wobble-amount: root.wobble-strength * (root.settled-word-motion ? min(1,max(0,root.wobble-cue-duration-ms / 240)) : 1);
+    // Line-synced words and instant punctuation/symbols have no cue duration.
+    // Like upstream, their wobble runs for the full theme duration instead of
+    // being shortened to a word interval.
+    private property <bool> free-wobble: root.line-synced || root.cue-duration-ms <= 0;
+    private property <float> wobble-period: root.settled-word-motion && !root.free-wobble ? min(root.wobble-duration-ms,root.wobble-cue-duration-ms) : root.wobble-duration-ms;
+    private property <float> wobble-amount: root.wobble-strength * (root.settled-word-motion && !root.free-wobble ? min(1,max(0,root.wobble-cue-duration-ms / 240)) : 1);
     private property <float> wobble-phase: root.ease-progress(root.wobble-period > 0 ? min(1, max(0, root.wobble-elapsed-ms / root.wobble-period)) : 1, root.wobble-easing);
     private property <int> wobble-segment: root.wobble-phase <= root.wobble-peak-offset ? 0 : root.wobble-phase <= root.wobble-settle-offset ? 1 : 2;
     private property <float> wobble-local: root.wobble-segment == 0
@@ -347,7 +445,7 @@ component LyricWordView inherits Rectangle {
     private property <float> wobble-scale-y: root.wobble-segment == 0 ? root.mix(root.wobble-from.scale-y, root.wobble-peak.scale-y, root.wobble-local)
         : root.wobble-segment == 1 ? root.mix(root.wobble-peak.scale-y, root.wobble-settle.scale-y, root.wobble-local)
         : root.mix(root.wobble-settle.scale-y, root.wobble-to.scale-y, root.wobble-local);
-    private property <bool> wobble-enabled: root.word-wobble && root.wobble-amount > 0 && root.wobble-elapsed-ms >= 0 && (!root.settled-word-motion || root.wobble-cue-duration-ms > 0) && root.motion != "none" && root.motion != "karaoke";
+    private property <bool> wobble-enabled: root.word-wobble && root.wobble-amount > 0 && root.wobble-elapsed-ms >= 0 && (!root.settled-word-motion || root.free-wobble || root.wobble-cue-duration-ms > 0) && root.motion != "none" && root.motion != "karaoke";
     private property <float> karaoke-lift-phase: root.elapsed-ms < 160
         ? root.ease-progress(min(1, max(0, root.elapsed-ms / 160)), "ease-in-out")
         : 1 - root.ease-progress(min(1, max(0, (root.elapsed-ms - 160) / 360)), "ease-in-out");
@@ -448,7 +546,10 @@ component LyricWordView inherits Rectangle {
             // tile, and invalidate its colorized texture as the fill moves.
             // Keep tint static; split only the feather into eight disjoint
             // source-texel bands plus one fully sung prefix.
-            for band in self.band-count: Image {
+            for band in self.band-count: Rectangle {
+                private property <int> tile-width: parent.tile-width;
+                private property <int> level: parent.level;
+                private property <float> radius-alpha: parent.radius-alpha;
                 private property <int> first: band == 0 ? 0
                     : floor(parent.feather-start + (parent.cut-end - parent.feather-start) * (band - 1) / 8);
                 private property <int> last: band == 0 ? parent.feather-start
@@ -456,16 +557,25 @@ component LyricWordView inherits Rectangle {
                 private property <float> coverage: !root.cue-bounded-glow || !root.highlight-swipe || root.fill-complete ? 1
                     : min(1,max(0,(root.glow-end-texel - (self.first + self.last) / 2) / max(1,root.glow-end-texel - root.glow-start-texel)));
                 visible: self.last > self.first && parent.level < root.glow-levels;
-                x: self.first * root.font-size / 64;
-                width: max(0,self.last - self.first) * root.font-size / 64;
+                // Every strip samples the same full radius tile at the same
+                // origin. Only physical-pixel clip bounds vary: cropped image
+                // strips otherwise acquire different bilinear sampling phases.
+                x: round(self.first * root.font-size / 64 / 1phx) * 1phx;
+                width: max(0px,round(self.last * root.font-size / 64 / 1phx) * 1phx - self.x);
                 height: root.glow-wide.height * root.font-size / 64;
-                source: root.glow-wide;
-                source-clip-x: min(root.glow-levels - 1,parent.level) * parent.tile-width + self.first;
-                source-clip-y: 0;
-                source-clip-width: max(0,self.last - self.first);
-                source-clip-height: root.glow-wide.height;
-                colorize: root.glow-highlight;
-                opacity: parent.radius-alpha * self.coverage;
+                clip: true;
+                Image {
+                    x: -parent.x;
+                    width: parent.tile-width * root.font-size / 64;
+                    height: parent.height;
+                    source: root.glow-wide;
+                    source-clip-x: min(root.glow-levels - 1,parent.level) * parent.tile-width;
+                    source-clip-y: 0;
+                    source-clip-width: parent.tile-width;
+                    source-clip-height: root.glow-wide.height;
+                    colorize: root.glow-highlight;
+                    opacity: parent.radius-alpha * parent.coverage;
+                }
             }
         }
     }
@@ -496,9 +606,9 @@ component LyricWordView inherits Rectangle {
         x: -root.font-size * 0.25; y: -root.font-size * 0.25;
         width: root.width + root.font-size * 0.5;
         height: root.height + root.font-size * 0.5;
-        cache-rendering-hint: root.native-text-gradients && root.reveal > 0 && !root.fill-complete
+        cache-rendering-hint: whole-ink.gradient-ink && root.reveal > 0 && !root.fill-complete
             && (root.animated-line-scale != 1 || (root.wobble-enabled && root.wobble-phase < root.wobble-settle-offset));
-        LyricInk {
+        whole-ink := LyricInk {
             x: root.font-size * 0.25; y: root.font-size * 0.25;
             text: root.text;
             ink: root.active-color;
@@ -509,7 +619,7 @@ component LyricWordView inherits Rectangle {
             native-text-gradients: root.native-text-gradients;
             sweep-start: root.fill-complete || root.motion == "karaoke" || root.cue-duration-ms <= 0 ? 1 : root.ramp-start;
             // lyrics.css adds one physical pixel to the unlettered gradient's transparent stop.
-            sweep-end: root.fill-complete || root.motion == "karaoke" || root.cue-duration-ms <= 0 ? 1 : root.ramp-end + 1px / max(1px, root.width);
+            sweep-end: root.fill-complete || root.motion == "karaoke" || root.cue-duration-ms <= 0 ? 1 : root.ramp-end + 1phx / max(1px, root.width);
             opacity: root.use-sustain-blur ? 0 : 1;
             font-family: root.font-family;
             font-size: root.font-size;
@@ -522,8 +632,9 @@ component LyricWordView inherits Rectangle {
         x: 0px; y: 0px;
         width: root.width; height: root.height;
         for glyph in root.glyphs: Rectangle {
-            x: glyph.start * root.width;
-            width: glyph.width * root.width; height: root.height;
+            private property <length> glyph-x: glyph.width-em > 0 ? glyph.start-em * root.font-size : glyph.start * root.width;
+            x: self.glyph-x;
+            width: glyph.width-em > 0 ? glyph.width-em * root.font-size : glyph.width * root.width; height: root.height;
             Rectangle {
             width: parent.width; height: parent.height;
             private property <float> phase: root.letter-wave && root.motion != "none"
@@ -543,12 +654,14 @@ component LyricWordView inherits Rectangle {
             x: -root.font-size * 0.25; y: -root.font-size * 0.25;
             width: parent.width + root.font-size * 0.5;
             height: root.height + root.font-size * 0.5;
-            // The default uses a whole shaped run. Opt-in scaled letter waves
-            // retain a local surface to avoid glyph raster-phase flicker.
-            cache-rendering-hint: root.native-text-gradients && root.cue-duration-ms > root.long-word-threshold-ms;
-            LyricInk {
+            // Resolve transformed gradients locally. Solid letters stay on the
+            // direct Text path, including both neutral animation endpoints.
+            cache-rendering-hint: root.cue-duration-ms > root.long-word-threshold-ms && glyph-ink.gradient-ink;
+            glyph-ink := LyricInk {
                 x: root.font-size * 0.25; y: root.font-size * 0.25; text: glyph.text;
                 width: parent.width - root.font-size * 0.5; height: root.height;
+                text-origin-x: glyph.isolated-advance-em > 0 ? (glyph.width-em > 0 ? glyph.start-em * root.font-size : glyph.start * root.width) : 0px;
+                text-advance: glyph.isolated-advance-em * root.font-size;
                 font-family: root.font-family; font-size: root.font-size; font-weight: root.font-weight;
                 opacity: root.use-sustain-blur ? 0 : 1;
                 ink: root.active-color;
@@ -561,10 +674,10 @@ component LyricWordView inherits Rectangle {
                     (root.progress * root.cue-duration-ms * root.swipe-duration-ratio - glyph.sweep-delay-ms)
                     / max(1, glyph.sweep-duration-ms)));
                 sweep-start: root.fill-complete || !root.highlight-swipe ? 1 : root.finish-fill-at-cue-end || root.fragment-span < 0.9999
-                    ? (root.ramp-start - glyph.start) / max(0.0001, glyph.width)
+                    ? (root.ramp-start * root.width - (glyph.width-em > 0 ? glyph.start-em * root.font-size : glyph.start * root.width)) / max(0.0001px, glyph.width-em > 0 ? glyph.width-em * root.font-size : glyph.width * root.width)
                     : root.mix(glyph.sweep-from, glyph.sweep-to, self.mask-progress);
                 sweep-end: root.fill-complete || !root.highlight-swipe ? 1 : root.finish-fill-at-cue-end || root.fragment-span < 0.9999
-                    ? (root.ramp-end + 1px / max(1px,root.width) - glyph.start) / max(0.0001, glyph.width)
+                    ? (root.ramp-end * root.width + 1phx - (glyph.width-em > 0 ? glyph.start-em * root.font-size : glyph.start * root.width)) / max(0.0001px, glyph.width-em > 0 ? glyph.width-em * root.font-size : glyph.width * root.width)
                     : self.sweep-start + glyph.sweep-feather;
             }
             }
@@ -576,6 +689,7 @@ component LyricWordView inherits Rectangle {
 }
 
 export component LyricsView inherits Rectangle {
+    in property <bool> interactive: true;
     // Optional host window: omitted rows retain their exact height as padding.
     in property <int> render-start: 0;
     in property <int> render-end: -1;
@@ -589,6 +703,8 @@ export component LyricsView inherits Rectangle {
     in property <InstrumentalFrames> instrumental-frames;
     in property <string> layout: "scroll";
     in property <int> active-line: -1;
+    // Optional host-prepared upcoming rows; the normal viewport remains bounded.
+    in property <int> preload-line: -1;
     in property <bool> follow-playback: true;
     in property <bool> paused: false;
     in property <bool> synchronized: true;
@@ -613,6 +729,7 @@ export component LyricsView inherits Rectangle {
     in property <color> muted-color: #777780;
     in property <color> accent-color: #f50032;
     in property <length> lyric-size: 34px;
+    in property <float> secondary-gap: 0.65;
     in property <float> line-spacing: 1.35;
     in property <int> transition-ms: 320;
     in property <float> active-scale: 1.0;
@@ -623,6 +740,7 @@ export component LyricsView inherits Rectangle {
     in property <string> font-family: "Satoshi";
     in property <bool> highlight-glow: true;
     in property <bool> cue-bounded-glow: false;
+    in property <bool> filled-glow: false;
     in property <bool> finish-fill-at-cue-end: false;
     in property <bool> highlight-swipe: true;
     in property <float> swipe-wave-em: 0;
@@ -695,10 +813,11 @@ export component LyricsView inherits Rectangle {
             visible: self.opacity > 0.001
                 && (!line.translation || root.show-translation)
                 && (!line.romanization || root.show-romanization);
-            private property <length> row-height: !self.visible ? 0px : (line.secondary ? root.lyric-size * 0.7 : (line.parts.length > 0 && line.parts[0].background ? root.lyric-size * 0.95 : root.lyric-size * root.line-spacing));
+            private property <length> row-height: !self.visible ? 0px : (line.secondary ? root.lyric-size * (1.15 + root.secondary-gap) : (line.parts.length > 0 && line.parts[0].background ? root.lyric-size * 0.95 : root.lyric-size * root.line-spacing));
             min-height: self.row-height; max-height: self.row-height;
             background: transparent;
             if self.visible: HorizontalLayout {
+                padding-top: line.secondary ? root.lyric-size * root.secondary-gap : 0px;
                 alignment: line.agent == "v1000" ? center : (line.agent == "v2" || line.agent == "v3" ? end : start);
                 if line.instrumental: InstrumentalNote {
                     frames: root.instrumental-frames; note-size: root.lyric-size;
@@ -710,6 +829,7 @@ export component LyricsView inherits Rectangle {
                     alignment: line.agent == "v1000" ? center : (line.agent == "v2" || line.agent == "v3" ? end : start);
                     for part[index] in line.parts: LyricWordView {
                         text: part.text; active: part.active; background-vocal: part.background;
+                        line-synced: part.line-synced;
                         elapsed-ms: root.playback-time-ms - part.start-ms;
                         cue-duration-ms: part.duration-ms;
                         cue-offset: part.cue-offset; cue-span: part.cue-span;
@@ -719,6 +839,7 @@ export component LyricsView inherits Rectangle {
                         glyphs: part.glyphs;
                         glow-enabled: root.highlight-glow && !root.karaoke && !root.sustain;
                         cue-bounded-glow: root.cue-bounded-glow;
+                        filled-glow: root.filled-glow && !line.secondary && !part.background;
                         highlight-swipe: root.highlight-swipe;
                         finish-fill-at-cue-end: root.finish-fill-at-cue-end;
                         swipe-wave-em: root.swipe-wave-em;
@@ -731,7 +852,7 @@ export component LyricsView inherits Rectangle {
                         glow-duration-ratio: root.glow-duration-ratio; glow-min-duration-ms: root.glow-min-duration-ms; glow-easing: root.glow-easing;
                         glow-radius-from-px: root.glow-radius-from-px; long-word-threshold-ms: root.long-word-threshold-ms;
                         motion: root.karaoke ? "karaoke" : root.word-motion;
-                        word-wobble: root.word-wobble;
+                        word-wobble: root.word-wobble && !line.secondary;
                         settled-word-motion: root.settled-word-motion;
                         wobble-strength: root.wobble-strength;
                         grouped-wobble: root.settled-word-motion && part.motion-duration-ms > 0;
@@ -745,13 +866,13 @@ export component LyricsView inherits Rectangle {
                         letter-wave-y-em: root.letter-wave-y-em; letter-wave-settle-y-em: root.letter-wave-settle-y-em;
                         letter-wave-emphasis-scale: root.letter-wave-emphasis-scale; letter-wave-duration-ms: root.letter-wave-duration-ms;
                         letter-wave-rise-easing: root.letter-wave-rise-easing; letter-wave-fall-easing: root.letter-wave-fall-easing;
-                        font-weight: part.background ? 500 : root.font-weight;
+                        font-weight: part.background ? 500 : (part.line-synced ? (line.active ? 700 : 500) : root.font-weight);
                         foreground-color: muted-color;
                         active-color: root.foreground-color;
                         muted-color: muted-color; accent-color: accent-color;
                         glow-color: root.glow-color;
-                        font-size: line.secondary ? lyric-size * 0.48 : (part.background ? lyric-size * root.background-font-scale : lyric-size);
-                        line-scale: line.stage-role == "current" ? root.active-scale : root.inactive-scale;
+                        font-size: line.secondary ? lyric-size * 0.48 : (part.background ? lyric-size * root.background-font-scale : (part.line-synced ? lyric-size * 0.72 : lyric-size));
+                        line-scale: part.line-synced ? (line.stage-role == "current" ? root.active-scale / 0.72 : 1) : (line.stage-role == "current" ? root.active-scale : root.inactive-scale);
                         line-scale-duration-ms: root.line-scale-duration-ms; animate-line-scale: root.animate-line-scale;
                         font-family: part.font-family == "" ? root.font-family : part.font-family;
                         opacity: root.karaoke ? (root.playback-time-ms < part.start-ms ? 0 : part.active ? 1 : 0.7) : 1;
@@ -777,6 +898,7 @@ export component LyricsView inherits Rectangle {
         }
     }
     if layout != "stage": viewport := Flickable {
+        interactive: root.interactive;
         changed content-y => { root.viewport-changed(self.content-y / 1px, self.height / 1px, self.content-height / 1px); }
         changed content-height => { if self.following && abs(self.content-y - self.follow-y) > 0.5px { self.content-y = self.follow-y; } root.viewport-changed(self.content-y / 1px, self.height / 1px, self.content-height / 1px); }
         changed height => { if self.following && abs(self.content-y - self.follow-y) > 0.5px { self.content-y = self.follow-y; } root.viewport-changed(self.content-y / 1px, self.height / 1px, self.content-height / 1px); }
@@ -811,8 +933,10 @@ export component LyricsView inherits Rectangle {
                 private property <length> before: index == 0 || root.lines[index - 1].source-index != line.source-index ? root.line-padding : 0px;
                 private property <length> after: index == root.lines.length - 1 || root.lines[index + 1].source-index != line.source-index ? root.line-padding : 0px;
                 private property <bool> paint-row: self.visible
-                    && self.y + viewport.content-y + self.height >= -root.lyric-size * 2
-                    && self.y + viewport.content-y <= viewport.height + root.lyric-size * 2;
+                    && ((root.preload-line >= 0 && (self.index == root.preload-line || self.index == root.preload-line + 1))
+                    || (root.render-windowed && root.active-line >= 0 && (self.index == root.active-line || self.index == root.active-line + 1))
+                    || (self.y + viewport.content-y + self.height >= -root.lyric-size * 2
+                    && self.y + viewport.content-y <= viewport.height + root.lyric-size * 2));
                 private property <length> viewport-center: self.y + viewport.content-y + self.before + (self.height - self.before - self.after) / 2;
                 private property <float> edge-fade: min(1, max(0, self.viewport-center / (root.lyric-size * 1.5)))
                     * min(1, max(0, (viewport.height - self.viewport-center) / (root.lyric-size * 1.5)));
@@ -835,7 +959,7 @@ export component LyricsView inherits Rectangle {
                 transform-scale: self.row-scale;
 
                 visible: (!line.translation || root.show-translation) && (!line.romanization || root.show-romanization);
-                private property <length> row-height: !self.visible ? 0px : self.before + self.after + (line.secondary ? root.lyric-size * 0.7 : (line.parts.length > 0 && line.parts[0].background ? root.lyric-size * 0.95 : root.lyric-size * root.line-spacing));
+                private property <length> row-height: !self.visible ? 0px : self.before + self.after + (line.secondary ? root.lyric-size * (1.15 + root.secondary-gap) : (line.parts.length > 0 && line.parts[0].background ? root.lyric-size * 0.95 : root.lyric-size * root.line-spacing));
                 min-height: self.row-height; max-height: self.row-height;
                 background: transparent;
                 if self.paint-row && self.blur-mix > 0.001: Image {
@@ -850,7 +974,7 @@ export component LyricsView inherits Rectangle {
                 }
                 if self.paint-row: HorizontalLayout {
                     opacity: 1 - parent.blur-mix;
-                    padding-top: parent.before;
+                    padding-top: parent.before + (line.secondary ? root.lyric-size * root.secondary-gap : 0px);
                     padding-bottom: parent.after;
                     alignment: line.agent == "v1000" ? center : (line.agent == "v2" || line.agent == "v3" ? end : start);
                     if line.instrumental: InstrumentalNote {
@@ -863,6 +987,7 @@ export component LyricsView inherits Rectangle {
                         alignment: line.agent == "v1000" ? center : (line.agent == "v2" || line.agent == "v3" ? end : start);
                             for part[index] in line.parts: LyricWordView {
                                 text: part.text; active: part.active; background-vocal: part.background;
+                                line-synced: part.line-synced;
                                 elapsed-ms: root.playback-time-ms - part.start-ms;
                         cue-duration-ms: part.duration-ms;
                                 cue-offset: part.cue-offset; cue-span: part.cue-span;
@@ -872,6 +997,7 @@ export component LyricsView inherits Rectangle {
                         glyphs: part.glyphs;
                         glow-enabled: root.highlight-glow && !root.karaoke && !root.sustain;
                         cue-bounded-glow: root.cue-bounded-glow;
+                        filled-glow: root.filled-glow && !line.secondary && !part.background;
                         highlight-swipe: root.highlight-swipe;
                                 finish-fill-at-cue-end: root.finish-fill-at-cue-end;
                         swipe-wave-em: root.swipe-wave-em;
@@ -884,7 +1010,7 @@ export component LyricsView inherits Rectangle {
                         glow-duration-ratio: root.glow-duration-ratio; glow-min-duration-ms: root.glow-min-duration-ms; glow-easing: root.glow-easing;
                         glow-radius-from-px: root.glow-radius-from-px; long-word-threshold-ms: root.long-word-threshold-ms;
                                 motion: root.karaoke ? "karaoke" : root.word-motion;
-                                word-wobble: root.word-wobble;
+                                word-wobble: root.word-wobble && !line.secondary;
                                 settled-word-motion: root.settled-word-motion;
                                 wobble-strength: root.wobble-strength;
                                 grouped-wobble: root.settled-word-motion && part.motion-duration-ms > 0;

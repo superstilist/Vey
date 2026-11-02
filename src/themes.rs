@@ -56,6 +56,10 @@ pub struct NativeTheme {
     pub weight: i32,
     pub unsupported: Vec<String>,
     #[serde(default)]
+    pub errors: Vec<String>,
+    #[serde(default)]
+    pub player: crate::player_themes::Overrides,
+    #[serde(default)]
     pub appearance: Appearance,
     #[serde(default)]
     pub settings: crate::braccato::settings::ThemeSettings,
@@ -69,6 +73,8 @@ impl Default for NativeTheme {
             size: 48.,
             weight: 700,
             unsupported: vec![],
+            errors: vec![],
+            player: Default::default(),
             appearance: Appearance::default(),
             settings: Default::default(),
         }
@@ -129,8 +135,12 @@ impl NativeTheme {
         w.set_lyrics_passive_scroll(passive || self.settings.passive_scroll);
     }
 }
-fn color(raw: &str) -> Option<u32> {
-    let value = raw.trim();
+pub(crate) fn color(raw: &str) -> Option<u32> {
+    let lower = raw.trim().to_ascii_lowercase();
+    let value = lower.as_str();
+    if let Some(value) = crate::theme_colors::parse(value) {
+        return Some(value);
+    }
     match value {
         "white" => return Some(0xffffffff),
         "black" => return Some(0xff000000),
@@ -143,14 +153,27 @@ fn color(raw: &str) -> Option<u32> {
             .split(|c: char| c == ',' || c == '/' || c.is_whitespace())
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>();
-        if parts.len() < 3 {
+        if !(3..=4).contains(&parts.len()) {
             return None;
         }
         let channel = |s: &str| -> Option<u32> {
             if let Some(v) = s.strip_suffix('%') {
-                Some((v.parse::<f32>().ok()?.clamp(0., 100.) * 2.55).round() as u32)
+                Some(
+                    (v.parse::<f32>()
+                        .ok()
+                        .filter(|v| v.is_finite())?
+                        .clamp(0., 100.)
+                        * 2.55)
+                        .round() as u32,
+                )
             } else {
-                Some(s.parse::<f32>().ok()?.clamp(0., 255.).round() as u32)
+                Some(
+                    s.parse::<f32>()
+                        .ok()
+                        .filter(|v| v.is_finite())?
+                        .clamp(0., 255.)
+                        .round() as u32,
+                )
             }
         };
         let alpha = parts
@@ -162,8 +185,11 @@ fn color(raw: &str) -> Option<u32> {
                     v.parse::<f32>().ok()
                 }
             })
-            .unwrap_or(Some(1.))?
-            .clamp(0., 1.);
+            .unwrap_or(Some(1.))?;
+        if !alpha.is_finite() {
+            return None;
+        }
+        let alpha = alpha.clamp(0., 1.);
         return Some(
             ((alpha * 255.).round() as u32) << 24
                 | channel(parts[0])? << 16
@@ -177,14 +203,15 @@ fn color(raw: &str) -> Option<u32> {
         8 => u32::from_str_radix(raw, 16)
             .ok()
             .map(|v| (v >> 8) | ((v & 0xff) << 24)),
-        3 => {
+        3 | 4 => {
             let mut chars = raw.chars();
             let (r, g, b) = (
                 chars.next()?.to_digit(16)?,
                 chars.next()?.to_digit(16)?,
                 chars.next()?.to_digit(16)?,
             );
-            Some(0xff000000 | r * 17 << 16 | g * 17 << 8 | b * 17)
+            let a = chars.next().map(|c| c.to_digit(16)).unwrap_or(Some(15))?;
+            Some(a * 17 << 24 | r * 17 << 16 | g * 17 << 8 | b * 17)
         }
         _ => None,
     }
@@ -206,9 +233,17 @@ pub fn from_settings(settings: &crate::services::Settings) -> NativeTheme {
 }
 pub fn apply_settings(w: &crate::MainWindow, settings: &crate::services::Settings) {
     let theme = from_settings(settings);
+    crate::theme_presets::install(w, &settings.language, &settings.lyrics_theme_css, &theme);
     w.set_lyric_theme_source(settings.lyrics_theme_css.clone().into());
     w.set_lyric_theme_applied(settings.lyrics_theme_css.clone().into());
     w.set_lyric_font_family(settings.lyrics_font_family.clone().into());
+    w.set_lyric_font_applied(settings.lyrics_font_family.clone().into());
+    w.set_theme_entire_player(settings.theme_entire_player);
+    w.set_theme_entire_player_draft(settings.theme_entire_player);
+    w.set_player_theme_style(crate::player_themes::resolve(
+        &theme,
+        settings.theme_entire_player,
+    ));
     w.set_lyric_style_status(if theme.unsupported.is_empty() {
         "".into()
     } else {
@@ -219,6 +254,7 @@ pub fn apply_settings(w: &crate::MainWindow, settings: &crate::services::Setting
         settings.lyrics_reduced_motion,
         settings.lyrics_passive_scroll,
     );
+    crate::lyric_appearance::preview(w);
 }
 pub fn convert(css: &str) -> NativeTheme {
     let source = css.to_owned();
@@ -229,27 +265,53 @@ pub fn convert(css: &str) -> NativeTheme {
         settings: crate::braccato::settings::ThemeSettings::from_css(css),
         ..Default::default()
     };
-    theme.unsupported.extend(compiled.errors);
+    theme.errors = compiled.errors;
+    if !theme.errors.is_empty() {
+        return theme;
+    }
     let comments = regex::Regex::new(r"(?s)/\*.*?\*/").unwrap();
     let css = comments.replace_all(css, "");
-    let blocks = regex::Regex::new(r"(?s)([^{}]+)\{([^{}]*)\}").unwrap();
-    for block in blocks.captures_iter(&css) {
-        let selector = block[1].trim();
+    let rules = native_rules(&css, &mut theme.unsupported);
+    let mut variables = std::collections::BTreeMap::new();
+    for (selector, body) in &rules {
+        if *selector == ":root" || *selector == ":host" || *selector == ".blyrics-container" {
+            for (name, value) in declarations(body) {
+                if name.starts_with("--") {
+                    variables.insert(name.to_string(), value.to_string());
+                }
+            }
+        }
+    }
+    for (selector, body) in rules {
+        let player_selector = matches!(
+            selector,
+            "body"
+                | "html"
+                | "ytmusic-app"
+                | "ytmusic-player-page"
+                | "ytmusic-player-bar"
+                | "ytmusic-nav-bar"
+        );
         let valid = selector == ":root"
             || selector == ":host"
             || selector.contains("blyrics")
-            || selector.contains("braccato");
+            || selector.contains("braccato")
+            || player_selector;
         if !valid {
             theme.unsupported.push(selector.into());
             continue;
         }
-        for declaration in block[2].split(';').map(str::trim).filter(|s| !s.is_empty()) {
-            let Some((name, value)) = declaration.split_once(':') else {
-                theme.unsupported.push(declaration.into());
-                continue;
-            };
-            let name = name.trim();
-            let value = value.trim();
+        // Secondary and interactive rules cannot describe the main lyric ink.
+        if ["translation", "romanization", ":hover", ":focus", "::"]
+            .iter()
+            .any(|s| selector.contains(s))
+        {
+            theme.unsupported.push(selector.into());
+            continue;
+        }
+        for (name, raw) in declarations(body) {
+            let resolved = resolve_value(raw, &variables, 0);
+            let value = resolved.as_str();
             let supported = match name {
                 "--blyrics-active-color" | "--blyrics-lyric-active-color" => {
                     color(value).map(|v| theme.active = v).is_some()
@@ -259,12 +321,39 @@ pub fn convert(css: &str) -> NativeTheme {
                 | "--blyrics-lyric-inactive-color" => {
                     color(value).map(|v| theme.inactive = v).is_some()
                 }
+                "color" if player_selector => {
+                    color(value).map(|v| theme.player.ink = Some(v)).is_some()
+                }
+                "background" | "background-color"
+                    if player_selector || selector == ":root" || selector == ":host" =>
+                {
+                    color(value)
+                        .map(|v| {
+                            if selector.ends_with("-bar") {
+                                theme.player.surface = Some(v)
+                            } else {
+                                theme.player.background = Some(v)
+                            }
+                        })
+                        .is_some()
+                }
+                "--ytmusic-background" => color(value)
+                    .map(|v| theme.player.background = Some(v))
+                    .is_some(),
+                "--ytmusic-player-bar-background" => color(value)
+                    .map(|v| theme.player.surface = Some(v))
+                    .is_some(),
+                "font-size" if player_selector => false,
+                "font-weight" if player_selector => false,
+                "border-radius" if player_selector => number(value, "px", 0., 40.)
+                    .map(|v| theme.player.corner = Some(v))
+                    .is_some(),
                 "color" => color(value)
                     .map(|v| {
-                        if selector.contains("active") {
-                            theme.active = v
-                        } else {
+                        if selector.contains("inactive") || !selector.contains("active") {
                             theme.inactive = v
+                        } else {
+                            theme.active = v
                         }
                     })
                     .is_some(),
@@ -321,7 +410,11 @@ pub fn convert(css: &str) -> NativeTheme {
                         .trim()
                         .trim_matches(|c| c == '\'' || c == '"');
                     if !family.is_empty() && family.len() <= 128 {
-                        theme.appearance.family = family.into();
+                        if player_selector {
+                            theme.player.family = Some(family.into())
+                        } else {
+                            theme.appearance.family = family.into();
+                        }
                         true
                     } else {
                         false
@@ -388,7 +481,52 @@ pub fn convert(css: &str) -> NativeTheme {
                     }
                     _ => false,
                 },
-                _ => false,
+                "--vey-accent" => color(value)
+                    .map(|v| theme.player.accent = Some(v))
+                    .is_some(),
+                "--vey-font-family" => {
+                    let value = value.trim_matches(|c| c == '\'' || c == '"');
+                    if !value.is_empty() && value.len() <= 128 {
+                        theme.player.family = Some(value.into());
+                        true
+                    } else {
+                        false
+                    }
+                }
+                "--vey-background" => color(value)
+                    .map(|v| theme.player.background = Some(v))
+                    .is_some(),
+                "--vey-surface" => color(value)
+                    .map(|v| theme.player.surface = Some(v))
+                    .is_some(),
+                "--vey-text" => color(value).map(|v| theme.player.ink = Some(v)).is_some(),
+                "--vey-muted" => color(value).map(|v| theme.player.muted = Some(v)).is_some(),
+                "--vey-corner-radius" => number(value, "px", 0., 40.)
+                    .map(|v| theme.player.corner = Some(v))
+                    .is_some(),
+                "--vey-artwork-radius" => number(value, "px", 0., 40.)
+                    .map(|v| theme.player.artwork_corner = Some(v))
+                    .is_some(),
+                "--vey-control-radius" => number(value, "px", 0., 999.)
+                    .map(|v| theme.player.control_corner = Some(v))
+                    .is_some(),
+                "--vey-artwork-share" => number(value, "", 0.32, 0.5)
+                    .map(|v| theme.player.artwork_share = Some(v))
+                    .is_some(),
+                "--vey-ambient-strength" => number(value, "", 0., 1.5)
+                    .map(|v| theme.player.ambient = Some(v))
+                    .is_some(),
+                "--vey-theme-duration" => crate::braccato::settings::milliseconds(value)
+                    .filter(|v| *v >= 0 && *v <= 2000)
+                    .map(|v| theme.player.motion_ms = Some(v as f32))
+                    .is_some(),
+                // Alias variables are retained for var() resolution above.
+                _ => {
+                    name.starts_with("--")
+                        && variables.contains_key(name)
+                        && !name.starts_with("--blyrics-")
+                        && !name.starts_with("--vey-")
+                }
             };
             if !supported {
                 theme
@@ -402,9 +540,161 @@ pub fn convert(css: &str) -> NativeTheme {
     }
     theme
 }
+
+fn declarations(body: &str) -> impl Iterator<Item = (&str, &str)> {
+    body.split(';')
+        .filter_map(|d| d.split_once(':'))
+        .map(|(n, v)| {
+            (
+                n.trim(),
+                v.trim()
+                    .strip_suffix("!important")
+                    .unwrap_or(v.trim())
+                    .trim(),
+            )
+        })
+}
+
+// Keep conditional browser rules out of the unconditional native style. The
+// previous leaf regex applied every @media branch to every window size.
+fn native_rules<'a>(css: &'a str, unsupported: &mut Vec<String>) -> Vec<(&'a str, &'a str)> {
+    let mut rules = vec![];
+    let mut rest = css;
+    while let Some(open) = rest.find('{') {
+        let selector = rest[..open].trim();
+        let mut depth = 1;
+        let mut quote = '\0';
+        let mut escaped = false;
+        let mut end = None;
+        for (offset, c) in rest[open + 1..].char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if c == '\\' {
+                escaped = true;
+                continue;
+            }
+            if quote != '\0' {
+                if c == quote {
+                    quote = '\0';
+                }
+                continue;
+            }
+            if c == '\'' || c == '"' {
+                quote = c;
+                continue;
+            }
+            if c == '{' {
+                depth += 1;
+            }
+            if c == '}' {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(open + 1 + offset);
+                    break;
+                }
+            }
+        }
+        let Some(end) = end else {
+            break;
+        };
+        if selector.starts_with('@') {
+            unsupported.push(selector.into());
+        } else {
+            rules.push((selector, &rest[open + 1..end]));
+        }
+        rest = &rest[end + 1..];
+    }
+    rules
+}
+
+fn resolve_value(
+    value: &str,
+    vars: &std::collections::BTreeMap<String, String>,
+    depth: u8,
+) -> String {
+    if depth > 16 {
+        return value.into();
+    }
+    let Some(start) = value.find("var(") else {
+        return value.into();
+    };
+    let mut level = 1;
+    let mut end = None;
+    for (i, c) in value[start + 4..].char_indices() {
+        if c == '(' {
+            level += 1;
+        }
+        if c == ')' {
+            level -= 1;
+            if level == 0 {
+                end = Some(start + 4 + i);
+                break;
+            }
+        }
+    }
+    let Some(end) = end else {
+        return value.into();
+    };
+    let body = &value[start + 4..end];
+    let (name, fallback) = body.split_once(',').unwrap_or((body, ""));
+    let replacement = vars
+        .get(name.trim())
+        .map(String::as_str)
+        .unwrap_or(fallback.trim());
+    if replacement.is_empty() {
+        return value.into();
+    }
+    resolve_value(
+        &format!("{}{}{}", &value[..start], replacement, &value[end + 1..]),
+        vars,
+        depth + 1,
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn whole_player_css_roles_and_color_spaces_preserve_lyric_timing() {
+        let t=convert("$accent:color(display-p3 1 0 0); :root{--vey-accent:$accent;--vey-background:#121216;--vey-corner-radius:12px;--vey-artwork-share:0.46;--vey-ambient-strength:0.5;--vey-theme-duration:0.6s;} ytmusic-player-bar{background-color:#24242a;} body{color:hsl(0 0% 90%);font-family:'Segoe UI';}");
+        assert!(t.errors.is_empty() && t.unsupported.is_empty(), "{t:?}");
+        assert_eq!(t.player.accent, Some(0xffff0000));
+        assert_eq!(t.player.surface, Some(0xff24242a));
+        assert_eq!(t.player.corner, Some(12.));
+        assert_eq!(t.player.artwork_share, Some(0.46));
+        assert_eq!(t.player.motion_ms, Some(600.));
+        assert_eq!(t.player.family.as_deref(), Some("Segoe UI"));
+        assert_eq!(
+            serde_json::to_value(t.settings).unwrap(),
+            serde_json::to_value(NativeTheme::default().settings).unwrap()
+        );
+        let old: crate::services::Settings = serde_json::from_str("{}").unwrap();
+        assert!(old.theme_entire_player);
+    }
+    #[test]
+    fn inactive_selectors_aliases_and_important_do_not_corrupt_active_ink() {
+        let t = convert(":root{--accent:#8efc;--blyrics-active-color:var(--accent) !important;} .blyrics--inactive {color: rgb(25 50 75 / 40%);} .blyrics--active {color:var(--missing, #aabbcc);}");
+        assert!(t.errors.is_empty() && t.unsupported.is_empty(), "{t:?}");
+        assert_eq!(t.active, 0xffaabbcc);
+        assert_eq!(t.inactive, 0x6619324b);
+        assert_eq!(
+            convert(":root{--accent:#8efc;--blyrics-active-color:var(--accent);}").active,
+            0xcc88eeff
+        );
+        assert!(color("rgb(NaN 0 0)").is_none());
+        assert!(color("rgba(0 0 0 / NaN)").is_none());
+    }
+    #[test]
+    fn conditional_and_secondary_rules_do_not_override_main_typography() {
+        let t=convert(":root {font-size:40px;} @media(max-width:600px){.blyrics-container {font-size:20px;}} .blyrics-translation {font-size:12px;} .blyrics--inactive{color:#345;}");
+        assert!(t.errors.is_empty(), "{t:?}");
+        assert_eq!(t.size, 40.);
+        assert_eq!(t.inactive, 0xff334455);
+        assert_eq!(t.unsupported.len(), 2);
+        let t = convert("$broken: $undefined; :root {color:#fff;}");
+        assert!(!t.errors.is_empty());
+    }
     #[test]
     fn normal_fill_is_light_with_whole_word_motion_and_optional_letter_waves() {
         let default = NativeTheme::default();
@@ -462,7 +752,8 @@ mod tests {
         let t=convert(":root {--blyrics-active-color:#f97316; --blyrics-font-size:32px} .blyrics-line {filter: blur(2px)} body {background:red}");
         assert_eq!(t.active, 0xfff97316);
         assert_eq!(t.size, 32.);
-        assert_eq!(t.unsupported.len(), 2);
+        assert_eq!(t.unsupported.len(), 1);
+        assert_eq!(t.player.background, Some(0xffff0000));
     }
     #[test]
     fn css_timing_variables_and_comment_settings_are_preserved() {

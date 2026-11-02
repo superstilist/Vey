@@ -11,16 +11,22 @@
   "bundledModules": 98,
   "assets": {
     "widget.js": {
-      "bytes": 344819,
-      "sha256": "2b7d16d95296a18a6abbe97b3525d1567e490bf27fa4443f5906e4aacff66b6e"
+      "bytes": 468763,
+      "sha256": "d1dd74419840b65d327abb23d87a60f5e3c047eba35d185b6717aecc236c8f77"
     },
     "widget.css": {
       "bytes": 675441,
       "sha256": "2aed6d0ace94c26c38df674e80a974e3b41a53c9039dbe8d3028dbdbe8fa0eab"
     },
     "LICENSES.txt": {
-      "bytes": 18726,
-      "sha256": "fb3b4af30c69e8b5d7272f8ed9eb871569080fe0588ef7f5882988a3010cf2a3"
+      "bytes": 18808,
+      "sha256": "da183ed60fdeab431edd5824f64f0f45027f6558098bf50c7021c58d5db7ba72"
     }
+  },
+  "motion": {
+    "engine": "gsap",
+    "version": "3.15.0",
+    "bytes": 79276,
+    "sha256": "74637ef7aada9bc62c2ce0ec8567d1c16458414601d1d3ef20580ba929c657a5"
   }
 }

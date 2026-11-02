@@ -9,10 +9,11 @@ use lofty::{
 use std::{io::Cursor, path::Path};
 
 pub async fn fetch_cover(url: &str) -> Result<Vec<u8>, String> {
-    let client = reqwest::Client::builder()
+    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> = std::sync::OnceLock::new();
+    let client = CLIENT.get_or_init(|| reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())).as_ref().map_err(Clone::clone)?;
     let mut response = client
         .get(url)
         .send()

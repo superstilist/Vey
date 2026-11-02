@@ -1,0 +1,21 @@
+// Semantic roles shared by the live shell and the isolated draft preview.
+export struct PlayerThemeStyle {
+    enabled: bool, name: string,
+    primary: color, primary-light: color, primary-dark: color, on-primary: color,
+    primary-container: color, secondary-container: color, tertiary-container: color,
+    background: color, surface-lowest: color, surface: color, surface-high: color,
+    surface-higher: color, outline: color,
+    ink: color, ink-soft: color, muted: color, quiet: color,
+    corner: float, artwork-corner: float, control-corner: float,
+    artwork-share: float, ambient: float, motion-ms: float, family: string,
+}
+export global PlayerTheme {
+    in-out property <bool> enabled;
+    in-out property <float> corner: 28;
+    in-out property <float> artwork-corner: 24;
+    in-out property <float> control-corner: 999;
+    in-out property <float> artwork-share: 0.43;
+    in-out property <float> ambient: 1;
+    in-out property <float> motion-ms: 1000;
+    in-out property <string> family: "Roboto";
+}

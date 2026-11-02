@@ -11,6 +11,7 @@ use std::{
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let label = std::env::args().nth(1).unwrap_or("sample".into());
+    let line_only = std::env::args().any(|a| a == "--line-only");
     let w = MainWindow::new()?;
     playervf::native_lyrics::install(&w);
     let render_times = Rc::new(RefCell::new(Vec::<f64>::new()));
@@ -48,12 +49,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     w.window().set_size(slint::LogicalSize::new(1440., 900.));
     w.set_duration(300.);
     w.set_lyrics_timed(true);
-    w.set_lyrics_word_timed(true);
+    w.set_lyrics_word_timed(!line_only);
     w.set_lyric_lines(
         Rc::new(VecModel::from(
             (0..300)
                 .map(|line| {
-                    let parts = (0..8)
+                    let parts = (0..if line_only { 0 } else { 8 })
                         .map(|word| WordRow {
                             text: format!("vocal{word} ").into(),
                             start_ms: line * 1000 + word * 125,

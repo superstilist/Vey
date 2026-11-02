@@ -2,6 +2,7 @@ import { I18n } from "i18n.slint";
 import { Motion } from "motion.slint";
 import { Slider } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
+import { PlayerTheme } from "player-theme.slint";
 
 export global TouchStyle {
     in-out property <bool> mobile;
@@ -72,7 +73,7 @@ export component Action inherits Rectangle {
         }
         if root.text != "": Text {
             text: root.text;
-            font-family: I18n.language == "ja" || root.text == "日本語" ? "Noto Sans JP" : "Roboto";
+            font-family: I18n.language == "ja" || root.text == "日本語" ? "Noto Sans JP" : PlayerTheme.family;
             color: root.primary ? Tokens.brand-ink : root.selected ? Tokens.brand-300 : Tokens.ink-100;
             font-size: Tokens.font-sm;
             font-weight: root.primary || root.selected ? 700 : 600;
@@ -83,7 +84,7 @@ export component Action inherits Rectangle {
     label-text := Text {
         visible: false;
         text: root.text;
-        font-family: I18n.language == "ja" || root.text == "日本語" ? "Noto Sans JP" : "Roboto";
+        font-family: I18n.language == "ja" || root.text == "日本語" ? "Noto Sans JP" : PlayerTheme.family;
         font-size: Tokens.font-sm;
         font-weight: root.primary || root.selected ? 700 : 600;
     }
@@ -117,7 +118,7 @@ export component NavItem inherits Rectangle {
     in property <bool> collapsed;
     callback clicked();
     height: 44px;
-    border-radius: 24px;
+    border-radius: PlayerTheme.enabled ? min(24, PlayerTheme.corner) * 1px : 24px;
     background: selected ? Tokens.primary-container : (touch.has-hover || touch.pressed) ? Tokens.neutral-150 : transparent;
     border-width: 0px;
     border-color: #ffffff14;
@@ -153,7 +154,7 @@ export component Artwork inherits Rectangle {
     in property <int> tone;
     in property <bool> downloaded;
     callback mark-clicked();
-    border-radius: 24px;
+    border-radius: PlayerTheme.artwork-corner * 1px;
     border-top-left-radius: self.border-radius;
     border-top-right-radius: self.border-radius;
     border-bottom-left-radius: self.border-radius;
@@ -244,7 +245,7 @@ export component Transport inherits Rectangle {
     callback clicked();
     width: brand ? (TouchStyle.mobile ? 44px : 42px) : 58px;
     height: brand ? (TouchStyle.mobile ? 44px : 42px) : 58px;
-    border-radius: root.playing ? (root.brand ? 15px : 20px) : self.width / 2;
+    border-radius: PlayerTheme.enabled ? min(self.width / 2,PlayerTheme.control-corner * 1px) : root.playing ? (root.brand ? 15px : 20px) : self.width / 2;
     animate border-radius { duration: Motion.feedback; }
     background: (touch.has-hover || touch.pressed) ? Tokens.brand-300 : Tokens.brand-500;
     animate background { duration: Motion.feedback; }
@@ -418,26 +419,114 @@ export component MobileNavItem inherits Rectangle {
     accessible-action-default => { root.clicked(); }
 }
 
-export component SettingsTile inherits Rectangle {
+export component Toggle inherits Rectangle {
+    in property <bool> checked;
+    callback toggled();
+    width: 40px;
+    height: 24px;
+    border-radius: 12px;
+    background: root.checked ? Tokens.brand-500 : Tokens.neutral-300;
+    animate background { duration: Motion.feedback; }
+    Rectangle {
+        width: 18px; height: 18px; y: 3px;
+        x: root.checked ? root.width - self.width - 3px : 3px;
+        border-radius: 9px;
+        background: root.checked ? Tokens.brand-ink : Tokens.ink-150;
+        animate x { duration: Motion.feedback; easing: ease-in-out; }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.toggled(); } }
+    accessible-role: switch;
+    accessible-label: root.checked ? I18n.tr("Увімкнено") : I18n.tr("Вимкнено");
+    accessible-checked: root.checked;
+    accessible-action-default => { root.toggled(); }
+}
+
+// Flat YouTube Music-style settings row: leading icon, title, optional
+// secondary line, optional value/check and a trailing chevron.
+export component SettingsRow inherits Rectangle {
+    in property <string> text;
+    in property <string> detail;
+    in property <string> value;
+    in property <image> icon;
+    in property <bool> chevron: true;
+    in property <bool> clickable: true;
+    in property <bool> accent;
+    in property <bool> selected;
+    callback clicked();
+    height: TouchStyle.mobile ? 60px : 56px;
+    border-radius: 10px;
+    background: root.clickable && (touch.has-hover || touch.pressed) ? Tokens.neutral-100 : transparent;
+    animate background { duration: Motion.feedback; }
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 12px; spacing: 16px;
+        if root.icon.width > 0: VerticalLayout {
+            width: 22px;
+            alignment: center;
+            Image { source: root.icon; width: 22px; height: 22px; colorize: root.accent ? Tokens.brand-300 : Tokens.ink-200; }
+        }
+        VerticalLayout {
+            alignment: center; spacing: 3px; horizontal-stretch: 1; min-width: 0px;
+            Text { text: root.text; color: root.accent ? Tokens.brand-300 : Tokens.ink-100; font-size: 15px; font-weight: 500; overflow: elide; wrap: word-wrap; }
+            if root.detail != "": Text { text: root.detail; color: Tokens.ink-300; font-size: 12px; overflow: elide; }
+        }
+        if root.value != "": Text { text: root.value; color: Tokens.ink-300; font-size: 13px; vertical-alignment: center; overflow: elide; max-width: 220px; horizontal-alignment: right; }
+        if root.selected: VerticalLayout {
+            width: 18px;
+            alignment: center;
+            Image { source: @image-url("../assets/icons/Check.svg"); width: 18px; height: 18px; colorize: Tokens.brand-300; }
+        }
+        if root.chevron: VerticalLayout {
+            width: 18px;
+            alignment: center;
+            Image { source: @image-url("../assets/icons/ChevronRight.svg"); width: 18px; height: 18px; colorize: Tokens.ink-300; }
+        }
+    }
+    touch := TouchArea { enabled: root.clickable; mouse-cursor: pointer; clicked => { root.clicked(); } }
+    accessible-role: button;
+    accessible-label: root.text + (root.detail == "" ? "" : " · " + root.detail);
+    accessible-action-default => { if root.clickable { root.clicked(); } }
+}
+
+export component SwitchRow inherits Rectangle {
     in property <string> text;
     in property <string> detail;
     in property <image> icon;
-    callback clicked();
-    height: 80px;
-    border-radius: 24px;
-    background: (touch.has-hover || touch.pressed) ? Tokens.neutral-150 : transparent;
+    in property <bool> checked;
+    callback toggled();
+    height: TouchStyle.mobile ? 60px : 56px;
+    border-radius: 10px;
+    background: (touch.has-hover || touch.pressed) ? Tokens.neutral-100 : transparent;
+    animate background { duration: Motion.feedback; }
     HorizontalLayout {
-        padding: 16px; spacing: 14px;
-        Rectangle { width: 44px; height: 44px; border-radius: 0px; background: transparent;
-            Image { source: root.icon; width: 22px; height: 22px; x: 11px; y: 11px; colorize: Tokens.brand-300; }
+        padding-left: 12px; padding-right: 12px; spacing: 16px;
+        if root.icon.width > 0: VerticalLayout {
+            width: 22px;
+            alignment: center;
+            Image { source: root.icon; width: 22px; height: 22px; colorize: Tokens.ink-200; }
         }
-        VerticalLayout { alignment: center; spacing: 5px; horizontal-stretch: 1;
-            Text { text: root.text; color: Tokens.ink-100; font-size: 16px; font-weight: 600; overflow: elide; }
-            Text { text: root.detail; color: Tokens.ink-300; font-size: 12px; overflow: elide; }
+        VerticalLayout {
+            alignment: center; spacing: 3px; horizontal-stretch: 1; min-width: 0px;
+            Text { text: root.text; color: Tokens.ink-100; font-size: 15px; font-weight: 500; overflow: elide; wrap: word-wrap; }
+            if root.detail != "": Text { text: root.detail; color: Tokens.ink-300; font-size: 12px; overflow: elide; }
         }
-        Image { source: @image-url("../assets/icons/ChevronRight.svg"); width: 18px; height: 18px; colorize: Tokens.ink-200; }
+        Toggle { checked: root.checked; toggled => { root.toggled(); } }
     }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
-    accessible-role: button; accessible-label: text;
-    accessible-action-default => { root.clicked(); }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.toggled(); } }
+    accessible-role: button;
+    accessible-label: root.text + " · " + (root.checked ? I18n.tr("Увімкнено") : I18n.tr("Вимкнено"));
+    accessible-action-default => { root.toggled(); }
+}
+
+export component SectionLabel inherits Rectangle {
+    in property <string> text;
+    in property <string> action;
+    callback action-clicked();
+    height: 40px;
+    background: transparent;
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 12px; spacing: 12px;
+        Text { text: root.text; color: Tokens.ink-200; font-size: 13px; font-weight: 700; letter-spacing: 0.4px; vertical-alignment: bottom; horizontal-stretch: 1; overflow: elide; }
+        if root.action != "": Text { text: root.action; color: Tokens.brand-300; font-size: 13px; font-weight: 600; vertical-alignment: bottom; }
+    }
+    if root.action != "": TouchArea { mouse-cursor: pointer; clicked => { root.action-clicked(); } }
 }

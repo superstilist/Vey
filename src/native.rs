@@ -99,6 +99,8 @@ pub struct PlayerStatus {
     pub volume: f32,
     pub rate: f32,
     pub ended: bool,
+    #[serde(skip_serializing)]
+    pub seek_serial: u64,
 }
 
 // ── Audio thread commands ─────────────────────────────────────────────────────
@@ -128,6 +130,27 @@ struct SharedStatus {
     volume: f32,
     rate: f32,
     ended: bool,
+    sampled_at: Option<std::time::Instant>,
+    seek_serial: u64,
+}
+
+impl SharedStatus {
+    fn position_at(&self, now: std::time::Instant) -> f64 {
+        let elapsed = self.sampled_at.map_or(0., |at| {
+            now.saturating_duration_since(at).as_secs_f64().min(0.25)
+        });
+        let position = self.position_secs
+            + if self.state == PlaybackState::Playing {
+                elapsed * self.rate as f64
+            } else {
+                0.
+            };
+        if self.duration_secs > 0. {
+            position.min(self.duration_secs)
+        } else {
+            position
+        }
+    }
 }
 
 impl Default for PlaybackState {
@@ -535,6 +558,7 @@ fn audio_thread(
     let mut duration_secs: f64 = 0.0;
     let mut position_offset = Duration::ZERO;
     let mut held_position: Option<Duration> = None;
+    let mut seek_serial = 0u64;
 
     loop {
         if Instant::now() >= next_output_check {
@@ -667,6 +691,7 @@ fn audio_thread(
                             current_path = Some(path);
                             duration_secs = track_duration_secs;
                             position_offset = Duration::ZERO;
+                            seek_serial = seek_serial.wrapping_add(1);
                             held_position = None;
                             wants_playback = autoplay;
                             Ok(())
@@ -700,9 +725,11 @@ fn audio_thread(
                             .is_ok()
                         {
                             position_offset = Duration::ZERO;
+                            seek_serial = seek_serial.wrapping_add(1);
                         }
                     } else if held_position.is_some() && secs.is_finite() {
                         held_position = Some(Duration::from_secs_f64(secs.max(0.0)));
+                        seek_serial = seek_serial.wrapping_add(1);
                     }
                 }
                 AudioCmd::Volume(v) => {
@@ -730,6 +757,7 @@ fn audio_thread(
         let pos = held_position
             .unwrap_or(position_offset + sink.get_pos())
             .as_secs_f64();
+        let sampled_at = Instant::now();
         let pos = if duration_secs > 0.0 {
             pos.min(duration_secs)
         } else {
@@ -745,6 +773,8 @@ fn audio_thread(
             s.state = state;
             s.current_path = current_path.clone();
             s.position_secs = pos;
+            s.sampled_at = Some(sampled_at);
+            s.seek_serial = seek_serial;
             s.duration_secs = duration_secs;
             s.volume = volume;
             s.rate = rate;
@@ -1134,11 +1164,12 @@ pub fn player_status(state: &CoreState) -> Result<PlayerStatus, String> {
     Ok(PlayerStatus {
         state: s.state,
         current_path: s.current_path.clone(),
-        position_secs: s.position_secs,
+        position_secs: s.position_at(std::time::Instant::now()),
         duration_secs: s.duration_secs,
         volume: s.volume,
         rate: s.rate,
         ended: s.ended,
+        seek_serial: s.seek_serial,
     })
 }
 
@@ -3196,6 +3227,191 @@ fn parse_ytm_next_response(json: &serde_json::Value, limit: usize) -> Vec<YtmBro
     out
 }
 
+/// Public playlist import is independent of account OAuth. Fetch every page,
+/// retain source order/repeats, and fail rather than publish a truncated list.
+pub async fn ytm_import_playlist(
+    link: String,
+) -> Result<crate::library_import::ImportedPlaylist, String> {
+    use crate::library_import::{local_id, playlist_link, ImportedPlaylist, Provider};
+    let (provider, id) = playlist_link(&link)?;
+    if provider != Provider::Youtube {
+        return Err("Для імпорту Spotify підключіть його акаунт у настільній Vey".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|_| "Не вдалося створити підключення")?;
+    let auth = youtube_auth(&client).await;
+    let mut token: Option<String> = None;
+    let mut seen = std::collections::HashSet::new();
+    let mut tracks = Vec::new();
+    let mut title = String::new();
+    for _ in 0..400 {
+        let mut body = serde_json::json!({"context":innertube_context("WEB_REMIX",YT_REMIX_VERSION,auth.visitor.as_deref())});
+        if let Some(token) = &token {
+            body["continuation"] = token.clone().into();
+        } else {
+            body["browseId"] = format!("VL{id}").into();
+        }
+        let page = ytm_innertube_post(
+            &client,
+            "browse",
+            &body,
+            &auth,
+            YT_REMIX_VERSION,
+            token.as_deref(),
+        )
+        .await
+        .ok_or("Не вдалося прочитати плейліст. Перевірте доступ і спробуйте знову.")?;
+        let (rows, next) = public_playlist_page(&page)?;
+        if title.is_empty() {
+            title = public_playlist_title(&page).unwrap_or_default();
+        }
+        tracks.extend(rows);
+        if tracks.len() > 20000 {
+            return Err("Плейліст перевищує ліміт 20 000 композицій; імпорт скасовано".into());
+        }
+        match next {
+            Some(next) => {
+                if !seen.insert(next.clone()) {
+                    return Err("Сервіс повторив сторінку плейліста; імпорт скасовано".into());
+                }
+                token = Some(next);
+            }
+            None => {
+                return Ok(ImportedPlaylist {
+                    id: local_id(Provider::Youtube, "public", &id),
+                    name: if title.is_empty() {
+                        format!("YouTube Music · {id}")
+                    } else {
+                        title
+                    },
+                    tracks,
+                })
+            }
+        }
+    }
+    Err("Забагато сторінок плейліста; імпорт скасовано".into())
+}
+fn find_playlist_node<'a>(
+    value: &'a serde_json::Value,
+    keys: &[&str],
+    depth: usize,
+) -> Option<&'a serde_json::Value> {
+    if depth > 32 {
+        return None;
+    }
+    match value {
+        serde_json::Value::Object(map) => {
+            for key in keys {
+                if let Some(node) = map.get(*key) {
+                    return Some(node);
+                }
+            }
+            map.values()
+                .find_map(|v| find_playlist_node(v, keys, depth + 1))
+        }
+        serde_json::Value::Array(items) => items
+            .iter()
+            .find_map(|v| find_playlist_node(v, keys, depth + 1)),
+        _ => None,
+    }
+}
+fn public_playlist_title(value: &serde_json::Value) -> Option<String> {
+    find_playlist_node(
+        value,
+        &["musicResponsiveHeaderRenderer", "musicDetailHeaderRenderer"],
+        0,
+    )
+    .and_then(|v| v.get("title"))
+    .map(ytm_text)
+    .filter(|s| !s.trim().is_empty())
+}
+fn public_playlist_page(
+    value: &serde_json::Value,
+) -> Result<(Vec<crate::services::Track>, Option<String>), String> {
+    let shelf = find_playlist_node(
+        value,
+        &[
+            "musicPlaylistShelfRenderer",
+            "musicPlaylistShelfContinuation",
+            "musicShelfContinuation",
+        ],
+        0,
+    );
+    let action = if shelf.is_none() {
+        find_playlist_node(value, &["appendContinuationItemsAction"], 0)
+    } else {
+        None
+    };
+    let node = shelf
+        .or(action)
+        .ok_or("Плейліст приватний, недоступний або має непідтримуваний формат")?;
+    let items = node
+        .get("contents")
+        .or_else(|| node.get("continuationItems"))
+        .and_then(|v| v.as_array())
+        .ok_or("Некоректний вміст плейліста")?;
+    let mut tracks = Vec::new();
+    let mut next = node
+        .pointer("/continuations/0/nextContinuationData/continuation")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    for item in items {
+        if let Some(row) = item.get("musicResponsiveListItemRenderer") {
+            tracks.push(
+                public_playlist_track(row)
+                    .ok_or("Композиція не має доступного ID; неповний імпорт не збережено")?,
+            );
+        } else if let Some(token) = item
+            .pointer("/continuationItemRenderer/continuationEndpoint/continuationCommand/token")
+            .and_then(|v| v.as_str())
+        {
+            next = Some(token.into());
+        } else {
+            return Err("Непідтримувана композиція плейліста; імпорт скасовано".into());
+        }
+    }
+    Ok((tracks, next.filter(|s| !s.is_empty())))
+}
+
+fn public_playlist_track(row: &serde_json::Value) -> Option<crate::services::Track> {
+    if let Some(song) = ytm_row_song(row, "song") {
+        return Some(crate::services::Track {
+            path: format!("yt://{}", song.video_id),
+            video_id: Some(song.video_id),
+            title: song.title,
+            artist: song.artist,
+            album: song.album,
+            duration_secs: song.duration_secs as f64,
+            thumbnail_url: song.thumbnail_url,
+            ..Default::default()
+        });
+    }
+    // Unavailable/deleted entries can still expose their real playlist video ID.
+    // Keep that reference and source label instead of dropping its position.
+    let id = row.pointer("/playlistItemData/videoId")?.as_str()?;
+    if id.len() != 11
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return None;
+    }
+    let title = row
+        .pointer("/flexColumns/0/musicResponsiveListItemFlexColumnRenderer/text")
+        .map(ytm_text)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Unavailable track".into());
+    Some(crate::services::Track {
+        path: format!("yt://{id}"),
+        video_id: Some(id.into()),
+        title,
+        thumbnail_url: ytm_thumbnail(row),
+        ..Default::default()
+    })
+}
+
 pub async fn ytm_browse(
     browse_id: Option<String>,
     limit: Option<usize>,
@@ -3967,6 +4183,28 @@ async fn audio_chunk(
     Ok(chunk)
 }
 
+fn store_audio_chunk(
+    output: &mut [u8],
+    ranges: &[(u64, u64)],
+    received: &mut [bool],
+    start: u64,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let index = ranges
+        .binary_search_by_key(&start, |&(range_start, _)| range_start)
+        .map_err(|_| format!("audio unexpected range at byte {start}"))?;
+    let end = ranges[index].1;
+    if received[index] || bytes.len() as u64 != end - start + 1 {
+        return Err(format!("audio invalid or duplicate range at byte {start}"));
+    }
+    let destination = output
+        .get_mut(start as usize..=end as usize)
+        .ok_or_else(|| format!("audio range outside file at byte {start}"))?;
+    destination.copy_from_slice(bytes);
+    received[index] = true;
+    Ok(())
+}
+
 async fn download_audio_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
     let end0 = AUDIO_CHUNK_BYTES - 1;
     let res = client
@@ -4041,48 +4279,49 @@ async fn download_audio_bytes(client: &reqwest::Client, url: &str) -> Result<Vec
             first.len()
         ));
     }
-    let mut parts: Vec<(u64, Vec<u8>)> = vec![(0, first)];
-    for wave in ranges.chunks(AUDIO_DL_CONCURRENCY) {
-        // Dropping this set on failure or track cancellation aborts remaining requests.
-        let mut handles = tokio::task::JoinSet::new();
-        for &(range_start, range_end) in wave {
-            let client = client.clone();
-            let url = url.to_string();
-            handles.spawn(async move {
-                let res = client
-                    .get(&url)
-                    .header("User-Agent", audio_user_agent(&url))
-                    .header("Origin", YT_ANDROID_ORIGIN)
-                    .header("Referer", YT_ANDROID_REFERER)
-                    .header("Range", format!("bytes={range_start}-{range_end}"))
-                    .send()
-                    .await
-                    .map_err(|e| e.without_url().to_string())?;
-                if res.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                    return Err::<(u64, Vec<u8>), String>(format!(
-                        "audio HTTP {} (bytes {range_start}-{range_end})",
-                        res.status()
-                    ));
-                }
-                let chunk = audio_chunk(res, range_start, range_end, total).await?;
-                Ok((range_start, chunk))
-            });
+    let mut out = vec![0; total as usize];
+    out[..first.len()].copy_from_slice(&first);
+    drop(first);
+    let mut received = vec![false; ranges.len()];
+    // Refill a free slot immediately; one slow chunk must not stall every
+    // request in the next wave. Dropping the set aborts outstanding requests.
+    let mut handles: tokio::task::JoinSet<Result<(u64, Vec<u8>), String>> =
+        tokio::task::JoinSet::new();
+    for &(range_start, range_end) in &ranges {
+        if handles.len() >= AUDIO_DL_CONCURRENCY {
+            if let Some(part) = handles.join_next().await {
+                let (start, bytes) =
+                    part.map_err(|e| format!("audio download task failed: {e}"))??;
+                store_audio_chunk(&mut out, &ranges, &mut received, start, &bytes)?;
+            }
         }
-        while let Some(part) = handles.join_next().await {
-            parts.push(part.map_err(|e| format!("audio download task failed: {e}"))??);
-        }
+        let client = client.clone();
+        let url = url.to_string();
+        handles.spawn(async move {
+            let res = client
+                .get(&url)
+                .header("User-Agent", audio_user_agent(&url))
+                .header("Origin", YT_ANDROID_ORIGIN)
+                .header("Referer", YT_ANDROID_REFERER)
+                .header("Range", format!("bytes={range_start}-{range_end}"))
+                .send()
+                .await
+                .map_err(|e| e.without_url().to_string())?;
+            if res.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                return Err::<(u64, Vec<u8>), String>(format!(
+                    "audio HTTP {} (bytes {range_start}-{range_end})",
+                    res.status()
+                ));
+            }
+            let chunk = audio_chunk(res, range_start, range_end, total).await?;
+            Ok((range_start, chunk))
+        });
     }
-    parts.sort_by_key(|(range_start, _)| *range_start);
-    let mut out = Vec::with_capacity(total as usize);
-    let mut expect = 0u64;
-    for (range_start, chunk) in parts {
-        if range_start != expect || chunk.is_empty() {
-            return Err(format!("audio download gap at byte {expect}"));
-        }
-        out.extend_from_slice(&chunk);
-        expect += chunk.len() as u64;
+    while let Some(part) = handles.join_next().await {
+        let (start, bytes) = part.map_err(|e| format!("audio download task failed: {e}"))??;
+        store_audio_chunk(&mut out, &ranges, &mut received, start, &bytes)?;
     }
-    if out.len() as u64 != total {
+    if received.iter().any(|complete| !complete) {
         return Err("audio incomplete download".to_string());
     }
     eprintln!("[ytm-dl] bytes={} chunks={}", out.len(), 1 + ranges.len());
@@ -4179,6 +4418,72 @@ async fn download_audio_with_fresh_stream(
     Err("audio download retry exhausted".to_string())
 }
 
+// A sidecar is written only after a complete download (or an old cache file
+// matches the provider's advertised size). It contains no expiring media URL.
+#[derive(Serialize, Deserialize)]
+struct AudioCacheIndex {
+    video_id: String,
+    format: String,
+    byte_len: u64,
+    duration_secs: u64,
+    title: String,
+    artist: String,
+}
+
+fn cached_audio_from_index(dir: &Path, id: &str) -> Option<YtmCachedTrack> {
+    let index_path = dir.join(format!("{id}.meta.json"));
+    if std::fs::metadata(&index_path).ok()?.len() > 64 * 1024 {
+        return None;
+    }
+    let index: AudioCacheIndex = serde_json::from_slice(&std::fs::read(index_path).ok()?).ok()?;
+    if index.video_id != id
+        || !matches!(index.format.as_str(), "m4a" | "mp3" | "webm")
+        || !(1024..=AUDIO_CHUNK_BYTES * AUDIO_MAX_CHUNKS as u64).contains(&index.byte_len)
+    {
+        return None;
+    }
+    let path = dir.join(format!("{id}.{}", index.format));
+    let metadata = std::fs::metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.len() != index.byte_len {
+        return None;
+    }
+    Some(YtmCachedTrack {
+        path: path.to_string_lossy().to_string(),
+        duration_secs: index.duration_secs,
+        format: index.format,
+        title: index.title,
+        artist: index.artist,
+    })
+}
+
+fn write_audio_cache_index(dir: &Path, id: &str, track: &YtmCachedTrack, byte_len: u64) {
+    let index = AudioCacheIndex {
+        video_id: id.to_string(),
+        format: track.format.clone(),
+        byte_len,
+        duration_secs: track.duration_secs,
+        title: track.title.clone(),
+        artist: track.artist.clone(),
+    };
+    if let Ok(bytes) = serde_json::to_vec(&index) {
+        // A missing or partially written index is just a cache miss; media is
+        // always published independently by the complete-file rename below.
+        let _ = std::fs::write(dir.join(format!("{id}.meta.json")), bytes);
+    }
+}
+
+fn publish_cached_audio(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    static CACHE_WRITE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let serial = CACHE_WRITE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporary = path.with_extension(format!("{}.{}.part", std::process::id(), serial));
+    let result = std::fs::write(&temporary, bytes).and_then(|_| std::fs::rename(&temporary, path));
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
 pub async fn ytm_cache_stream(video_id: String) -> Result<Option<YtmCachedTrack>, String> {
     let id = video_id.trim().to_string();
     if id.len() != 11
@@ -4187,6 +4492,10 @@ pub async fn ytm_cache_stream(video_id: String) -> Result<Option<YtmCachedTrack>
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         return Ok(None);
+    }
+    let dir = std::env::temp_dir().join("playervf-yt");
+    if let Some(track) = cached_audio_from_index(&dir, &id) {
+        return Ok(Some(track));
     }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(25))
@@ -4197,7 +4506,6 @@ pub async fn ytm_cache_stream(video_id: String) -> Result<Option<YtmCachedTrack>
         Some(audio) => audio,
         None => return Ok(None),
     };
-    let dir = std::env::temp_dir().join("playervf-yt");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{id}.{}", audio_ext_for_mime(&audio.mime)));
     let expected_size = reqwest::Url::parse(&audio.url).ok().and_then(|url| {
@@ -4216,23 +4524,21 @@ pub async fn ytm_cache_stream(video_id: String) -> Result<Option<YtmCachedTrack>
             return Err("audio incomplete download".to_string());
         }
         // Publish only a complete file; interruption cannot leave a playable-looking cache entry.
-        static CACHE_WRITE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let serial = CACHE_WRITE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let temporary = path.with_extension(format!("{}.{}.part", std::process::id(), serial));
-        let result =
-            std::fs::write(&temporary, &bytes).and_then(|_| std::fs::rename(&temporary, &path));
-        if let Err(error) = result {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(error.to_string());
-        }
+        publish_cached_audio(&path, &bytes)?;
     }
-    Ok(Some(YtmCachedTrack {
+    let track = YtmCachedTrack {
         path: path.to_string_lossy().to_string(),
         duration_secs: audio.duration_secs,
         format: audio_ext_for_mime(&audio.mime).to_string(),
         title: audio.title,
         artist: audio.artist,
-    }))
+    };
+    if !fresh || expected_size == Some(cached_size) {
+        if let Ok(metadata) = std::fs::metadata(&path) {
+            write_audio_cache_index(&dir, &id, &track, metadata.len());
+        }
+    }
+    Ok(Some(track))
 }
 
 pub async fn ytm_download_track(
@@ -5640,7 +5946,7 @@ fn urlencoding_fallback(input: &str) -> String {
 /// tokens are ever collected by the app, and opening the page grants the app
 /// no access token. NOTE: the ephemeral per-session `dsh` query value is
 /// intentionally omitted — Google re-issues it when the page loads.
-const YTM_LOGIN_URL: &str = "https://accounts.google.com/v3/signin/accountchooser?continue=https://www.youtube.com/signin?action_handle_signin%3Dtrue%26app%3Ddesktop%26hl%3Duk%26next%3Dhttps%253A%252F%252Fmusic.youtube.com%252F%26feature%3D__FEATURE__&hl=uk&ltmpl=music&passive=true&service=youtube&uilel=3&flowName=GlifWebSignIn&flowEntry=ServiceLogin";
+pub(crate) const YTM_LOGIN_URL: &str = "https://accounts.google.com/v3/signin/accountchooser?continue=https://www.youtube.com/signin?action_handle_signin%3Dtrue%26app%3Ddesktop%26hl%3Duk%26next%3Dhttps%253A%252F%252Fmusic.youtube.com%252F%26feature%3Daccount_login&hl=uk&ltmpl=music&passive=true&service=youtube&uilel=3&flowName=GlifWebSignIn&flowEntry=ServiceLogin";
 
 /// Opens the YouTube Music sign-in flow in the user's default browser so the
 /// sign-in happens on Google's and YouTube's own pages.
@@ -5686,6 +5992,63 @@ pub fn open_url(url: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn public_playlist_pages_keep_repeats_and_only_playlist_rows() {
+        let unavailable = serde_json::json!({"playlistItemData":{"videoId":"abcdefghijk"}});
+        assert_eq!(
+            public_playlist_track(&unavailable).unwrap().path,
+            "yt://abcdefghijk"
+        );
+        let row = serde_json::json!({"musicResponsiveListItemRenderer":{
+            "flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Song"}]}}},{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Artist"}]}}}],
+            "overlay":{"musicItemThumbnailOverlayRenderer":{"content":{"musicPlayButtonRenderer":{"playNavigationEndpoint":{"watchEndpoint":{"videoId":"abcdefghijk"}}}}}}
+        }});
+        let first = serde_json::json!({"header":{"musicDetailHeaderRenderer":{"title":{"runs":[{"text":"Public fixture"}]}}},"contents":{"musicPlaylistShelfRenderer":{"contents":[row.clone(),row.clone()],"continuations":[{"nextContinuationData":{"continuation":"page2"}}]}}});
+        let (tracks, next) = public_playlist_page(&first).unwrap();
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].path, tracks[1].path);
+        assert_eq!(next.as_deref(), Some("page2"));
+        assert_eq!(
+            public_playlist_title(&first).as_deref(),
+            Some("Public fixture")
+        );
+        let second = serde_json::json!({"onResponseReceivedActions":[{"appendContinuationItemsAction":{"continuationItems":[row,{"continuationItemRenderer":{"continuationEndpoint":{"continuationCommand":{"token":"page3"}}}}]}}]});
+        let (tracks, next) = public_playlist_page(&second).unwrap();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(next.as_deref(), Some("page3"));
+        assert!(
+            public_playlist_page(&serde_json::json!({"musicShelfRenderer":{"contents":[]}}))
+                .is_err(),
+            "recommendations are not playlist contents"
+        );
+        assert!(public_playlist_page(&serde_json::json!({"musicPlaylistShelfRenderer":{"contents":[{"musicResponsiveListItemRenderer":{}}]}})).is_err(),"unavailable rows cannot silently disappear");
+    }
+
+    #[test]
+    fn audio_status_projects_timestamped_samples_without_polling_phase_lag() {
+        let at = std::time::Instant::now();
+        let mut status = SharedStatus {
+            state: PlaybackState::Playing,
+            position_secs: 35.3,
+            duration_secs: 300.,
+            rate: 1.,
+            sampled_at: Some(at),
+            ..Default::default()
+        };
+        assert!((status.position_at(at + Duration::from_millis(68)) - 35.368).abs() < 1e-8);
+        status.rate = 2.;
+        assert!((status.position_at(at + Duration::from_millis(68)) - 35.436).abs() < 1e-8);
+        assert!(
+            (status.position_at(at + Duration::from_secs(2)) - 35.8).abs() < 1e-8,
+            "stale status extrapolation is bounded"
+        );
+        status.state = PlaybackState::Paused;
+        assert_eq!(status.position_at(at + Duration::from_secs(2)), 35.3);
+        status.state = PlaybackState::Playing;
+        status.duration_secs = 35.4;
+        assert_eq!(status.position_at(at + Duration::from_millis(100)), 35.4);
+    }
 
     #[test]
     fn indexed_audio_merges_custom_sources_and_ignores_duplicate_stale_or_non_audio_records() {
@@ -6614,6 +6977,82 @@ mod tests {
         assert!(!should_refresh_audio_url("audio download too small"));
     }
 
+    #[test]
+    fn cached_audio_index_requires_matching_complete_file() {
+        let dir = temp_directory("audio-cache-index");
+        let id = "abcdefghijk";
+        let path = dir.join(format!("{id}.m4a"));
+        fs::write(&path, vec![7; 4096]).unwrap();
+        let track = YtmCachedTrack {
+            path: path.to_string_lossy().into_owned(),
+            duration_secs: 123,
+            format: "m4a".into(),
+            title: "Title".into(),
+            artist: "Artist".into(),
+        };
+        assert!(cached_audio_from_index(&dir, id).is_none());
+        write_audio_cache_index(&dir, id, &track, 4096);
+        let cached = cached_audio_from_index(&dir, id).expect("valid local cache");
+        assert_eq!(cached.path, track.path);
+        assert_eq!(cached.duration_secs, 123);
+        assert_eq!(cached.title, "Title");
+        assert_eq!(cached.artist, "Artist");
+
+        fs::write(&path, vec![7; 2048]).unwrap();
+        assert!(cached_audio_from_index(&dir, id).is_none());
+        fs::write(&path, vec![7; 4096]).unwrap();
+        fs::write(dir.join(format!("{id}.meta.json")), b"{").unwrap();
+        assert!(cached_audio_from_index(&dir, id).is_none());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cached_audio_index_rejects_wrong_id_and_unsafe_format() {
+        let dir = temp_directory("audio-cache-index-invalid");
+        let id = "abcdefghijk";
+        let mut index = AudioCacheIndex {
+            video_id: "wrong_id___".into(),
+            format: "m4a".into(),
+            byte_len: 4096,
+            duration_secs: 1,
+            title: String::new(),
+            artist: String::new(),
+        };
+        fs::write(dir.join(format!("{id}.m4a")), vec![7; 4096]).unwrap();
+        let index_path = dir.join(format!("{id}.meta.json"));
+        fs::write(&index_path, serde_json::to_vec(&index).unwrap()).unwrap();
+        assert!(cached_audio_from_index(&dir, id).is_none());
+        index.video_id = id.into();
+        index.format = "../m4a".into();
+        fs::write(&index_path, serde_json::to_vec(&index).unwrap()).unwrap();
+        assert!(cached_audio_from_index(&dir, id).is_none());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn audio_cache_publication_replaces_incomplete_file_and_cleans_failure() {
+        let dir = temp_directory("audio-cache-publication");
+        let path = dir.join("abcdefghijk.m4a");
+        fs::write(&path, b"incomplete").unwrap();
+        let complete = vec![7; 4096];
+        publish_cached_audio(&path, &complete).expect("replace incomplete cache");
+        assert_eq!(fs::read(&path).unwrap(), complete);
+
+        let blocked = dir.join("blocked.m4a");
+        fs::create_dir(&blocked).unwrap();
+        assert!(publish_cached_audio(&blocked, b"new file").is_err());
+        assert!(blocked.is_dir());
+        assert_eq!(fs::read(&path).unwrap(), complete);
+        assert!(fs::read_dir(&dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".part")
+        }));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     /// Fake googlevideo endpoint: 403 without a bounded Range, 206 slices
     /// otherwise. Records every Range header it sees.
     fn spawn_range_server(
@@ -6726,6 +7165,90 @@ mod tests {
                 "bytes=524288-1048575".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn audio_chunk_placement_rejects_overlap_and_unplanned_ranges() {
+        let mut output = vec![0; 12];
+        let ranges = [(4, 7), (8, 11)];
+        let mut received = vec![false; ranges.len()];
+        store_audio_chunk(&mut output, &ranges, &mut received, 8, &[2; 4]).unwrap();
+        assert!(store_audio_chunk(&mut output, &ranges, &mut received, 8, &[2; 4]).is_err());
+        assert!(store_audio_chunk(&mut output, &ranges, &mut received, 5, &[3; 4]).is_err());
+        assert!(store_audio_chunk(&mut output, &ranges, &mut received, 4, &[1; 3]).is_err());
+        assert_eq!(received, [false, true]);
+        store_audio_chunk(&mut output, &ranges, &mut received, 4, &[1; 4]).unwrap();
+        assert_eq!(output, [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]);
+        assert!(received.into_iter().all(|complete| complete));
+    }
+
+    #[test]
+    fn audio_ranges_replenish_before_a_slow_request_finishes() {
+        use std::io::{Read, Write};
+        use std::sync::{atomic::AtomicBool, Condvar};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/audio", listener.local_addr().unwrap());
+        let content = Arc::new(vec![42u8; AUDIO_CHUNK_BYTES as usize * 6 + 37]);
+        let server_content = Arc::clone(&content);
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let server_gate = Arc::clone(&gate);
+        let overlapped = Arc::new(AtomicBool::new(false));
+        let server_overlapped = Arc::clone(&overlapped);
+        let server = std::thread::spawn(move || {
+            let mut workers = Vec::new();
+            for stream in listener.incoming().take(7) {
+                let mut stream = stream.unwrap();
+                let content = Arc::clone(&server_content);
+                let gate = Arc::clone(&server_gate);
+                let overlapped = Arc::clone(&server_overlapped);
+                workers.push(std::thread::spawn(move || {
+                    let mut request = Vec::new();
+                    let mut buffer = [0u8; 4096];
+                    while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                        let count = stream.read(&mut buffer).unwrap();
+                        assert!(count > 0);
+                        request.extend_from_slice(&buffer[..count]);
+                    }
+                    let head = String::from_utf8_lossy(&request);
+                    let range = head.lines().find_map(|line| {
+                        line.strip_prefix("range:")
+                            .or_else(|| line.strip_prefix("Range:"))
+                    }).unwrap().trim();
+                    let (start, end) = range.strip_prefix("bytes=").unwrap().split_once('-').unwrap();
+                    let start: usize = start.parse().unwrap();
+                    let end: usize = end.parse().unwrap();
+                    if start == AUDIO_CHUNK_BYTES as usize {
+                        let (ready, signal) = &*gate;
+                        let (ready, _) = signal.wait_timeout_while(
+                            ready.lock().unwrap(), Duration::from_secs(5), |ready| !*ready,
+                        ).unwrap();
+                        overlapped.store(*ready, std::sync::atomic::Ordering::SeqCst);
+                    } else if start == AUDIO_CHUNK_BYTES as usize * 5 {
+                        let (ready, signal) = &*gate;
+                        *ready.lock().unwrap() = true;
+                        signal.notify_all();
+                    }
+                    let end = end.min(content.len() - 1);
+                    let bytes = &content[start..=end];
+                    let response = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        content.len(), bytes.len()
+                    );
+                    stream.write_all(response.as_bytes()).unwrap();
+                    stream.write_all(bytes).unwrap();
+                }));
+            }
+            for worker in workers {
+                worker.join().unwrap();
+            }
+        });
+        let downloaded = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(download_audio_bytes(&test_client(), &url))
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(downloaded, *content);
+        assert!(overlapped.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { ComboBox } from "std-widgets.slint";
 import { I18n } from "i18n.slint";
 import { Tokens } from "tokens.slint";
-import { Action, PreferenceToggle } from "controls.slint";
+import { Action, PreferenceToggle, TonalSlider } from "controls.slint";
 
 export component LyricsSettings inherits Rectangle {
     in property <bool> embedded;
@@ -9,6 +9,7 @@ export component LyricsSettings inherits Rectangle {
     in-out property <bool> romanization: true;
     in-out property <bool> translation: true;
     in-out property <string> language: "auto";
+    in-out property <float> secondary-gap: 0.65;
     in property <string> status;
     private property <[string]> languages: ["auto", "uk", "en", "cs", "pl", "de", "es", "fr", "ja"];
     in-out property <bool> reduced-motion;
@@ -30,6 +31,18 @@ export component LyricsSettings inherits Rectangle {
         Text { text: I18n.tr("Слова пісень"); color: Tokens.ink-100; font-size: 18px; font-weight: 600; }
         PreferenceToggle { text: I18n.tr("Романізація"); checked: root.romanization; toggled => { root.romanization = !root.romanization; root.display-changed(); } }
         PreferenceToggle { text: I18n.tr("Переклад"); checked: root.translation; toggled => { root.translation = !root.translation; root.display-changed(); } }
+        VerticalLayout {
+            padding-left: 12px; padding-right: 12px; spacing: 4px;
+            HorizontalLayout {
+                Text { text: I18n.tr("Відстань до романізації та перекладу"); color: Tokens.ink-200; font-size: 13px; horizontal-stretch: 1; }
+                Text { text: round(root.secondary-gap * 100) + "%"; color: Tokens.ink-300; font-size: 13px; }
+            }
+            TonalSlider {
+                height: 38px; minimum: 0; maximum: 1.5; value: root.secondary-gap;
+                label: I18n.tr("Відстань до романізації та перекладу");
+                changed(value) => { root.secondary-gap = value; root.display-changed(); }
+            }
+        }
         if root.translation: Text { text: I18n.tr("Мова перекладу"); color: Tokens.ink-300; font-size: 12px; }
         if root.translation: ComboBox {
             height: 40px;
