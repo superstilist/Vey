@@ -1,6 +1,10 @@
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
+import {mkdir} from 'node:fs/promises';
+import {resolve} from 'node:path';
+const output=process.argv[2]?resolve(process.argv[2]):fileURLToPath(new URL('../../docs/screenshots',import.meta.url));
+if(process.argv[2])await mkdir(output);
 
 const browser = await chromium.launch({channel:'msedge',headless:true});
 try {
@@ -45,17 +49,17 @@ try {
   await page.evaluate(() => { window.navigationReadbacks = []; window.navigationUploads = []; });
   await page.mouse.click(90,194);
   await frame.waitForFunction(() => window.cameras.some(c => c.toX===1 && c.toY===1));
-  await page.waitForFunction(() => window.navigationUploads.filter(([w,h]) => w===768 && h<=640).length >= 2);
-  assert.ok(await page.evaluate(() => window.navigationReadbacks.filter(([w,h]) => w===1100 && h===760).length >= 2), 'WASM captures both page textures');
+  await frame.waitForFunction(() => window.hostState?.navigation?.view === 'library' && !window.hostState.camera);
+  assert.equal(await page.evaluate(() => window.navigationReadbacks.filter(([w,h]) => w===1100 && h===760).length),0,'live navigation performs no page readbacks');
   assert.equal(await page.locator('canvas').evaluate(el => getComputedStyle(el).filter), 'none', 'chrome stays sharp');
-  await page.screenshot({path:fileURLToPath(new URL('../../docs/screenshots/navigation-web-diagonal.png',import.meta.url))});
+  await page.screenshot({path:resolve(output,'navigation-web-diagonal.png')});
   await page.mouse.click(90,290);
   await frame.waitForFunction(() => window.hostState?.navigation?.view === 'settings' && !window.hostState.camera);
   assert.ok((await frame.evaluate(() => window.cameras)).every(c => [c.fromX,c.fromY,c.toX,c.toY,c.elapsed].every(Number.isFinite)));
   await page.setViewportSize({width:390,height:760});
   await frame.waitForFunction(() => window.hostState?.mobile && window.hostState.stageBounds.radius === 20);
   assert.equal(await radius(), '20px', 'mobile host shares the Slint content radius');
-  await page.screenshot({path:fileURLToPath(new URL('../../docs/screenshots/navigation-web-mobile.png',import.meta.url))});
+  await page.screenshot({path:resolve(output,'navigation-web-mobile.png')});
   assert.deepEqual(errors.filter(e => !e.includes('Using exceptions for control flow')), []);
   console.log('PASS WASM navigation: diagonal camera, retarget, sharp chrome, desktop/mobile clipping, no runtime errors');
 } finally { await browser.close(); }

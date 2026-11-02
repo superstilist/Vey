@@ -1,0 +1,20 @@
+/* Original Vey lyric preset. */
+.blyrics-container {
+    --blyrics-lyric-active-color: #bceaff;
+    --blyrics-lyric-inactive-color: #7299b880;
+    --blyrics-font-family: "Roboto";
+    --blyrics-font-size: 48px;
+    --blyrics-font-weight: 700;
+    --blyrics-glow-color: #54bfff45;
+    --blyrics-highlight-glow-radius-from: 8px;
+    --blyrics-animate-highlight-glow: 1;
+    --blyrics-animate-highlight-swipe: 1;
+    --blyrics-animate-letter-wave: 1;
+    --blyrics-animate-word-wobble: 1;
+    --vey-word-wobble-strength: 0.35;
+    --blyrics-letter-wave-duration: 900ms;
+    --blyrics-line-height: 1.48;
+    --blyrics-active-scale: 1;
+    --blyrics-scale: 0.94;
+    --blyrics-inactive-blur: 2px;
+}

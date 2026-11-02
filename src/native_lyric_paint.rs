@@ -4,6 +4,18 @@ use crate::{native_lyric_fonts, native_lyric_glyphs::GlyphPlans, BraccatoGlyph, 
 use slint::{Model, ModelRc, VecModel};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 
+/// Keep lead-word masks for the active line's filled prefix. Background cues
+/// and secondary layers keep their shorter cue-based residency.
+pub(crate) fn residency_end(line: &BraccatoRow, word: &crate::BraccatoWord) -> i64 {
+    let cue_end = word.start_ms + word.duration_ms.max(1200.);
+    let end = if !line.secondary && !word.background {
+        cue_end.max(line.end_ms)
+    } else {
+        cue_end
+    };
+    end as i64 + 1500
+}
+
 struct Job {
     generation: u64,
     row: usize,
@@ -92,7 +104,7 @@ struct Ready {
     padding: f32,
     levels: i32,
     // Only owned strings and numbers cross threads; Slint models stay thread local.
-    glyphs: Vec<(String, [f32; 9])>,
+    glyphs: Vec<(String, [f32; 12])>,
 }
 #[derive(Default)]
 pub struct WordPaint {
@@ -179,6 +191,9 @@ impl WordPaint {
                                     g.sweep_from,
                                     g.sweep_to,
                                     g.sweep_feather,
+                                    g.start_em,
+                                    g.width_em,
+                                    g.isolated_advance_em,
                                 ],
                             )
                         })
@@ -307,9 +322,7 @@ impl WordPaint {
         let line = rows.row_data(result.row)?;
         let mut word = line.parts.row_data(result.part)?;
         // A seek can finish before the worker. Do not resurrect expired glyphs.
-        if word.start_ms as i64 > ms + 2000
-            || ((word.start_ms + word.duration_ms.max(1200.)) as i64) < ms - 1500
-        {
+        if word.start_ms as i64 > ms + 2000 || residency_end(&line, &word) < ms {
             return None;
         }
         word.glow_wide = result.wide.upload();
@@ -332,6 +345,9 @@ impl WordPaint {
                     sweep_from: g[6],
                     sweep_to: g[7],
                     sweep_feather: g[8],
+                    start_em: g[9],
+                    width_em: g[10],
+                    isolated_advance_em: g[11],
                 })
                 .collect::<Vec<_>>(),
         ))
@@ -349,6 +365,33 @@ mod tests {
         rc::Rc,
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn filled_lead_masks_live_through_the_line_but_background_cues_expire() {
+        let line = BraccatoRow {
+            end_ms: 9000.,
+            ..Default::default()
+        };
+        let mut word = BraccatoWord {
+            start_ms: 0.,
+            duration_ms: 300.,
+            ..Default::default()
+        };
+        assert_eq!(residency_end(&line, &word), 10500);
+        word.background = true;
+        assert_eq!(residency_end(&line, &word), 2700);
+        word.background = false;
+        assert_eq!(
+            residency_end(
+                &BraccatoRow {
+                    secondary: true,
+                    ..line
+                },
+                &word
+            ),
+            2700
+        );
+    }
 
     fn rows() -> ModelRc<BraccatoRow> {
         Rc::new(VecModel::from(vec![BraccatoRow {
@@ -466,6 +509,7 @@ mod tests {
             assert_eq!(actual.delay_ms, expected.delay_ms);
             assert_eq!(actual.sweep_delay_ms, expected.sweep_delay_ms);
             assert_eq!(actual.sweep_duration_ms, expected.sweep_duration_ms);
+            assert!(actual.width_em > 0. && actual.isolated_advance_em > 0.);
         }
     }
     #[test]

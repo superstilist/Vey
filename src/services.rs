@@ -1,7 +1,7 @@
 //! Portable application data. No window, audio device, Tauri, or account state.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
@@ -24,22 +24,78 @@ pub struct Source {
     pub path: String,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Playlist {
     pub id: String,
     pub name: String,
     pub tracks: Vec<String>,
+    pub author: String,
+    pub updated_at: u64,
+    pub is_public: bool,
+    pub source_playlist_id: String,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct History {
     pub track: Track,
+    #[serde(alias = "played_at")]
     pub played_at: u64,
+    #[serde(alias = "play_count")]
     pub play_count: u32,
+    #[serde(alias = "completion_count")]
+    pub completion_count: u32,
+    #[serde(alias = "skip_count")]
+    pub skip_count: u32,
+}
+/// Private, compact recommendation profile and its cached public candidates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RecommendationModel {
+    pub schema_version: u16,
+    pub updated_at: u64,
+    pub profile_updated_at: u64,
+    pub personalized: bool,
+    /// Stable track identities only when syncing; local paths are filtered out.
+    pub track_weights: BTreeMap<String, i16>,
+    pub artist_weights: BTreeMap<String, i16>,
+    pub disliked_tracks: BTreeSet<String>,
+    pub tracks: Vec<Track>,
+}
+impl Default for RecommendationModel {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            updated_at: 0,
+            profile_updated_at: 0,
+            personalized: false,
+            track_weights: BTreeMap::new(),
+            artist_weights: BTreeMap::new(),
+            disliked_tracks: BTreeSet::new(),
+            tracks: Vec::new(),
+        }
+    }
+}
+impl RecommendationModel {
+    pub fn merge_newer(&mut self, incoming: RecommendationModel) {
+        if incoming.profile_updated_at > self.profile_updated_at {
+            self.profile_updated_at = incoming.profile_updated_at;
+            self.track_weights = incoming.track_weights;
+            self.artist_weights = incoming.artist_weights;
+            self.disliked_tracks = incoming.disliked_tracks;
+        }
+        if incoming.updated_at > self.updated_at {
+            self.updated_at = incoming.updated_at;
+            self.personalized = incoming.personalized;
+            self.tracks = incoming.tracks;
+        }
+        self.schema_version = self.schema_version.max(incoming.schema_version);
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub home_layout: u8,
+    pub home_rotate: bool,
     pub language: String,
     pub kawarp: KawarpSettings,
     pub volume: f32,
@@ -55,8 +111,10 @@ pub struct Settings {
     pub lyrics_provider: String,
     pub lyrics_theme_css: String,
     pub lyrics_font_family: String,
+    pub theme_entire_player: bool,
     pub lyrics_romanization: bool,
     pub lyrics_translation: bool,
+    pub lyrics_secondary_gap: f32,
     pub lyrics_translation_language: String,
     pub lyrics_stage: bool,
     pub lyrics_reduced_motion: bool,
@@ -135,6 +193,8 @@ fn normal_playback_rate() -> f32 {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            home_layout: 0,
+            home_rotate: false,
             language: "uk".into(),
             kawarp: KawarpSettings::default(),
             volume: 1.,
@@ -148,8 +208,10 @@ impl Default for Settings {
             lyrics_provider: "auto".into(),
             lyrics_theme_css: String::new(),
             lyrics_font_family: String::new(),
+            theme_entire_player: true,
             lyrics_romanization: true,
             lyrics_translation: true,
+            lyrics_secondary_gap: 0.65,
             lyrics_translation_language: "auto".into(),
             lyrics_stage: false,
             lyrics_reduced_motion: false,
@@ -193,9 +255,10 @@ pub struct Store {
     pub likes: BTreeSet<String>,
     pub playlists: Vec<Playlist>,
     pub history: Vec<History>,
+    pub recommendations: RecommendationModel,
     pub offsets: BTreeMap<String, i64>,
     pub legacy: BTreeMap<String, Value>,
-    pub lyrics_cache: BTreeMap<String, CachedLyrics>,
+    pub lyrics_cache: BTreeMap<String, std::sync::Arc<CachedLyrics>>,
     /// Public track key -> complete permanent local file, never the stream cache.
     pub downloads: BTreeMap<String, String>,
     pub lyrics_choices: BTreeMap<String, LyricsChoice>,
@@ -212,6 +275,7 @@ impl Default for Store {
             likes: BTreeSet::new(),
             playlists: vec![],
             history: vec![],
+            recommendations: RecommendationModel::default(),
             offsets: BTreeMap::new(),
             legacy: BTreeMap::new(),
             lyrics_cache: BTreeMap::new(),
@@ -231,6 +295,137 @@ pub fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+/// YouTube video ids are always 11 URL-safe characters.
+pub fn video_id(id: &str) -> bool {
+    id.len() == 11
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+/// Keys that identify a stream/cloud entry rather than a local file.
+pub fn key_is_remote(key: &str) -> bool {
+    key.starts_with("yt://") || key.starts_with("cloud://")
+}
+pub fn track_video_id(track: &Track) -> Option<&str> {
+    track
+        .video_id
+        .as_deref()
+        .filter(|id| video_id(id))
+        .or_else(|| {
+            track
+                .path
+                .strip_prefix("yt://")
+                .filter(|id| video_id(id))
+        })
+}
+fn normalized_track_text(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+fn same_track_metadata(a: &Track, b: &Track) -> bool {
+    let title_a = normalized_track_text(&a.title);
+    let title_b = normalized_track_text(&b.title);
+    let artist_a = normalized_track_text(&a.artist);
+    let artist_b = normalized_track_text(&b.artist);
+    !title_a.is_empty()
+        && !artist_a.is_empty()
+        && title_a == title_b
+        && artist_a == artist_b
+        && a.duration_secs.is_finite()
+        && b.duration_secs.is_finite()
+        && a.duration_secs > 0.0
+        && b.duration_secs > 0.0
+        && (a.duration_secs - b.duration_secs).abs() <= 5.0
+}
+/// Match canonical YouTube IDs first. When only one side has an ID, use an
+/// unambiguous exact metadata/duration match to pair a local file with its web
+/// result. Two different IDs always represent separate versions.
+pub fn same_track_identity(a: &Track, b: &Track) -> bool {
+    match (track_video_id(a), track_video_id(b)) {
+        (Some(left), Some(right)) => left == right,
+        _ => same_track_metadata(a, b),
+    }
+}
+fn merge_track_metadata(existing: &mut Track, incoming: Track) {
+    if normalize_path(&existing.path) == normalize_path(&incoming.path) {
+        *existing = incoming;
+        return;
+    }
+    if key_is_remote(&existing.path) && !key_is_remote(&incoming.path) {
+        existing.path = incoming.path.clone();
+    }
+    if track_video_id(existing).is_none() {
+        existing.video_id = track_video_id(&incoming).map(str::to_owned);
+    }
+    if existing.title.trim().is_empty() || existing.title.eq_ignore_ascii_case("unknown title") {
+        existing.title = incoming.title;
+    }
+    if existing.artist.trim().is_empty() || existing.artist.eq_ignore_ascii_case("unknown artist") {
+        existing.artist = incoming.artist;
+    }
+    if existing.album.trim().is_empty() {
+        existing.album = incoming.album;
+    }
+    if !existing.duration_secs.is_finite() || existing.duration_secs <= 0.0 {
+        existing.duration_secs = incoming.duration_secs;
+    }
+    if existing.thumbnail_url.is_empty() {
+        existing.thumbnail_url = incoming.thumbnail_url;
+    }
+}
+/// Deduplicate a catalog/search/library batch in first-seen order. Metadata
+/// fallback is accepted only when exactly one candidate fits.
+pub fn deduplicate_tracks(tracks: impl IntoIterator<Item = Track>) -> Vec<Track> {
+    let mut result = Vec::<Track>::new();
+    let mut by_id = std::collections::HashMap::<String, usize>::new();
+    let mut by_path = std::collections::HashMap::<String, usize>::new();
+    let mut by_metadata = std::collections::HashMap::<(String, String), Vec<usize>>::new();
+    for track in tracks {
+        let id = track_video_id(&track).map(str::to_owned);
+        let path = normalize_path(&track.path);
+        let key = (
+            normalized_track_text(&track.title),
+            normalized_track_text(&track.artist),
+        );
+        let mut matched = id.as_ref().and_then(|id| by_id.get(id).copied());
+        if matched.is_none() {
+            matched = by_path.get(&path).copied();
+        }
+        if matched.is_none() && !key.0.is_empty() && !key.1.is_empty() {
+            let candidates: Vec<usize> = by_metadata
+                .get(&key)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|index| same_track_identity(&result[*index], &track))
+                .collect();
+            if candidates.len() == 1 {
+                matched = candidates.first().copied();
+            }
+        }
+        if let Some(index) = matched {
+            merge_track_metadata(&mut result[index], track);
+            by_path.insert(normalize_path(&result[index].path), index);
+            if let Some(id) = track_video_id(&result[index]).map(str::to_owned) {
+                by_id.entry(id).or_insert(index);
+            }
+        } else {
+            let index = result.len();
+            by_path.entry(path).or_insert(index);
+            if let Some(id) = id {
+                by_id.entry(id).or_insert(index);
+            }
+            if !key.0.is_empty() && !key.1.is_empty() {
+                by_metadata.entry(key).or_default().push(index);
+            }
+            result.push(track);
+        }
+    }
+    result
 }
 pub fn normalize_path(path: &str) -> String {
     let slash = path.trim().replace('\\', "/");
@@ -339,30 +534,289 @@ impl Store {
         }
     }
     pub fn remember(&mut self, track: Track) {
-        if let Some(t) = self.tracks.iter_mut().find(|t| t.path == track.path) {
-            *t = track;
-        } else {
-            self.tracks.push(track);
+        self.remember_all(std::iter::once(track));
+    }
+    /// Merge scan/search batches by path or stable track identity, keeping the
+    /// first-seen order and preferring a playable local path over a stream URL.
+    pub fn remember_all(&mut self, tracks: impl IntoIterator<Item = Track>) {
+        self.tracks = deduplicate_tracks(std::mem::take(&mut self.tracks).into_iter().chain(tracks));
+    }
+    /// Public identity shared by a local file and its streamed counterpart.
+    /// Likes, playlists and account sync use it so the same song keeps one key
+    /// across devices, while an unidentifiable local file keeps its own path.
+    pub fn identity_key(&self, track: &Track) -> String {
+        if let Some(id) = track_video_id(track) {
+            return format!("yt://{id}");
         }
+        if key_is_remote(&track.path) {
+            return track.path.clone();
+        }
+        let local = normalize_path(&track.path);
+        self.downloads
+            .iter()
+            .find(|(key, path)| key_is_remote(key) && normalize_path(path) == local)
+            .map(|(key, _)| key.clone())
+            .unwrap_or_else(|| track.path.clone())
+    }
+    pub fn is_liked(&self, track: &Track) -> bool {
+        if self.likes.contains(&track.path) {
+            return true;
+        }
+        let key = self.identity_key(track);
+        if self.likes.contains(&key) {
+            return true;
+        }
+        self.downloads
+            .get(&key)
+            .is_some_and(|local| self.likes.contains(local))
+    }
+    pub fn toggle_like_track(&mut self, track: &Track) {
+        let key = self.identity_key(track);
+        self.toggle_like(&key);
+        self.recommendations.disliked_tracks.remove(&key);
+        self.refresh_recommendation_signals();
+    }
+    /// Rewrite local paths in saved identities to their YouTube Music key once
+    /// the file tags or download map reveal it. Run after every scan/restore.
+    pub fn migrate_identities(&mut self) {
+        let mut ids: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for track in &self.tracks {
+            if let Some(id) = track_video_id(track) {
+                ids.entry(normalize_path(&track.path))
+                    .or_insert_with(|| format!("yt://{id}"));
+            }
+        }
+        for (key, path) in &self.downloads {
+            if key_is_remote(key) {
+                ids.entry(normalize_path(path))
+                    .or_insert_with(|| key.clone());
+            }
+        }
+        let resolve = |key: &str| {
+            (!key_is_remote(key))
+                .then(|| ids.get(&normalize_path(key)).cloned())
+                .flatten()
+        };
+        self.likes = self
+            .likes
+            .iter()
+            .map(|key| resolve(key).unwrap_or_else(|| key.clone()))
+            .collect();
+        for playlist in &mut self.playlists {
+            playlist.tracks = playlist
+                .tracks
+                .iter()
+                .map(|key| resolve(key).unwrap_or_else(|| key.clone()))
+                .collect();
+        }
+        let offsets = std::mem::take(&mut self.offsets);
+        self.offsets = offsets
+            .into_iter()
+            .map(|(key, value)| (resolve(&key).unwrap_or(key), value))
+            .collect();
+        let choices = std::mem::take(&mut self.lyrics_choices);
+        self.lyrics_choices = choices
+            .into_iter()
+            .map(|(key, value)| (resolve(&key).unwrap_or(key), value))
+            .collect();
+        self.recommendations.disliked_tracks = self
+            .recommendations
+            .disliked_tracks
+            .iter()
+            .map(|key| resolve(key).unwrap_or_else(|| key.clone()))
+            .collect();
+        self.refresh_recommendation_signals();
+    }
+    /// The library list: scanned local files plus saved remote songs. Search
+    /// results, stream-cache entries and remote duplicates of local files stay
+    /// out, so a synced account cannot inflate the library count.
+    pub fn library_tracks(&self) -> Vec<Track> {
+        let saved: HashSet<&str> = self
+            .playlists
+            .iter()
+            .flat_map(|p| p.tracks.iter().map(String::as_str))
+            .chain(self.likes.iter().map(String::as_str))
+            .collect();
+        let downloaded: HashSet<&str> = self
+            .downloads
+            .iter()
+            .filter(|(_, path)| std::path::Path::new(path).is_file())
+            .filter_map(|(key, _)| key.strip_prefix("yt://"))
+            .collect();
+        let local = self.tracks
+            .iter()
+            .filter(|track| !key_is_remote(&track.path))
+            .cloned();
+        let remote = self
+            .tracks
+            .iter()
+            .filter(|track| {
+                track.path.strip_prefix("yt://").is_some_and(|id| {
+                    saved.contains(track.path.as_str()) && !downloaded.contains(id)
+                })
+            })
+            .cloned();
+        deduplicate_tracks(local.chain(remote))
+    }
+    /// Resolve in playlist order, including repeats; ignore missing references.
+    pub fn playlist_tracks(&self, id: &str) -> Vec<Track> {
+        let Some(playlist) = self.playlists.iter().find(|p| p.id == id) else {
+            return vec![];
+        };
+        let mut tracks = std::collections::HashMap::with_capacity(self.tracks.len());
+        for track in &self.tracks {
+            tracks.entry(track.path.as_str()).or_insert(track);
+        }
+        playlist
+            .tracks
+            .iter()
+            .filter_map(|path| tracks.get(path.as_str()))
+            .map(|track| (*track).clone())
+            .collect()
     }
     pub fn record(&mut self, track: &Track) {
         self.remember(track.clone());
-        let count = self
+        let previous = self
             .history
             .iter()
-            .find(|h| h.track.path == track.path)
-            .map(|h| h.play_count)
-            .unwrap_or(0);
-        self.history.retain(|h| h.track.path != track.path);
+            .position(|entry| same_track_identity(&entry.track, track))
+            .map(|index| self.history.remove(index));
         self.history.insert(
             0,
             History {
-                track: track.clone(),
+                track: previous.as_ref().map_or_else(
+                    || track.clone(),
+                    |entry| {
+                        let mut merged = entry.track.clone();
+                        merge_track_metadata(&mut merged, track.clone());
+                        merged
+                    },
+                ),
                 played_at: now_ms(),
-                play_count: count.saturating_add(1),
+                play_count: previous
+                    .as_ref()
+                    .map_or(1, |entry| entry.play_count.saturating_add(1)),
+                completion_count: previous
+                    .as_ref()
+                    .map_or(0, |entry| entry.completion_count),
+                skip_count: previous.as_ref().map_or(0, |entry| entry.skip_count),
             },
         );
         self.history.truncate(100);
+        self.refresh_recommendation_signals();
+    }
+    fn history_index(&self, track: &Track) -> Option<usize> {
+        if let Some(id) = track_video_id(track) {
+            if let Some(index) = self
+                .history
+                .iter()
+                .position(|entry| track_video_id(&entry.track) == Some(id))
+            {
+                return Some(index);
+            }
+        }
+        let candidates: Vec<_> = self
+            .history
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| same_track_metadata(&entry.track, track))
+            .map(|(index, _)| index)
+            .collect();
+        (candidates.len() == 1).then(|| candidates[0])
+    }
+    pub fn record_completion(&mut self, track: &Track) {
+        if let Some(index) = self.history_index(track) {
+            self.history[index].completion_count =
+                self.history[index].completion_count.saturating_add(1);
+            self.history[index].played_at = now_ms();
+        }
+        self.refresh_recommendation_signals();
+    }
+    pub fn record_skip(&mut self, track: &Track) {
+        if let Some(index) = self.history_index(track) {
+            self.history[index].skip_count = self.history[index].skip_count.saturating_add(1);
+        }
+        self.refresh_recommendation_signals();
+    }
+    pub fn record_skip_if_early(&mut self, track: &Track, position_secs: f64, duration_secs: f64) {
+        if duration_secs.is_finite()
+            && duration_secs >= 15.0
+            && position_secs.is_finite()
+            && position_secs >= 0.0
+            && position_secs / duration_secs < 0.6
+        {
+            self.record_skip(track);
+        }
+    }
+    pub fn is_disliked(&self, track: &Track) -> bool {
+        self.recommendations
+            .disliked_tracks
+            .contains(&self.identity_key(track))
+    }
+    pub fn toggle_dislike_track(&mut self, track: &Track) {
+        let key = self.identity_key(track);
+        if !self.recommendations.disliked_tracks.remove(&key) {
+            self.likes.remove(&key);
+            self.recommendations.disliked_tracks.insert(key);
+        }
+        self.refresh_recommendation_signals();
+    }
+    /// Rebuild bounded private ranking signals from listening and library
+    /// activity. Account serialization strips non-portable local path keys.
+    pub fn refresh_recommendation_signals(&mut self) {
+        let now = now_ms();
+        let mut track_weights = std::collections::HashMap::<String, i16>::new();
+        let mut artist_weights = std::collections::HashMap::<String, i16>::new();
+        for entry in &self.history {
+            let age_days = now.saturating_sub(entry.played_at) / 86_400_000;
+            let recent = 5i16.saturating_sub(age_days.min(5) as i16);
+            let frequency = entry.play_count.min(12) as i16;
+            let completion = entry.completion_count.min(8) as i16 * 2;
+            let skips = entry.skip_count.min(8) as i16 * 3;
+            let score = (frequency + completion + recent - skips).clamp(-24, 24);
+            *track_weights.entry(self.identity_key(&entry.track)).or_default() += score;
+            let artist = normalized_track_text(&entry.track.artist);
+            if !artist.is_empty() {
+                *artist_weights.entry(artist).or_default() += score;
+            }
+        }
+        for key in &self.likes {
+            *track_weights.entry(key.clone()).or_default() += 8;
+            if let Some(track) = self
+                .tracks
+                .iter()
+                .find(|track| self.identity_key(track) == *key)
+            {
+                let artist = normalized_track_text(&track.artist);
+                if !artist.is_empty() {
+                    *artist_weights.entry(artist).or_default() += 4;
+                }
+            }
+        }
+        for playlist in &self.playlists {
+            for key in &playlist.tracks {
+                *track_weights.entry(key.clone()).or_default() += 2;
+            }
+        }
+        for key in &self.recommendations.disliked_tracks {
+            *track_weights.entry(key.clone()).or_default() -= 12;
+        }
+        let bounded = |values: std::collections::HashMap<String, i16>, limit: usize| {
+            let mut values: Vec<_> = values.into_iter().collect();
+            values.sort_by(|a, b| {
+                b.1.unsigned_abs()
+                    .cmp(&a.1.unsigned_abs())
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            values.truncate(limit);
+            values
+                .into_iter()
+                .map(|(key, value)| (key, value.clamp(-100, 100)))
+                .collect()
+        };
+        self.recommendations.track_weights = bounded(track_weights, 1000);
+        self.recommendations.artist_weights = bounded(artist_weights, 500);
+        self.recommendations.profile_updated_at = now;
     }
     pub fn cached_lyrics(&self, path: &str) -> Option<Vec<crate::lyrics::LyricsAlternative>> {
         let c = self.lyrics_cache.get(path)?;
@@ -377,14 +831,15 @@ impl Store {
     ) {
         self.lyrics_cache.insert(
             path,
-            CachedLyrics {
+            std::sync::Arc::new(CachedLyrics {
                 parser_version: 4,
                 saved_at: now_ms(),
                 alternatives,
-            },
+            }),
         );
     }
     pub fn offset_for(&self, track: &Track) -> i64 {
+        let key = self.identity_key(track);
         let video = track.video_id.as_ref().map(|id| format!("vid:{id}"));
         let tag = format!(
             "tag:{}|{}",
@@ -393,6 +848,7 @@ impl Store {
         );
         self.offsets
             .get(&track.path)
+            .or_else(|| self.offsets.get(&key))
             .or_else(|| video.as_ref().and_then(|v| self.offsets.get(v)))
             .or_else(|| self.offsets.get(&tag))
             .copied()
@@ -413,14 +869,35 @@ impl Store {
             id: id.clone(),
             name: name.into(),
             tracks: vec![],
+            updated_at: now_ms(),
+            is_public: true,
+            ..Default::default()
         });
         Some(id)
     }
     pub fn playlist_add(&mut self, id: &str, path: &str) {
+        let mut changed = false;
         if let Some(p) = self.playlists.iter_mut().find(|p| p.id == id) {
-            if !p.tracks.iter().any(|t| t == path) {
-                p.tracks.push(path.into());
-            }
+            p.tracks.push(path.into());
+            p.updated_at = now_ms();
+            changed = true;
+        }
+        if changed {
+            self.refresh_recommendation_signals();
+        }
+    }
+    /// Add by public identity so a local file and its streamed counterpart do
+    /// not become two rows, and the entry can sync to another device.
+    pub fn playlist_add_track(&mut self, id: &str, track: &Track) {
+        let key = self.identity_key(track);
+        let mut changed = false;
+        if let Some(p) = self.playlists.iter_mut().find(|p| p.id == id) {
+            p.tracks.push(key);
+            p.updated_at = now_ms();
+            changed = true;
+        }
+        if changed {
+            self.refresh_recommendation_signals();
         }
     }
     /// Import an explicitly exported localStorage object, once. Values may be JSON strings.
@@ -516,6 +993,7 @@ impl Store {
                                     id: p.get("id").and_then(Value::as_str).unwrap_or(name).into(),
                                     name: name.into(),
                                     tracks,
+                                    ..Default::default()
                                 })
                             })
                             .collect();
@@ -541,10 +1019,12 @@ impl Store {
             self.legacy.insert(key, decoded);
             count += 1;
         }
-        let history = self.history.clone();
-        for h in history {
-            self.remember(h.track);
-        }
+        let history = self
+            .history
+            .iter()
+            .map(|h| h.track.clone())
+            .collect::<Vec<_>>();
+        self.remember_all(history);
         self.migrated = true;
         Ok(count)
     }
@@ -598,6 +1078,65 @@ impl Queue {
 mod tests {
     use super::*;
     #[test]
+    fn batched_catalog_merge_matches_sequential_updates_and_serializes_identically() {
+        let make = |path: &str, title: &str| Track {
+            path: path.into(),
+            title: title.into(),
+            ..Default::default()
+        };
+        let initial = vec![
+            make("a", "old"),
+            make("b", "keep"),
+            make("a", "legacy duplicate"),
+        ];
+        let updates = vec![make("c", "first"), make("a", "updated"), make("c", "last")];
+        let mut sequential = Store {
+            tracks: initial.clone(),
+            ..Default::default()
+        };
+        for track in updates.clone() {
+            sequential.remember(track);
+        }
+        let mut batched = Store {
+            tracks: initial,
+            ..Default::default()
+        };
+        batched.remember_all(updates);
+        assert_eq!(
+            serde_json::to_value(&batched).unwrap(),
+            serde_json::to_value(&sequential).unwrap()
+        );
+    }
+    #[test]
+    fn indexed_playlist_preserves_order_repeats_and_first_catalog_match() {
+        let make = |path: &str, title: &str| Track {
+            path: path.into(),
+            title: title.into(),
+            ..Default::default()
+        };
+        let store = Store {
+            tracks: vec![
+                make("a", "first"),
+                make("b", "second"),
+                make("a", "duplicate"),
+            ],
+            playlists: vec![Playlist {
+                id: "p".into(),
+                name: "Test".into(),
+                tracks: ["b", "missing", "a", "b"].map(str::to_string).to_vec(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let titles: Vec<_> = store
+            .playlist_tracks("p")
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
+        assert_eq!(titles, ["second", "first", "second"]);
+        assert!(store.playlist_tracks("missing").is_empty());
+    }
+    #[test]
     fn source_roots_and_dedup() {
         assert_eq!(normalize_path(" C:\\\\ ".trim()), "C:/");
         assert_eq!(normalize_path("//server//share/"), "//server/share");
@@ -647,6 +1186,87 @@ mod tests {
     }
 
     #[test]
+    fn library_keeps_local_files_and_saved_remote_songs_only() {
+        let path = std::env::temp_dir().join(format!(
+            "vey-library-{}-{}.mp3",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::write(&path, b"audio").unwrap();
+        let local_path = path.to_string_lossy().to_string();
+        let remote = |id: &str, title: &str| Track {
+            path: format!("yt://{id}"),
+            video_id: Some(id.into()),
+            title: title.into(),
+            ..Default::default()
+        };
+        let mut store = Store {
+            tracks: vec![
+                remote("aaaaaaaaaaa", "Saved"),
+                remote("bbbbbbbbbbb", "Search result"),
+                remote("ccccccccccc", "Remote duplicate"),
+                Track {
+                    path: local_path.clone(),
+                    video_id: Some("ccccccccccc".into()),
+                    title: "Local file".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        store.likes.insert("yt://aaaaaaaaaaa".into());
+        store
+            .downloads
+            .insert("yt://ccccccccccc".into(), local_path.clone());
+        let titles: Vec<_> = store
+            .library_tracks()
+            .into_iter()
+            .map(|track| track.title)
+            .collect();
+        assert_eq!(titles, ["Local file", "Saved"]);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn identities_migrate_from_local_paths_to_video_keys() {
+        let local = Track {
+            path: "C:/Music/song.mp3".into(),
+            video_id: Some("abcdefghijk".into()),
+            title: "Song".into(),
+            ..Default::default()
+        };
+        let mut store = Store {
+            tracks: vec![local.clone()],
+            ..Default::default()
+        };
+        store.likes.insert(local.path.clone());
+        store.playlists.push(Playlist {
+            id: "p".into(),
+            name: "Mix".into(),
+            tracks: vec![local.path.clone(), local.path.clone()],
+            ..Default::default()
+        });
+        store.offsets.insert(local.path.clone(), 250);
+        store.lyrics_choices.insert(
+            local.path.clone(),
+            LyricsChoice {
+                provider: "auto".into(),
+                format: "lrc".into(),
+                sync_type: crate::lyrics::LyricsSyncType::Synced,
+                fingerprint: "x".into(),
+            },
+        );
+        store.migrate_identities();
+        assert_eq!(store.likes.iter().collect::<Vec<_>>(), ["yt://abcdefghijk"]);
+        assert_eq!(store.playlists[0].tracks, ["yt://abcdefghijk", "yt://abcdefghijk"]);
+        assert_eq!(store.offsets["yt://abcdefghijk"], 250);
+        assert!(store.lyrics_choices.contains_key("yt://abcdefghijk"));
+        assert!(store.is_liked(&local));
+        store.toggle_like_track(&local);
+        assert!(!store.is_liked(&local));
+    }
+
+    #[test]
     fn queue_repeat_and_end() {
         let mut q = Queue::default();
         let t = Track {
@@ -663,10 +1283,13 @@ mod tests {
     }
 
     #[test]
-    fn history_and_playlists_deduplicate() {
+    fn history_compacts_events_while_playlists_preserve_repeats() {
         let mut s = Store::default();
         let t = Track {
             path: "a".into(),
+            title: "Known song".into(),
+            artist: "Known artist".into(),
+            duration_secs: 180.0,
             ..Default::default()
         };
         s.record(&t);
@@ -676,6 +1299,129 @@ mod tests {
         let id = s.create_playlist("Test").unwrap();
         s.playlist_add(&id, "a");
         s.playlist_add(&id, "a");
-        assert_eq!(s.playlists[0].tracks.len(), 1);
+        assert_eq!(s.playlists[0].tracks.len(), 2);
+    }
+
+    #[test]
+    fn canonical_track_dedup_prefers_id_and_local_path() {
+        let local = Track {
+            path: "C:/music/song.mp3".into(),
+            video_id: Some("abcdefghijk".into()),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            duration_secs: 180.0,
+            ..Default::default()
+        };
+        let remote = Track {
+            path: "yt://abcdefghijk".into(),
+            video_id: Some("abcdefghijk".into()),
+            title: "Song (Official Audio)".into(),
+            thumbnail_url: "https://example.test/cover.jpg".into(),
+            ..Default::default()
+        };
+        let unique = deduplicate_tracks([local.clone(), remote]);
+        assert_eq!(unique.len(), 1);
+        assert_eq!(unique[0].path, local.path);
+        assert_eq!(unique[0].thumbnail_url, "https://example.test/cover.jpg");
+        assert_eq!(unique[0].video_id.as_deref(), Some("abcdefghijk"));
+    }
+
+    #[test]
+    fn metadata_fallback_pairs_local_and_web_when_one_id_is_missing() {
+        let local = Track {
+            path: "C:/music/song.mp3".into(),
+            title: "A Song!".into(),
+            artist: "The Artist".into(),
+            duration_secs: 180.0,
+            ..Default::default()
+        };
+        let matching = Track {
+            path: "search-result".into(),
+            video_id: Some("abcdefghijk".into()),
+            title: "a-song".into(),
+            artist: "the artist".into(),
+            duration_secs: 185.0,
+            ..Default::default()
+        };
+        let merged = deduplicate_tracks([local.clone(), matching]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].path, local.path);
+        assert_eq!(merged[0].video_id.as_deref(), Some("abcdefghijk"));
+        assert_eq!(merged[0].duration_secs, 180.0);
+
+        let no_id_copy = Track {
+            path: "C:/music/song-copy.mp3".into(),
+            ..local.clone()
+        };
+        assert_eq!(deduplicate_tracks([local.clone(), no_id_copy]).len(), 1);
+
+        let outside_tolerance = Track {
+            path: "search-result".into(),
+            video_id: Some("abcdefghijk".into()),
+            title: "a-song".into(),
+            artist: "the artist".into(),
+            duration_secs: 186.0,
+            ..Default::default()
+        };
+        assert_eq!(deduplicate_tracks([local.clone(), outside_tolerance]).len(), 2);
+
+        let identified_local = Track {
+            video_id: Some("abcdefghijk".into()),
+            ..local.clone()
+        };
+        let different_version = Track {
+            path: "yt://lmnopqrstuv".into(),
+            video_id: Some("lmnopqrstuv".into()),
+            title: "A Song!".into(),
+            artist: "The Artist".into(),
+            duration_secs: 182.0,
+            ..Default::default()
+        };
+        assert_eq!(deduplicate_tracks([identified_local, different_version]).len(), 2);
+    }
+
+    #[test]
+    fn ambiguous_metadata_matches_are_not_collapsed() {
+        let make = |path: &str, duration_secs| Track {
+            path: path.into(),
+            title: "Same song".into(),
+            artist: "Same artist".into(),
+            duration_secs,
+            ..Default::default()
+        };
+        let local_a = make("C:/a.mp3", 180.0);
+        let local_b = make("C:/b.mp3", 186.0);
+        let web = make("yt://abcdefghijk", 183.0);
+        assert_eq!(deduplicate_tracks([local_a, local_b, web]).len(), 3);
+    }
+
+    #[test]
+    fn history_uses_canonical_identity_and_keeps_feedback_counters() {
+        let mut store = Store::default();
+        let local = Track {
+            path: "C:/music/song.mp3".into(),
+            video_id: Some("abcdefghijk".into()),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            duration_secs: 180.0,
+            ..Default::default()
+        };
+        let remote = Track {
+            path: "yt://abcdefghijk".into(),
+            video_id: Some("abcdefghijk".into()),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            duration_secs: 180.0,
+            ..Default::default()
+        };
+        store.record(&local);
+        store.record_completion(&local);
+        store.record_skip(&local);
+        store.record(&remote);
+        assert_eq!(store.history.len(), 1);
+        assert_eq!(store.history[0].play_count, 2);
+        assert_eq!(store.history[0].completion_count, 1);
+        assert_eq!(store.history[0].skip_count, 1);
+        assert!(store.recommendations.track_weights.contains_key("yt://abcdefghijk"));
     }
 }

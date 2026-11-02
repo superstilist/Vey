@@ -26,6 +26,9 @@ pub struct TagSnapshot {
     pub genre: String,
     pub year: Option<i32>,
     pub track_no: Option<u32>,
+    /// Persisted YouTube Music identity (`ytmusic:<id>` comment).
+    #[serde(default)]
+    pub video_id: Option<String>,
 }
 
 /// One backup row: the newest file per path wins on restore.
@@ -101,6 +104,9 @@ fn snapshot_from_tag(tag: &Tag) -> TagSnapshot {
         genre: tag.genre().as_deref().unwrap_or("").to_string(),
         year: tag.year().map(|y| y as i32),
         track_no: tag.track(),
+        video_id: tag
+            .get_string(&ItemKey::Comment)
+            .and_then(crate::media_library::ytmusic_id),
     }
 }
 
@@ -140,6 +146,16 @@ fn apply_snapshot(tag: &mut Tag, next: &TagSnapshot) {
         if track_no > 0 {
             tag.set_track(track_no);
         }
+    }
+    if let Some(id) = next
+        .video_id
+        .as_deref()
+        .and_then(crate::media_library::ytmusic_id)
+    {
+        tag.insert_text(
+            ItemKey::Comment,
+            format!("{}{id}", crate::media_library::YTM_ID_PREFIX),
+        );
     }
 }
 
@@ -358,6 +374,7 @@ mod tests {
                 genre: String::new(),
                 year: Some(2024),
                 track_no: None,
+                video_id: Some("abcdefghijk".into()),
             },
         );
         assert_eq!(tag.title().as_deref(), Some("New"));
@@ -365,6 +382,10 @@ mod tests {
         assert_eq!(tag.album().as_deref(), Some("New Album"));
         assert_eq!(tag.get_string(&ItemKey::AlbumArtist), Some("New AA"));
         assert_eq!(tag.year(), Some(2024));
+        assert_eq!(
+            tag.get_string(&ItemKey::Comment),
+            Some("ytmusic:abcdefghijk")
+        );
     }
 
     #[test]

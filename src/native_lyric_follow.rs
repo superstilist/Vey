@@ -1,8 +1,29 @@
 //! Retained source-to-visual lookup. Wrapped rows never acquire inferred cues.
-use crate::braccato::engine::{scroll_top, LineGeometry};
+use crate::braccato::engine::{scroll_top, LineGeometry, ScrollPolicy, Timeline};
 use crate::BraccatoRow;
 use slint::{Model, ModelRc};
 use std::ops::Range;
+
+struct ScrollTarget {
+    source: usize,
+    visual: usize,
+    sources: Vec<usize>,
+    position: (f32, bool),
+}
+
+#[derive(Default)]
+pub(crate) struct ScrollTargets(Vec<ScrollTarget>);
+impl ScrollTargets {
+    pub fn get(&self, sources: &[usize], source: usize, visual: usize) -> Option<(f32, bool)> {
+        self.0
+            .binary_search_by(|entry| {
+                (entry.source, entry.visual, entry.sources.as_slice())
+                    .cmp(&(source, visual, sources))
+            })
+            .ok()
+            .map(|index| self.0[index].position)
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct FollowIndex {
@@ -13,8 +34,50 @@ pub(crate) struct FollowIndex {
     warm_windows: Vec<Vec<Option<(i64, i64)>>>,
     row_tops: Vec<f32>,
     extent: f32,
+    secondary_gap: f32,
 }
 impl FollowIndex {
+    /// Prepare immutable camera destinations for all cue groups and wrapped
+    /// continuations. Manual resume uses the same lookup, with a live fallback
+    /// for unusual groups. Memory/work are bounded for pathological overlaps.
+    pub fn prepare_targets(
+        &self,
+        timeline: &Timeline,
+        policy: &ScrollPolicy,
+        offsets: &[f32],
+        size: f32,
+        spacing: f32,
+        viewport: f32,
+        ratio: f32,
+    ) -> ScrollTargets {
+        let mut targets = vec![];
+        let mut keys = 0;
+        'groups: for sources in timeline.scroll_groups(policy) {
+            for &source in &sources {
+                for visual in self.sources[source]
+                    .clone()
+                    .filter(|i| self.row_types[*i] != 2)
+                {
+                    keys += sources.len();
+                    if keys > 32768 {
+                        break 'groups;
+                    }
+                    targets.push(ScrollTarget {
+                        source,
+                        visual,
+                        position: self.target(
+                            &sources, source, visual, offsets, size, spacing, viewport, ratio,
+                        ),
+                        sources: sources.clone(),
+                    });
+                }
+            }
+        }
+        targets.sort_unstable_by(|a, b| {
+            (a.source, a.visual, &a.sources).cmp(&(b.source, b.visual, &b.sources))
+        });
+        ScrollTargets(targets)
+    }
     // Scroll ahead independently of the sung source/word. This never changes
     // highlight timestamps, and paused/reduced-motion seeks remain exact.
     pub fn scroll_time(time: i64, playing: bool, reduced: bool, offset: i32) -> i64 {
@@ -33,6 +96,7 @@ impl FollowIndex {
             warm_windows: vec![vec![]; rows.row_count()],
             row_tops: vec![],
             extent: 0.,
+            secondary_gap: 0.,
         };
         for visual in 0..rows.row_count() {
             let Some(row) = rows.row_data(visual) else {
@@ -57,7 +121,7 @@ impl FollowIndex {
                 if let Some(part) = row.parts.row_data(n) {
                     index.warm_windows[visual].push((part.duration_ms > 0.).then_some((
                         part.start_ms as i64 - 2000,
-                        (part.start_ms + part.duration_ms.max(1200.)) as i64 + 1500,
+                        crate::native_lyric_paint::residency_end(&row, &part),
                     )));
                     index
                         .word_events
@@ -70,7 +134,7 @@ impl FollowIndex {
                     // Match the retained-paint release predicate exactly: strict
                     // inequality after the integer end plus 1500ms of residency.
                     index.word_events.push((
-                        (part.start_ms + part.duration_ms.max(1200.)) as i64 + 1501,
+                        crate::native_lyric_paint::residency_end(&row, &part) + 1,
                         visual,
                     ));
                 } else {
@@ -79,7 +143,11 @@ impl FollowIndex {
             }
             if !row.secondary && !row.instrumental {
                 for n in 0..row.parts.row_count() {
-                    if let Some(part) = row.parts.row_data(n).filter(|p| !p.background) {
+                    if let Some(part) = row
+                        .parts
+                        .row_data(n)
+                        .filter(|p| !p.background && !p.line_synced)
+                    {
                         // A wrapped fragment shares its original cue. Follow the
                         // completed fill edge into that fragment, rather than
                         // selecting every continuation at the cue's first ms.
@@ -103,7 +171,8 @@ impl FollowIndex {
         index.word_events.dedup();
         index
     }
-    pub fn set_geometry(&mut self, offsets: &[f32], size: f32, spacing: f32) {
+    pub fn set_geometry(&mut self, offsets: &[f32], size: f32, spacing: f32, secondary_gap: f32) {
+        self.secondary_gap = secondary_gap.clamp(0., 1.5);
         let padding = crate::native_lyric_fonts::padding(size);
         let mut first = vec![false; offsets.len()];
         for source in &self.sources {
@@ -119,7 +188,7 @@ impl FollowIndex {
         self.extent = offsets.last().map_or(0., |last| {
             last + size
                 * match self.row_types.last() {
-                    Some(2) => 0.7,
+                    Some(2) => 0.7 + self.secondary_gap,
                     Some(1) => 0.95,
                     _ => spacing,
                 }
@@ -270,6 +339,79 @@ mod tests {
     use slint::VecModel;
     use std::rc::Rc;
     #[test]
+    fn synthetic_line_fragments_keep_focus_at_the_first_row_for_the_whole_cue() {
+        let rows: ModelRc<BraccatoRow> = Rc::new(VecModel::from(
+            (0..4)
+                .map(|_| BraccatoRow {
+                    source_index: 0,
+                    parts: Rc::new(VecModel::from(vec![BraccatoWord {
+                        line_synced: true,
+                        start_ms: 1000.,
+                        ..Default::default()
+                    }]))
+                    .into(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into();
+        let index = FollowIndex::new(&rows, 1);
+        for time in [999, 1000, 2000, 10000] {
+            assert_eq!(index.visual(0, time), Some(0));
+        }
+    }
+
+    #[test]
+    fn precalculated_targets_match_live_overlap_gap_and_policy_geometry() {
+        use crate::braccato::engine::ScrollState;
+        let spans = [(1000, 3000), (2200, 4000), (9000, 10000), (9300, 12000)];
+        let timeline = Timeline::from_spans(spans);
+        let rows: ModelRc<BraccatoRow> = Rc::new(VecModel::from(
+            (0..8)
+                .map(|i| BraccatoRow {
+                    source_index: i / 2,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .into();
+        let mut index = FollowIndex::new(&rows, 4);
+        let offsets = (0..8).map(|i| 32. + i as f32 * 96.).collect::<Vec<_>>();
+        index.set_geometry(&offsets, 48., 1.333, 0.65);
+        for lead in [0, 400] {
+            let policy = ScrollPolicy {
+                lookahead_ms: lead,
+                ending_threshold_ms: 125,
+                ..Default::default()
+            };
+            let targets =
+                index.prepare_targets(&timeline, &policy, &offsets, 48., 1.333, 180., 0.4);
+            assert!(!targets.0.is_empty());
+            let mut scroll = ScrollState::default();
+            for time in (0..13000).step_by(25) {
+                if let Some(plan) = scroll.plan(&timeline, time, time, &policy, false) {
+                    for visual in index.sources[plan.anchor].clone() {
+                        let live = index.target(
+                            &plan.sources,
+                            plan.anchor,
+                            visual,
+                            &offsets,
+                            48.,
+                            1.333,
+                            180.,
+                            0.4,
+                        );
+                        assert_eq!(
+                            targets.get(&plan.sources, plan.anchor, visual),
+                            Some(live),
+                            "missing precomputed group at {time}ms"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[test]
     fn paint_window_retains_full_extent_and_covers_a_middle_seek() {
         let rows: ModelRc<BraccatoRow> = Rc::new(VecModel::from(
             (0..300)
@@ -282,7 +424,7 @@ mod tests {
         .into();
         let offsets = (0..300).map(|i| 32. + i as f32 * 136.).collect::<Vec<_>>();
         let mut index = FollowIndex::new(&rows, 300);
-        index.set_geometry(&offsets, 48., 1.5);
+        index.set_geometry(&offsets, 48., 1.5, 0.65);
         assert_eq!(index.extent, 300. * 136.);
         let (first, end, top, bottom) = index.paint_window(-13600., 600., 48., 1.5, 0.35);
         assert!(first > 0 && end < 300 && end - first < 20);
@@ -330,6 +472,28 @@ mod tests {
         changed.clear();
         index.changed_words(4000, 500, &mut changed);
         assert!(changed.is_empty()); // Seeks are handled by the driver's reset band.
+    }
+    #[test]
+    fn sung_prefix_can_be_prepared_after_a_late_seek_and_releases_at_line_deadline() {
+        let rows: ModelRc<BraccatoRow> =
+            std::rc::Rc::new(slint::VecModel::from(vec![BraccatoRow {
+                end_ms: 9000.,
+                parts: std::rc::Rc::new(slint::VecModel::from(vec![crate::BraccatoWord {
+                    start_ms: 0.,
+                    duration_ms: 300.,
+                    ..Default::default()
+                }]))
+                .into(),
+                ..Default::default()
+            }]))
+            .into();
+        let index = FollowIndex::new(&rows, 1);
+        assert!(index.can_prepare(0, 0, 6500));
+        assert!(index.can_prepare(0, 0, 10500));
+        assert!(!index.can_prepare(0, 0, 10501));
+        let mut changed = vec![];
+        index.changed_words(10500, 10501, &mut changed);
+        assert_eq!(changed, vec![0]);
     }
     #[test]
     fn scroll_lead_is_bounded_and_never_changes_paused_or_reduced_time() {

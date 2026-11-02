@@ -94,6 +94,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             w.set_lyrics_reduced_motion(true);w.set_position(1.22);
         } else if p==3 {
             let reduced=capture(&w,"reduced");assert_eq!(changed(&frames.borrow()[0],&reduced,720),0,"reduced motion still wobbled");
+            // Probe inside the active syllable. Its first 20ms now correctly
+            // starts near rest rather than relying on a negative pre-roll lift.
+            w.set_position(1.5);
             w.set_lyrics_reduced_motion(false);let mut s=w.get_lyric_style();s.wobble=false;s.wave=true;w.set_lyric_style(s);
         } else if p==4 {
             let row=w.get_native_lyric_lines().row_data(0).unwrap();

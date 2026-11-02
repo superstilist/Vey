@@ -4,11 +4,15 @@ fn main() {
         android_bridge();
     }
     println!("cargo:rerun-if-changed=ui/main.slint");
+    println!("cargo:rerun-if-changed=ui/home-preview.slint");
     println!("cargo:rerun-if-changed=ui/controls.slint");
     println!("cargo:rerun-if-changed=ui/tokens.slint");
     println!("cargo:rerun-if-changed=ui/braccato-lyrics.slint");
     println!("cargo:rerun-if-changed=ui/native-lyrics.slint");
     println!("cargo:rerun-if-changed=ui/lyric-types.slint");
+    println!("cargo:rerun-if-changed=ui/lyric-theme-picker.slint");
+    println!("cargo:rerun-if-changed=ui/lyric-appearance.slint");
+    println!("cargo:rerun-if-changed=ui/player-theme.slint");
     println!("cargo:rerun-if-changed=third-party/braccato-rust/crates/slint/ui/lyrics.slint");
     let config = slint_build::CompilerConfiguration::new().with_library_paths(
         std::collections::HashMap::from([(

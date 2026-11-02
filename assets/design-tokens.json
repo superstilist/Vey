@@ -4,7 +4,8 @@
     "brand": "Vey",
     "source": "Vey native theme",
     "sync": "assets/design-tokens.json → ui/tokens.slint + assets/design-tokens.css",
-    "mode": "dark-only (color-scheme: dark)"
+    "mode": "dark-only (color-scheme: dark)",
+    "runtimeOverrides": "PlayerTheme semantic roles and shape metrics from ui/player-theme.slint"
   },
   "primitive": {
     "color": {

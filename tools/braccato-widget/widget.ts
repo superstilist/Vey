@@ -165,19 +165,23 @@ const cameraMoving = cameraPresentation.update(state.visible && state.mode !== '
   const requestedSize = Number.isFinite(state.size) ? state.size : 48;
   const size = state.mobile && requestedSize === 48 ? 32 : Math.min(Math.max(requestedSize, 12), 72);
   const disableRichsync = !!state.disableRichsync;
-  const config = JSON.stringify([size, state.reduced, state.passiveSeconds, state.scrollRatio, state.lookahead, state.scrollOffset, state.endingThreshold, state.scrollDuration, disableRichsync, state.richsyncOffset, state.lineOffset, state.customTheme, state.fontFamily]);
+  const secondaryGap = Number.isFinite(state.secondaryGap) ? Math.min(Math.max(state.secondaryGap, 0), 1.5) : 0.65;
+  const showCredits = !!state.showCredits;
+  const config = JSON.stringify([size, secondaryGap, showCredits, state.reduced, state.passiveSeconds, state.scrollRatio, state.lookahead, state.scrollOffset, state.endingThreshold, state.scrollDuration, disableRichsync, state.richsyncOffset, state.lineOffset, state.customTheme, state.fontFamily]);
   if (config !== themeKey) {
     themeKey = config;
     themeCompiles++;
-    const motion = state.reduced ? `:root,.blyrics-container{--blyrics-animate-line-scale:0;--blyrics-animate-word-wobble:0;--blyrics-animate-instrumental:0;--blyrics-animate-decoration-entry:0;--blyrics-scale:1;--blyrics-active-scale:1;}` : '';
+    const motion = state.reduced ? `:root,.blyrics-container{--blyrics-animate-line-scale:0;--blyrics-animate-word-wobble:0;--blyrics-animate-letter-wave:0;--blyrics-animate-highlight-glow:0;--blyrics-animate-highlight-fade:0;--blyrics-animate-instrumental:0;--blyrics-animate-decoration-entry:0;--blyrics-scale:1;--blyrics-active-scale:1;}` : '';
     const settings = `/* blyrics-target-scroll-pos-ratio=${state.scrollRatio ?? 0.37}; blyrics-early-scroll-consider-s=${(state.lookahead ?? 0) / 1000}; blyrics-lyric-ending-threshold-s=${(state.endingThreshold ?? 0) / 1000}; blyrics-line-scroll-duration=${state.scrollDuration ?? 750}ms; blyrics-passive-scroll-seconds-per-line=${state.passiveSeconds || 3.5}; blyrics-line-synced-animation-delay=0ms; blyrics-swipe-lead-ratio=0; blyrics-swipe-duration-ratio=1; ${disableRichsync ? 'blyrics-disable-richsync=true;' : ''} */`;
     // The upstream default adds 150 ms to rich-sync cues. PlayerVF's native
     // renderer uses the configured value directly (0 ms by default), so pass
     // the same offset into Braccato to keep word highlights aligned with audio.
     const timing = `.blyrics-container{--blyrics-richsync-timing-offset:${state.richsyncOffset ?? 0}ms;--blyrics-timing-offset:${state.lineOffset ?? 0}ms;--blyrics-scroll-timing-offset:${state.scrollOffset ?? 0}ms;}`;
     const sizeStyle = `.blyrics-container{--blyrics-font-size:${size}px;--blyrics-translated-font-size:calc(var(--blyrics-font-size) * 0.667);}`;
+    const secondarySpacing = `#scroller .blyrics-container .blyrics--translated,#scroller .blyrics-container .blyrics--romanized{margin-top:calc(var(--blyrics-font-size) * ${secondaryGap}) !important;}`;
+    const creditsVisibility = `#scroller .blyrics-credits{display:${showCredits ? 'block' : 'none'} !important;}`;
     const font = `.blyrics-container{--blyrics-default-font-family:${JSON.stringify(state.fontFamily || 'Satoshi')},sans-serif;}`;
-    view.theme = `${settings}\n${sizeStyle}\n${state.customTheme || ''}\n${font}\n${motion}\n${timing}`;
+    view.theme = `${settings}\n${sizeStyle}\n${secondarySpacing}\n${creditsVisibility}\n${state.customTheme || ''}\n${font}\n${motion}\n${timing}`;
   }
   if (next.document !== undefined) {
     const key = typeof next.document === 'string' ? next.document : JSON.stringify(next.document);

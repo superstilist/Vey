@@ -1,0 +1,57 @@
+import { ComboBox } from "std-widgets.slint";
+import { I18n } from "i18n.slint";
+import { Tokens } from "tokens.slint";
+import { Action } from "controls.slint";
+
+export struct LyricThemePreset {
+    name: string, description: string, attribution: string, css: string,
+    active: color, inactive: color, glow: color, family: string, weight: int,
+}
+
+export component LyricThemePicker inherits Rectangle {
+    in property <[LyricThemePreset]> presets;
+    in property <[string]> names;
+    in property <string> source;
+    in property <string> font-family;
+    in property <int> preset-index;
+    in property <bool> compact: false;
+    in property <bool> entire-player: false;
+    in property <color> active: root.preview.active;
+    in property <color> inactive: root.preview.inactive;
+    in property <color> glow: root.preview.glow;
+    min-width: 0px;
+    callback picked(int);
+    private property <int> selected: root.preset-index >= 0 && root.preset-index < root.presets.length
+        && root.presets[root.preset-index].css == root.source ? root.preset-index : max(0, root.presets.length - 1);
+    private property <LyricThemePreset> preview: root.presets[root.selected];
+    preferred-height: content.preferred-height;
+    content := VerticalLayout {
+        spacing: 10px; alignment: start;
+        HorizontalLayout {
+            Text { text: root.entire-player ? I18n.tr("Теми плеєра") : I18n.tr("Тема слів"); color: Tokens.ink-300; font-size: 13px; horizontal-stretch: 1; }
+            Text { text: (root.selected + 1) + " / " + root.presets.length; color: Tokens.ink-300; font-size: 12px; }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            Action { icon: @image-url("../assets/icons/ChevronLeft.svg"); label: I18n.tr("Попередня тема"); comfortable: true; chip: true;
+                enabled: root.selected > 0; clicked => { root.picked(root.selected - 1); }
+            }
+            ComboBox {
+                height: 44px; horizontal-stretch: 1; model: root.names; current-index: root.selected;
+                accessible-label: root.entire-player ? I18n.tr("Теми плеєра") : I18n.tr("Тема слів");
+                selected(value) => { root.picked(self.current-index); }
+            }
+            Action { icon: @image-url("../assets/icons/ChevronRight.svg"); label: I18n.tr("Наступна тема"); comfortable: true; chip: true;
+                enabled: root.selected + 1 < root.presets.length; clicked => { root.picked(root.selected + 1); }
+            }
+        }
+        Text { text: root.preview.description; color: Tokens.ink-200; font-size: 13px; wrap: word-wrap; }
+        HorizontalLayout {
+            spacing: 6px;
+            Rectangle { width: 10px; height: 10px; border-radius: 5px; background: root.active; }
+            Rectangle { width: 10px; height: 10px; border-radius: 5px; background: root.inactive; }
+            Rectangle { width: 10px; height: 10px; border-radius: 5px; background: root.glow; }
+            Text { text: root.preview.attribution; color: Tokens.ink-300; font-size: 11px; wrap: word-wrap; horizontal-stretch: 1; }
+        }
+    }
+}

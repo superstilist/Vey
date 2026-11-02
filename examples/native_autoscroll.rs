@@ -62,7 +62,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("source row reads during 2 seconds of playback: {}",reads.get());
             assert!(reads.get()<100,"ordinary playback must not rescan the canonical document");
             w.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
-                position:slint::LogicalPosition::new(1100.,500.),delta_x:0.,delta_y:-180.,
+                // Target visible lyric ink, not the padding between wrapped sources.
+                position:slint::LogicalPosition::new(1100.,400.),delta_x:0.,delta_y:-180.,
             });
         }
         if t==33 {

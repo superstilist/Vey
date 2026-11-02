@@ -12,8 +12,8 @@ Returning follows the reverse vector.
 | Southwest | South | Southeast |
 
 Pages occupy fixed cells in a viewport-sized world grid. A shared camera
-travels to the destination coordinates over 240–520ms according to the
-remaining distance (380ms for a neighboring cell); every visible layer uses
+travels to the destination coordinates over 100–180ms according to the
+remaining distance (160ms for a neighboring cell); every visible layer uses
 the same world-position-minus-camera transform. Diagonals move on both axes,
 and opposite destinations span two cells. Retargeting starts from the current
 camera position rather than restarting a canned entrance animation.
@@ -26,9 +26,9 @@ Reduced motion moves the camera to its target immediately.
 
 Eight route surfaces and the player surface stay mounted at viewport size.
 While idle, one page at a time is painted through a clipped edge strip; the
-currently visible page is already warm. A destination gets a preparation frame
-for capture, then travel starts on a fresh animation tick so capture time cannot
-consume the camera animation. Slint's rendering-cache hint keeps these surfaces ready
+currently visible page is already warm. Travel starts on the route-change
+callback, without waiting for warming, screenshot readback or a preparation
+timer. Slint's rendering-cache hint keeps these surfaces ready
 for compositing, trading viewport-scaled render-cache memory for fast returns.
 Normal model and size dependencies refresh the relevant cache when content or
 the viewport changes. Warming pauses during navigation and palette fades;
@@ -37,19 +37,22 @@ The player shell
 remains mounted between visits.
 The lyric host promotes its moving content to a compositor layer and skips
 unchanged presentation styles and visibility attributes on clock updates.
-The shared ease-in-out curve is `cubic-bezier(0.45, 0, 0.55, 1)`. The bridge
+The shared ease-out curve is `cubic-bezier(0.2, 0, 0, 1)`. The bridge
 supplies the camera epoch, start/target coordinates and elapsed time and
 duration. The browser host joins that same curve using Web Animations, so it moves
 between IPC samples even when playback is paused. Duplicate samples preserve
-the animation. `src/navigation_fx.rs` captures outgoing and incoming Slint content
-offscreen once per journey, excluding the ambient backdrop. Each texture is
-downsampled to at most 768 by 640 pixels and blurred once. The camera composites
-these textures through mid-travel and restores live content at the destination;
-there is no per-frame readback or CPU blur, and only two textures are retained.
-On native targets, a bounded worker performs the downsample/blur after readback
-while camera travel continues. Ready textures fade in over 80ms; obsolete or
-late results are discarded. Rapid retargets use live content while the worker
-is busy rather than queueing more readbacks. WASM keeps its existing fallback.
+the animation. Normal native and WASM navigation composites live page surfaces;
+it performs no full-window screenshot readbacks, CPU page blurs or texture
+uploads for navigation. This replaces screenshot-based page blur to prioritize
+input latency. Browser lyric-host blur remains on its compositor layer.
+
+`VEY_LEGACY_NAVIGATION_CAPTURE=1` opts native runs into the previous two-snapshot
+blur path in `src/navigation_fx.rs` for comparison. It retains the bounded blur
+worker, 768x640 texture limit and stale-result rejection, but can delay input
+while reading pixels. Clear the variable after diagnostics. This switch restores
+capture cost, not the old animation durations. Normal navigation creates no blur
+worker or result-polling timer. Each retarget restarts the completion deadline,
+including when its duration is unchanged; the camera position stays continuous.
 The live player surface uses a full-page render cache only during travel and
 offscreen warming; ordinary lyric ticks draw without rebuilding that cache.
 Unsupported snapshot renderers retain live content. Native Rust Braccato is
@@ -65,6 +68,10 @@ use child-window placement or lyric IPC. The copied Rust Braccato view shares
 the page camera; browser host geometry updates remain separate.
 Decorative background readback drops to roughly half its normal cadence while
 content moves, without resetting the warp clock, then returns to normal.
+The native ambient texture is updated at most once per 100 ms while a page or
+mobile sheet is moving. Its phase and artwork transition clock continue, and
+the normal cadence resumes after movement. Set `VEY_LEGACY_AMBIENT_TRAVEL=1` to
+compare the previous native cadence.
 Paused color morphs reuse a cached GPU target and blend against that target;
 they do not redraw or read back identical warp frames. Settled duplicate
 requests reuse the encoded frame too. Artwork changes invalidate the target,
@@ -86,8 +93,13 @@ With the WASM assets built and fixture server running,
 `node tools/braccato-widget/navigation-viewport-test.mjs` checks the running web
 shell's camera samples, sharp chrome and matching desktop/mobile host radii.
 
+Settings sections commit immediately on input, including repeated changes and
+Back; there is no fade-out timer or temporary input shield. Secondary panels
+use 100ms motion and interaction feedback uses 70ms. These shell changes do not
+change lyric cue, fill or follow timing. Reduced motion still snaps immediately.
+
 On mobile, the player uses a separate overlay sheet rather than the world-grid
 camera. Its retained page keeps the normal viewport size and window position,
 including settings-section scroll offsets. The sheet fades and moves 48 pixels
-over 220 ms; close and browser Back reveal the same page. Desktop keeps the
+over 140 ms; close and browser Back reveal the same page. Desktop keeps the
 player's northeast route. Reduced motion removes the sheet animation too.

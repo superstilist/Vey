@@ -43,7 +43,7 @@ fn same_artwork(a: &slint::Image, b: &slint::Image) -> bool {
     (empty(a) && empty(b)) || a == b
 }
 
-// Invert the shared cubic-bezier(.45,0,.55,1). The camera's actual
+// Invert the shared cubic-bezier(.2,0,0,1). The camera's actual
 // on-screen displacement is authoritative, including interrupted movement.
 fn camera_time_fraction(displacement: f32) -> f32 {
     let fraction = displacement.clamp(0., 1.);
@@ -61,7 +61,7 @@ fn camera_time_fraction(displacement: f32) -> f32 {
         }
     }
     let t = (low + high) * 0.5;
-    3. * (1. - t) * (1. - t) * t * 0.45 + 3. * (1. - t) * t * t * 0.55 + t * t * t
+    3. * (1. - t) * (1. - t) * t * 0.2 + t * t * t
 }
 
 fn camera_elapsed(w: &MainWindow) -> f32 {
@@ -144,6 +144,7 @@ impl Bridge {
         let mut state = serde_json::json!({
             "language":w.global::<crate::I18n>().get_language().to_string(),
             "visible": visible, "position": if visible && !editing { w.get_position() } else { 0. },
+            "showCredits": w.get_player_tools(),
             "mode":if editing {"editor"} else {"lyrics"},
             "playing": visible && !editing && w.get_player_state() == "playing", "rate": w.get_rate(),
             "offset": w.get_lyrics_offset(), "stage": w.get_lyrics_stage(),
@@ -152,6 +153,7 @@ impl Bridge {
             "timed": w.get_lyrics_timed(), "passive": w.get_lyrics_passive_scroll(),
             "reduced": w.get_lyrics_reduced_motion(), "mobile": w.get_mobile(),
             "size": w.get_lyric_size(),
+            "secondaryGap": w.get_lyrics_secondary_gap().clamp(0., 1.5),
             "customTheme": w.get_lyric_theme_applied().to_string(),
             "fontFamily": w.get_lyric_style().family.to_string(),
             "scrollRatio":w.get_lyrics_scroll_ratio(), "lookahead":w.get_lyrics_lookahead_ms(),
@@ -214,7 +216,8 @@ impl Bridge {
         // Keep the warp clock continuous; restore normal cadence when settled.
         let ambient_interval = if w.get_page_moving() { 0.06 } else { 0.03 };
         if !w.window().is_minimized()
-            && w.get_color_mode() != "static"
+            && (w.get_color_mode() != "static" || w.get_player_theme_style().enabled)
+            && w.get_ambient_opacity() > 0.001
             && (changed
                 || motion_changed
                 || options_changed
@@ -418,9 +421,9 @@ mod tests {
     fn camera_timing_matches_the_displayed_bezier_path() {
         assert!(camera_time_fraction(-0.5).abs() < 0.00001);
         assert!((camera_time_fraction(1.5) - 1.).abs() < 0.00001);
-        assert!((camera_time_fraction(0.15625) - 0.2828125).abs() < 0.00001);
-        assert!((camera_time_fraction(0.5) - 0.5).abs() < 0.00001);
-        assert!((camera_time_fraction(0.84375) - 0.7171875).abs() < 0.00001);
+        assert!((camera_time_fraction(0.15625) - 0.1).abs() < 0.00001);
+        assert!((camera_time_fraction(0.5) - 0.2).abs() < 0.00001);
+        assert!((camera_time_fraction(0.84375) - 0.45).abs() < 0.00001);
     }
     #[test]
     fn missing_covers_are_a_stable_ambient_source() {

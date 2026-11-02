@@ -1,6 +1,6 @@
 //! Vey account metadata and private audio. Credentials never enter Store/exports.
 use crate::{
-    services::{History, Playlist, Settings, Store, Track},
+    services::{History, Playlist, RecommendationModel, Settings, Store, Track},
     MainWindow,
 };
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use slint::{ComponentHandle, Model};
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     rc::Rc,
     time::Duration,
 };
@@ -21,12 +21,20 @@ struct Session {
     id: String,
     email: String,
     name: String,
+    nickname: String,
+    bio: String,
+    discord: String,
+    avatar_url: String,
+    created_at: String,
     expires_at: u64,
     premium: bool,
     revision: Option<u64>,
     auto_sync: bool,
     auto_upload: bool,
     uploaded: BTreeSet<String>,
+    /// Local acknowledgement of durable Blueberry queue submissions. This is
+    /// never sent to the account API or shared catalog.
+    catalog_uploaded: BTreeMap<String, String>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -35,11 +43,219 @@ struct CloudLibrary {
     likes: BTreeSet<String>,
     playlists: Vec<Playlist>,
     history: Vec<History>,
+    recommendations: RecommendationModel,
+    #[serde(serialize_with = "serialize_cloud_settings")]
     settings: Settings,
     offsets: BTreeMap<String, i64>,
     lyrics_choices: BTreeMap<String, crate::services::LyricsChoice>,
     #[serde(rename = "autoUpload")]
     auto_upload: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogImportTrack {
+    path: String,
+    title: String,
+    artist: String,
+    album: String,
+    duration_secs: f64,
+    thumbnail_url: String,
+    lyrics_text: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    lyrics_tracks: Vec<CatalogLyricsTrack>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogLyricsTrack {
+    kind: String,
+    lang: String,
+    text: String,
+}
+
+fn catalog_lyrics_tracks(lyrics: &crate::lyrics::ParsedLyrics) -> Vec<CatalogLyricsTrack> {
+    let source_language = lyrics.language.as_deref().unwrap_or("und");
+    let romanization = lyrics
+        .lines
+        .iter()
+        .map(|line| {
+            if !line.romanization.trim().is_empty() {
+                line.romanization.trim().to_string()
+            } else {
+                line.timed_romanization
+                    .iter()
+                    .map(|part| part.text.as_str())
+                    .collect::<String>()
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut result = Vec::new();
+    if romanization.iter().any(|line| !line.trim().is_empty()) {
+        result.push(CatalogLyricsTrack {
+            kind: "romanization".into(),
+            lang: format!("{}-Latn", source_language),
+            text: romanization.join("\n"),
+        });
+    }
+
+    let mut language_counts = BTreeMap::<String, usize>::new();
+    for line in &lyrics.lines {
+        for (language, text) in &line.translations {
+            if !text.trim().is_empty() {
+                *language_counts.entry(language.clone()).or_default() += 1;
+            }
+        }
+    }
+    let translation_language = language_counts
+        .into_iter()
+        .max_by(|(left_lang, left_count), (right_lang, right_count)| {
+            left_count.cmp(right_count).then_with(|| right_lang.cmp(left_lang))
+        })
+        .map(|(language, _)| language);
+    let translations = lyrics
+        .lines
+        .iter()
+        .map(|line| {
+            if !line.translation.trim().is_empty() {
+                line.translation.trim().to_string()
+            } else {
+                translation_language
+                    .as_ref()
+                    .and_then(|language| line.translations.get(language))
+                    .map(|text| text.trim().to_string())
+                    .unwrap_or_default()
+            }
+        })
+        .collect::<Vec<_>>();
+    if translations.iter().any(|line| !line.trim().is_empty()) {
+        result.push(CatalogLyricsTrack {
+            kind: "translation".into(),
+            lang: translation_language.unwrap_or_else(|| "und".into()),
+            text: translations.join("\n"),
+        });
+    }
+    result
+}
+
+fn catalog_candidates(
+    store: &Store,
+    uploaded: &BTreeMap<String, String>,
+) -> Vec<(String, String, CatalogImportTrack)> {
+    use sha1::{Digest, Sha1};
+
+    let mut tracks = store.tracks.clone();
+    tracks.extend(store.history.iter().map(|event| event.track.clone()));
+    tracks.extend(store.recommendations.tracks.iter().cloned());
+    let mut unique = BTreeMap::<String, Track>::new();
+    for track in tracks {
+        let Some(track) = cloud_track(store, &track) else {
+            continue;
+        };
+        if !track.path.starts_with("yt://")
+            || track.title.trim().is_empty()
+            || track.artist.trim().is_empty()
+            || track.title.eq_ignore_ascii_case("unknown title")
+            || track.artist.eq_ignore_ascii_case("unknown artist")
+            || track.title.chars().count() > 512
+            || track.artist.chars().count() > 512
+            || track.album.chars().count() > 512
+        {
+            continue;
+        }
+        unique.entry(track.path.clone()).or_insert(track);
+    }
+
+    unique
+        .into_iter()
+        .filter_map(|(id, track)| {
+            let alternatives = store.cached_lyrics(&track.path).or_else(|| {
+                store
+                    .tracks
+                    .iter()
+                    .find(|local| cloud_identity(store, &local.path).as_deref() == Some(id.as_str()))
+                    .and_then(|local| store.cached_lyrics(&local.path))
+            });
+            let selected = alternatives
+                .as_ref()
+                .and_then(|items| {
+                    items.iter().max_by_key(|item| {
+                        let has_text = item.lyrics.lines.iter().any(|line| !line.text.trim().is_empty());
+                        let quality = match item.sync_type {
+                            crate::lyrics::LyricsSyncType::RichSync => 4,
+                            crate::lyrics::LyricsSyncType::Word => 3,
+                            crate::lyrics::LyricsSyncType::Synced => 2,
+                            crate::lyrics::LyricsSyncType::Plain => 1,
+                        };
+                        (has_text, quality, item.lyrics.lines.len())
+                    })
+                })
+                .filter(|item| item.lyrics.lines.iter().any(|line| !line.text.trim().is_empty()));
+            let lyrics_tracks = selected.map_or_else(Vec::new, |item| catalog_lyrics_tracks(&item.lyrics));
+            let lyrics_text = selected.map_or_else(String::new, |item| {
+                if item.sync_type == crate::lyrics::LyricsSyncType::Plain {
+                    item.lyrics.lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n")
+                } else {
+                    let mut source = item.lyrics.clone();
+                    for line in &mut source.lines {
+                        line.translation.clear();
+                        line.translations.clear();
+                    }
+                    crate::lyrics::serialize_lrc(&source)
+                }
+            });
+            let item = CatalogImportTrack {
+                path: id.clone(),
+                title: track.title,
+                artist: track.artist,
+                album: track.album,
+                duration_secs: track.duration_secs,
+                thumbnail_url: track.thumbnail_url,
+                lyrics_text: if lyrics_text.len() <= 120_000 { lyrics_text } else { String::new() },
+                lyrics_tracks: lyrics_tracks
+                    .into_iter()
+                    .filter(|track| track.text.len() <= 120_000)
+                    .collect(),
+            };
+            let serialized = serde_json::to_vec(&item).ok()?;
+            let fingerprint = format!("{:x}", Sha1::digest(serialized));
+            (uploaded.get(&id) != Some(&fingerprint)).then_some((id, fingerprint, item))
+        })
+        .collect()
+}
+// Match the deployed Worker's settings allowlist. Local extensions must not
+// make otherwise valid playlist sync fail with "Unsupported setting".
+fn serialize_cloud_settings<S: serde::Serializer>(
+    settings: &Settings,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let mut value = serde_json::to_value(settings).map_err(serde::ser::Error::custom)?;
+    if let Some(object) = value.as_object_mut() {
+        object.retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "language"
+                    | "color_mode"
+                    | "art_mode"
+                    | "download_badge_style"
+                    | "download_badge_position"
+                    | "lyrics_provider"
+                    | "lyrics_translation_language"
+                    | "repeat"
+                    | "download_badge_shown"
+                    | "lyrics_romanization"
+                    | "lyrics_translation"
+                    | "lyrics_stage"
+                    | "lyrics_reduced_motion"
+                    | "lyrics_passive_scroll"
+                    | "shuffle"
+                    | "volume"
+                    | "color_hue"
+                    | "kawarp"
+            )
+        });
+    }
+    value.serialize(serializer)
 }
 fn cloud_key(key: &str) -> bool {
     key.strip_prefix("yt://").is_some_and(|id| {
@@ -63,91 +279,245 @@ fn portable_track(track: &Track) -> Track {
     }
     result
 }
+/// The portable key for anything the account may store: cloud keys pass
+/// through, and a local file maps to `yt://<id>` when its tags, remembered
+/// track or download link expose a YouTube Music identity.
+fn cloud_identity(store: &Store, key: &str) -> Option<String> {
+    if cloud_key(key) {
+        return Some(key.to_string());
+    }
+    if let Some(id) = key
+        .strip_prefix("vid:")
+        .filter(|id| crate::services::video_id(id))
+    {
+        return Some(format!("yt://{id}"));
+    }
+    let local = crate::services::normalize_path(key);
+    if let Some(id) = store
+        .tracks
+        .iter()
+        .find(|track| crate::services::normalize_path(&track.path) == local)
+        .and_then(|track| track.video_id.as_deref())
+        .filter(|id| crate::services::video_id(id))
+    {
+        return Some(format!("yt://{id}"));
+    }
+    store
+        .downloads
+        .iter()
+        .find(|(remote, path)| cloud_key(remote) && crate::services::normalize_path(path) == local)
+        .map(|(remote, _)| remote.clone())
+}
+/// Turn a stored track into its portable cloud copy, keeping the public
+/// metadata but never a local path or a private artwork URL.
+fn cloud_track(store: &Store, track: &Track) -> Option<Track> {
+    let key = track
+        .video_id
+        .as_deref()
+        .filter(|id| crate::services::video_id(id))
+        .map(|id| format!("yt://{id}"))
+        .or_else(|| cloud_identity(store, &track.path))?;
+    let mut result = portable_track(track);
+    result.path = key;
+    Some(result)
+}
 impl CloudLibrary {
     fn capture(store: &Store, auto_upload: bool) -> Self {
+        let mut seen = BTreeSet::new();
+        let tracks: Vec<Track> = store
+            .tracks
+            .iter()
+            .filter_map(|track| cloud_track(store, track))
+            .filter(|track| seen.insert(track.path.clone()))
+            .collect();
         Self {
-            tracks: store
-                .tracks
-                .iter()
-                .filter(|t| cloud_key(&t.path))
-                .map(portable_track)
-                .collect(),
+            tracks,
             likes: store
                 .likes
                 .iter()
-                .filter(|k| cloud_key(k))
-                .cloned()
+                .filter_map(|key| cloud_identity(store, key))
                 .collect(),
             playlists: store
                 .playlists
                 .iter()
-                .map(|p| Playlist {
-                    id: p.id.clone(),
-                    name: p.name.clone(),
-                    tracks: p.tracks.iter().filter(|k| cloud_key(k)).cloned().collect(),
+                .map(|p| {
+                    Playlist {
+                        id: p.id.clone(),
+                        name: p.name.clone(),
+                        tracks: p
+                            .tracks
+                            .iter()
+                            .filter_map(|key| cloud_identity(store, key))
+                            .collect(),
+                        ..p.clone()
+                    }
                 })
                 .collect(),
             history: store
                 .history
                 .iter()
-                .filter(|h| cloud_key(&h.track.path))
-                .take(5000)
-                .map(|h| History {
-                    track: portable_track(&h.track),
-                    ..h.clone()
+                .filter_map(|h| {
+                    Some(History {
+                        track: cloud_track(store, &h.track)?,
+                        ..h.clone()
+                    })
                 })
+                .take(5000)
                 .collect(),
+            recommendations: RecommendationModel {
+                schema_version: store.recommendations.schema_version.max(1),
+                updated_at: store.recommendations.updated_at,
+                profile_updated_at: store.recommendations.profile_updated_at,
+                personalized: store.recommendations.personalized,
+                track_weights: store
+                    .recommendations
+                    .track_weights
+                    .iter()
+                    .filter(|(key, _)| key.starts_with("yt://") && cloud_key(key))
+                    .take(1000)
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect(),
+                artist_weights: store
+                    .recommendations
+                    .artist_weights
+                    .iter()
+                    .filter(|(key, _)| !key.trim().is_empty() && key.len() <= 120)
+                    .take(500)
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect(),
+                disliked_tracks: store
+                    .recommendations
+                    .disliked_tracks
+                    .iter()
+                    .filter(|key| key.starts_with("yt://") && cloud_key(key))
+                    .take(1000)
+                    .cloned()
+                    .collect(),
+                tracks: store
+                    .recommendations
+                    .tracks
+                    .iter()
+                    .filter(|t| t.path.starts_with("yt://") && cloud_key(&t.path))
+                    .take(12)
+                    .map(portable_track)
+                    .collect(),
+            },
             settings: store.settings.clone(),
             offsets: store
                 .offsets
                 .iter()
-                .filter(|(k, _)| cloud_key(k))
-                .map(|(k, v)| (k.clone(), *v))
+                .filter_map(|(key, value)| cloud_identity(store, key).map(|key| (key, *value)))
                 .collect(),
             lyrics_choices: store
                 .lyrics_choices
                 .iter()
-                .filter(|(k, _)| cloud_key(k))
-                .map(|(k, v)| (k.clone(), v.clone()))
+                .filter_map(|(key, value)| {
+                    cloud_identity(store, key).map(|key| (key, value.clone()))
+                })
                 .collect(),
             auto_upload,
         }
     }
     fn restore(self, store: &mut Store) {
+        let CloudLibrary {
+            tracks,
+            likes,
+            playlists,
+            history,
+            settings,
+            offsets,
+            lyrics_choices,
+            recommendations,
+            auto_upload: _,
+        } = self;
+        store.recommendations.merge_newer(recommendations);
         store.tracks.retain(|t| !cloud_key(&t.path));
         store
             .tracks
-            .extend(self.tracks.into_iter().filter(|t| cloud_key(&t.path)));
-        store.likes.retain(|k| !cloud_key(k));
+            .extend(tracks.into_iter().filter(|t| cloud_key(&t.path)));
+        // A local like and its uploaded `yt://` twin are one song. Keep the
+        // portable key so a later capture can still send it from this device.
+        let duplicates: HashSet<String> = store
+            .likes
+            .iter()
+            .filter(|key| !cloud_key(key))
+            .filter(|key| cloud_identity(store, key).is_some_and(|id| likes.contains(&id)))
+            .cloned()
+            .collect();
         store
             .likes
-            .extend(self.likes.into_iter().filter(|k| cloud_key(k)));
-        let local: Vec<Playlist> = store
-            .playlists
-            .iter()
-            .map(|p| Playlist {
-                id: p.id.clone(),
-                name: p.name.clone(),
-                tracks: p.tracks.iter().filter(|k| !cloud_key(k)).cloned().collect(),
-            })
-            .filter(|p| !p.tracks.is_empty())
-            .collect();
-        store.playlists = self.playlists;
-        for p in local {
-            if let Some(remote) = store.playlists.iter_mut().find(|r| r.id == p.id) {
-                remote.tracks.extend(p.tracks);
-            } else {
-                store.playlists.push(p);
+            .retain(|key| !cloud_key(key) && !duplicates.contains(key));
+        store
+            .likes
+            .extend(likes.into_iter().filter(|key| cloud_key(key)));
+        for remote in playlists {
+            let remote_tracks: HashSet<String> = remote.tracks.iter().cloned().collect();
+            let Some(index) = store.playlists.iter().position(|p| p.id == remote.id) else {
+                store.playlists.push(remote);
+                continue;
+            };
+            let local_only: Vec<String> = store.playlists[index]
+                .tracks
+                .iter()
+                .filter(|key| !cloud_key(key))
+                .filter(|key| {
+                    !cloud_identity(store, key).is_some_and(|id| remote_tracks.contains(&id))
+                })
+                .cloned()
+                .collect();
+            let mut merged = remote;
+            for key in local_only {
+                if !merged.tracks.contains(&key) {
+                    merged.tracks.push(key);
+                }
             }
+            store.playlists[index] = merged;
         }
         store.history.retain(|h| !cloud_key(&h.track.path));
-        store.history.extend(self.history);
+        let local_history: HashSet<(Option<String>, u64)> = store
+            .history
+            .iter()
+            .map(|h| (cloud_identity(store, &h.track.path), h.played_at))
+            .collect();
+        store.history.extend(
+            history
+                .into_iter()
+                .filter(|h| !local_history.contains(&(Some(h.track.path.clone()), h.played_at))),
+        );
         store.history.sort_by(|a, b| b.played_at.cmp(&a.played_at));
-        store.offsets.retain(|k, _| !cloud_key(k));
-        store.offsets.extend(self.offsets);
-        store.lyrics_choices.retain(|k, _| !cloud_key(k));
-        store.lyrics_choices.extend(self.lyrics_choices);
-        store.settings = self.settings;
+        let duplicates: HashSet<String> = store
+            .offsets
+            .keys()
+            .filter(|key| !cloud_key(key))
+            .filter(|key| cloud_identity(store, key).is_some_and(|id| offsets.contains_key(&id)))
+            .cloned()
+            .collect();
+        store
+            .offsets
+            .retain(|key, _| !cloud_key(key) && !duplicates.contains(key));
+        store.offsets.extend(offsets);
+        let duplicates: HashSet<String> = store
+            .lyrics_choices
+            .keys()
+            .filter(|key| !cloud_key(key))
+            .filter(|key| {
+                cloud_identity(store, key).is_some_and(|id| lyrics_choices.contains_key(&id))
+            })
+            .cloned()
+            .collect();
+        store
+            .lyrics_choices
+            .retain(|key, _| !cloud_key(key) && !duplicates.contains(key));
+        store.lyrics_choices.extend(lyrics_choices);
+        let local_settings = store.settings.clone();
+        store.settings = settings;
+        store.settings.home_layout = local_settings.home_layout;
+        store.settings.home_rotate = local_settings.home_rotate;
+        store.settings.lyrics_theme_css = local_settings.lyrics_theme_css;
+        store.settings.lyrics_font_family = local_settings.lyrics_font_family;
+        store.settings.theme_entire_player = local_settings.theme_entire_player;
+        store.settings.navigation_blur = local_settings.navigation_blur;
+        store.settings.lyrics_secondary_gap = local_settings.lyrics_secondary_gap;
     }
 }
 #[derive(Clone, Default, Deserialize)]
@@ -167,12 +537,20 @@ enum Action {
     Push(CloudLibrary),
     Pull,
     Account,
+    SaveProfile { email: String, name: String, nickname: String, bio: String, discord: String, current_password: String },
+    ChangePassword { current_password: String, new_password: String },
+    #[cfg(not(target_arch = "wasm32"))]
+    UploadAvatar(String),
+    #[cfg(target_arch = "wasm32")]
+    UploadAvatar(Vec<u8>),
+    DeleteAvatar,
     Files,
     Device,
     Poll(String),
     Logout,
     Upload(String),
     Auto(Vec<String>),
+    CatalogImport(Vec<(String, String, CatalogImportTrack)>),
     Check,
     Download(FileInfo),
 }
@@ -180,8 +558,12 @@ enum Output {
     Unchanged,
     Session(Session),
     Pushed(u64, String),
+    CatalogQueued(Vec<(String, String)>, usize, Option<String>),
     Pulled(u64, CloudLibrary, bool),
-    Account(Value),
+    Account(Value, Option<image::RgbaImage>),
+    Profile(Value),
+    Avatar(Value, Option<image::RgbaImage>),
+    Password,
     Files(Vec<FileInfo>),
     Device(Value),
     Pending(u64),
@@ -207,6 +589,12 @@ fn base(value: &str) -> Result<String, String> {
 extern "C" {
     #[wasm_bindgen::prelude::wasm_bindgen(js_name=accountRequest)]
     fn browser_request(url: &str, method: &str, token: &str, body: &str) -> js_sys::Promise;
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name=accountBinaryRequest)]
+    fn browser_binary_request(url: &str, method: &str, token: &str, content_type: &str, bytes: &js_sys::Uint8Array) -> js_sys::Promise;
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name=accountAvatarRequest)]
+    fn browser_avatar_request(url: &str, token: &str) -> js_sys::Promise;
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name=pickAccountAvatar)]
+    fn browser_pick_avatar() -> js_sys::Promise;
     #[wasm_bindgen::prelude::wasm_bindgen(js_name=uploadAccountFile)]
     fn browser_upload(api: &str, token: &str, path: &str) -> js_sys::Promise;
     #[wasm_bindgen::prelude::wasm_bindgen(js_name=downloadAccountFile)]
@@ -295,6 +683,99 @@ async fn request(
             .map_err(|_| "Некоректна відповідь API".into())
     }
 }
+async fn request_binary_json(
+    s: &Session,
+    path: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> Result<Value, String> {
+    if bytes.is_empty() || bytes.len() > 2 * 1024 * 1024 {
+        return Err("Аватар має бути розміром до 2 MiB".into());
+    }
+    let url = format!("{}/vey/{}", base(&s.api)?, path);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(45))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| "Не вдалося створити запит".to_string())?;
+        let mut req = client.put(url).header(reqwest::header::CONTENT_TYPE, content_type);
+        if !s.token.is_empty() { req = req.bearer_auth(&s.token); }
+        let response = req.body(bytes.to_vec()).send().await
+            .map_err(|e| format!("Помилка мережі: {}", e.without_url()))?;
+        let status = response.status().as_u16();
+        let body = response.bytes().await.map_err(|_| "Відповідь API перервана".to_string())?;
+        if body.len() > 2 * 1024 * 1024 { return Err("Відповідь API завелика".into()); }
+        let data: Value = serde_json::from_slice(&body).map_err(|_| format!("API повернув помилкову відповідь ({status})"))?;
+        if status == 401 { return Err("Сесія завершилася. Увійдіть знову.".into()); }
+        if status >= 300 { return Err(data["error"]["message"].as_str().unwrap_or("Запит відхилено").to_string()); }
+        Ok(data)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let payload = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
+        payload.copy_from(bytes);
+        let data = wasm_bindgen_futures::JsFuture::from(browser_binary_request(&url, "PUT", &s.token, content_type, &payload))
+            .await.map_err(|e| e.as_string().unwrap_or_else(|| "Помилка мережі".into()))?;
+        serde_json::from_str(&data.as_string().unwrap_or_default()).map_err(|_| "Некоректна відповідь API".into())
+    }
+}
+async fn request_avatar(s: &Session) -> Result<Vec<u8>, String> {
+    let url = format!("{}/vey/account/avatar", base(&s.api)?);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(45))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| "Не вдалося створити запит".to_string())?;
+        let mut req = client.get(url);
+        if !s.token.is_empty() { req = req.bearer_auth(&s.token); }
+        let mut response = req.send().await.map_err(|e| format!("Помилка мережі: {}", e.without_url()))?;
+        let status = response.status().as_u16();
+        if status == 404 { return Ok(Vec::new()); }
+        if status == 401 { return Err("Сесія завершилася. Увійдіть знову.".into()); }
+        if status >= 300 { return Err("Не вдалося завантажити аватар".into()); }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| "Відповідь API перервана".to_string())? {
+            if bytes.len() + chunk.len() > 2 * 1024 * 1024 { return Err("Аватар завеликий".into()); }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let data = wasm_bindgen_futures::JsFuture::from(browser_avatar_request(&url, &s.token))
+            .await.map_err(|e| e.as_string().unwrap_or_else(|| "Помилка мережі".into()))?;
+        let bytes = js_sys::Uint8Array::new(&data);
+        if bytes.length() > 2 * 1024 * 1024 { return Err("Аватар завеликий".into()); }
+        Ok(bytes.to_vec())
+    }
+}
+fn decode_avatar(bytes: &[u8]) -> Option<image::RgbaImage> {
+    if bytes.is_empty() { None } else { crate::artwork::decode(bytes).ok() }
+}
+async fn load_account(s: &Session) -> Result<Output, String> {
+    let profile = request(s, "account", "GET", None).await?;
+    let avatar = if profile["avatar_url"].as_str().is_some_and(|value| !value.is_empty()) {
+        decode_avatar(&request_avatar(s).await?)
+    } else { None };
+    Ok(Output::Account(profile, avatar))
+}
+async fn upload_avatar(s: &Session, bytes: Vec<u8>) -> Result<Output, String> {
+    let format = image::guess_format(&bytes).map_err(|_| "Оберіть JPEG, PNG або WebP зображення".to_string())?;
+    let content_type = match format {
+        image::ImageFormat::Jpeg => "image/jpeg",
+        image::ImageFormat::Png => "image/png",
+        image::ImageFormat::WebP => "image/webp",
+        _ => return Err("Оберіть JPEG, PNG або WebP зображення".into()),
+    };
+    if crate::artwork::decode(&bytes).is_err() { return Err("Не вдалося прочитати це зображення".into()); }
+    let profile = request_binary_json(s, "account/avatar", content_type, &bytes).await?;
+    let avatar = decode_avatar(&request_avatar(s).await?);
+    Ok(Output::Avatar(profile, avatar))
+}
 fn login_result(mut s: Session, value: Value) -> Result<Session, String> {
     s.token = value
         .get("access_token")
@@ -353,13 +834,34 @@ async fn work(s: Session, action: Action) -> Result<Output, String> {
             };
             let sent =
                 serde_json::to_string(&data).map_err(|_| "Помилка бібліотеки".to_string())?;
-            let v = request(
+            let sent_value =
+                serde_json::to_value(&data).map_err(|_| "Помилка бібліотеки".to_string())?;
+            let result = request(
                 &s,
                 "library",
                 "PUT",
-                Some(json!({"revision":revision,"library":data})),
+                Some(json!({"revision":revision,"library":data.clone()})),
             )
-            .await?;
+            .await;
+            // Older Workers reject unknown library fields. Keep ordinary library
+            // sync working until the Worker supports recommendation snapshots.
+            let v = match result {
+                Err(ref e) if e.contains("Unsupported library field") => {
+                    let mut legacy = serde_json::to_value(&data).map_err(|_| "Помилка бібліотеки".to_string())?;
+                    if let Some(object) = legacy.as_object_mut() { object.remove("recommendations"); }
+                    request(&s, "library", "PUT", Some(json!({"revision":revision,"library":legacy}))).await?
+                }
+                Err(error) => {
+                    // The server can commit a PUT and lose its response. Read
+                    // back before treating a retry's revision conflict as a
+                    // real two-device edit.
+                    match request(&s, "library", "GET", None).await {
+                        Ok(remote) if remote["library"] == sent_value => remote,
+                        _ => return Err(error),
+                    }
+                }
+                Ok(value) => value,
+            };
             Ok(Output::Pushed(
                 v["revision"].as_u64().ok_or("Немає версії бібліотеки")?,
                 sent,
@@ -375,7 +877,40 @@ async fn work(s: Session, action: Action) -> Result<Output, String> {
                 .map_err(|_| "Непідтримувана бібліотека".to_string())?;
             Ok(Output::Pulled(revision, data, true))
         }
-        Action::Account => Ok(Output::Account(request(&s, "account", "GET", None).await?)),
+        Action::Account => load_account(&s).await,
+        Action::SaveProfile { email, name, nickname, bio, discord, current_password } => {
+            let value = request(&s, "account", "PATCH", Some(json!({
+                "email": email,
+                "display_name": name,
+                "nickname": nickname,
+                "bio": bio,
+                "discord": discord,
+                "current_password": current_password,
+            }))).await?;
+            Ok(Output::Profile(value))
+        }
+        Action::ChangePassword { current_password, new_password } => {
+            request(&s, "account/password", "POST", Some(json!({
+                "current_password": current_password,
+                "new_password": new_password,
+            }))).await?;
+            Ok(Output::Password)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Action::UploadAvatar(path) => {
+            let metadata = std::fs::metadata(&path).map_err(|_| "Не вдалося відкрити зображення".to_string())?;
+            if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 2 * 1024 * 1024 {
+                return Err("Аватар має бути розміром до 2 MiB".into());
+            }
+            let bytes = std::fs::read(path).map_err(|_| "Не вдалося прочитати зображення".to_string())?;
+            upload_avatar(&s, bytes).await
+        }
+        #[cfg(target_arch = "wasm32")]
+        Action::UploadAvatar(bytes) => upload_avatar(&s, bytes).await,
+        Action::DeleteAvatar => {
+            request(&s, "account/avatar", "DELETE", None).await?;
+            load_account(&s).await
+        }
         Action::Files => {
             let v = request(&s, "files", "GET", None).await?;
             Ok(Output::Files(
@@ -438,6 +973,30 @@ async fn work(s: Session, action: Action) -> Result<Output, String> {
                 Ok(Output::Unchanged)
             }
         }
+        Action::CatalogImport(items) => {
+            let mut acknowledged = Vec::new();
+            let mut accepted = 0usize;
+            let mut failure = None;
+            for batch in items.chunks(100).take(10) {
+                let payload = batch.iter().map(|(_, _, item)| item).collect::<Vec<_>>();
+                match request(&s, "catalog/import", "POST", Some(json!({"items":payload}))).await {
+                    Ok(value) => {
+                        let count = value["accepted"].as_u64().unwrap_or(0) as usize;
+                        if count != batch.len() {
+                            failure = Some("Blueberry прийняв лише частину пакета каталогу".to_string());
+                            break;
+                        }
+                        accepted += count;
+                        acknowledged.extend(batch.iter().map(|(id, fingerprint, _)| (id.clone(), fingerprint.clone())));
+                    }
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+            }
+            Ok(Output::CatalogQueued(acknowledged, accepted, failure))
+        }
         Action::Download(file) => {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -497,6 +1056,7 @@ pub(crate) fn snapshot(store: &Store) -> Store {
         likes: store.likes.clone(),
         playlists: store.playlists.clone(),
         history: store.history.clone(),
+        recommendations: store.recommendations.clone(),
         offsets: store.offsets.clone(),
         downloads: store.downloads.clone(),
         lyrics_choices: store.lyrics_choices.clone(),
@@ -810,6 +1370,37 @@ fn clear_device_ui(ui: &MainWindow) {
     ui.set_account_seconds_left(0);
     ui.set_account_qr(slint::Image::default());
 }
+fn clear_profile_ui(ui: &MainWindow) {
+    ui.set_account_nickname("".into());
+    ui.set_account_bio("".into());
+    ui.set_account_discord("".into());
+    ui.set_account_created_at("".into());
+    ui.set_account_avatar(slint::Image::default());
+}
+fn apply_profile(session: &mut Session, ui: &MainWindow, value: &Value) {
+    if let Some(id) = value["id"].as_str() { session.id = id.to_owned(); }
+    session.email = value["email"].as_str().unwrap_or_default().to_owned();
+    session.name = value["display_name"].as_str().unwrap_or_default().to_owned();
+    session.nickname = value["nickname"].as_str().unwrap_or_default().to_owned();
+    session.bio = value["bio"].as_str().unwrap_or_default().to_owned();
+    session.discord = value["discord"].as_str().unwrap_or_default().to_owned();
+    session.avatar_url = value["avatar_url"].as_str().unwrap_or_default().to_owned();
+    session.created_at = value["created_at"].as_str().unwrap_or_default().to_owned();
+    ui.set_account_email(session.email.clone().into());
+    ui.set_account_name(session.name.clone().into());
+    ui.set_account_nickname(session.nickname.clone().into());
+    ui.set_account_bio(session.bio.clone().into());
+    ui.set_account_discord(session.discord.clone().into());
+    ui.set_account_created_at(session.created_at.clone().into());
+}
+fn set_avatar_image(ui: &MainWindow, image: Option<image::RgbaImage>) {
+    let image = image.map(|pixels| slint::Image::from_rgba8(
+        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+            pixels.as_raw(), pixels.width(), pixels.height(),
+        ),
+    )).unwrap_or_default();
+    ui.set_account_avatar(image);
+}
 
 pub fn install(
     w: &MainWindow,
@@ -844,6 +1435,13 @@ pub fn install(
     w.set_account_api(session.api.clone().into());
     w.set_account_email(session.email.clone().into());
     w.set_account_name(session.name.clone().into());
+    w.set_account_nickname(session.nickname.clone().into());
+    w.set_account_bio(session.bio.clone().into());
+    w.set_account_discord(session.discord.clone().into());
+    w.set_account_created_at(session.created_at.clone().into());
+    w.set_account_avatar(slint::Image::default());
+    w.set_account_current_password("".into());
+    w.set_account_new_password("".into());
     w.set_account_signed_in(!session.token.is_empty());
     w.set_account_premium(session.premium);
     w.set_account_auto_sync(session.auto_sync);
@@ -870,7 +1468,7 @@ pub fn install(
             let tx = tx.clone();
             let transfer = matches!(
                 &action,
-                Action::Upload(_) | Action::Auto(_) | Action::Download(_)
+                Action::Upload(_) | Action::Auto(_) | Action::Download(_) | Action::UploadAvatar(_)
             );
             #[cfg(not(target_arch = "wasm32"))]
             runtime.spawn(async move {
@@ -910,6 +1508,8 @@ pub fn install(
         let start = start.clone();
         let get = get.clone();
         let dispatch = dispatch.clone();
+        #[cfg(target_arch = "wasm32")]
+        let tx = tx.clone();
         w.on_account_command(move |command| {
             let Some(ui) = weak.upgrade() else {
                 return;
@@ -944,6 +1544,30 @@ pub fn install(
             if state.borrow().active {
                 return;
             }
+            #[cfg(target_arch = "wasm32")]
+            if command == "upload-avatar" {
+                let promise = browser_pick_avatar();
+                let (session, generation) = {
+                    let mut a = state.borrow_mut();
+                    a.active = true;
+                    (a.session.clone(), a.generation)
+                };
+                ui.set_account_busy(true);
+                ui.set_account_status("Виберіть зображення для аватара".into());
+                let tx = tx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let result = async {
+                        let value = wasm_bindgen_futures::JsFuture::from(promise).await
+                            .map_err(|e| e.as_string().unwrap_or_else(|| "Не вдалося відкрити вибір зображення".into()))?;
+                        if value.is_null() || value.is_undefined() { return Ok(Output::Unchanged); }
+                        let bytes = js_sys::Uint8Array::new(&value).to_vec();
+                        if bytes.is_empty() { return Ok(Output::Unchanged); }
+                        work(session, Action::UploadAvatar(bytes)).await
+                    }.await;
+                    let _ = tx.send((generation, result));
+                });
+                return;
+            }
             if command == "logout" {
                 let mut a = state.borrow_mut();
                 let old = a.session.clone();
@@ -960,6 +1584,13 @@ pub fn install(
                 ui.set_account_signed_in(false);
                 ui.set_account_premium(false);
                 ui.set_account_auto_upload(false);
+                ui.set_account_avatar(slint::Image::default());
+                ui.set_account_nickname("".into());
+                ui.set_account_bio("".into());
+                ui.set_account_discord("".into());
+                ui.set_account_created_at("".into());
+                ui.set_account_current_password("".into());
+                ui.set_account_new_password("".into());
                 clear_device_ui(&ui);
                 ui.set_account_cloud_files(slint::ModelRc::default());
                 ui.set_account_status("Ви вийшли з акаунта".into());
@@ -1017,6 +1648,35 @@ pub fn install(
                 "qr" => Action::Device,
                 "logout" => Action::Logout,
                 "refresh" => Action::Account,
+                "save-profile" => {
+                    let email = ui.get_account_email().to_string();
+                    let name = ui.get_account_name().to_string();
+                    let nickname = ui.get_account_nickname().to_string();
+                    let bio = ui.get_account_bio().to_string();
+                    let discord = ui.get_account_discord().to_string();
+                    let current_password = ui.get_account_current_password().to_string();
+                    ui.set_account_current_password("".into());
+                    Action::SaveProfile { email, name, nickname, bio, discord, current_password }
+                }
+                "change-password" => {
+                    let current_password = ui.get_account_current_password().to_string();
+                    let new_password = ui.get_account_new_password().to_string();
+                    if current_password.is_empty() || new_password.len() < 10 {
+                        ui.set_account_status("Вкажіть поточний пароль і новий пароль від 10 символів".into());
+                        return;
+                    }
+                    ui.set_account_current_password("".into());
+                    ui.set_account_new_password("".into());
+                    Action::ChangePassword { current_password, new_password }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                "upload-avatar" => {
+                    let Some(path) = crate::dialogs::FileDialog::new()
+                        .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
+                        .pick_file() else { return; };
+                    Action::UploadAvatar(path.to_string_lossy().into_owned())
+                }
+                "delete-avatar" => Action::DeleteAvatar,
                 "files" => Action::Files,
                 "push" => Action::Push(CloudLibrary::capture(&get(), ui.get_account_auto_upload())),
                 "pull" => Action::Pull,
@@ -1065,10 +1725,14 @@ pub fn install(
             let mut a=state.borrow_mut();if generation!=a.generation{continue;}a.active=false;ui.set_account_busy(false);
             match result {
                 Ok(Output::Unchanged)=>{}
-                Ok(Output::Session(s))=>{a.verified=false;a.session=s;ui.set_account_email(a.session.email.clone().into());ui.set_account_name(a.session.name.clone().into());a.device=None;a.last_snapshot.clear();ui.set_account_signed_in(true);ui.set_account_premium(a.session.premium);clear_device_ui(&ui);close_login_page();ui.set_account_status("Вхід виконано. Збережіть дані пристрою або відновіть хмарну бібліотеку.".into());}
+                Ok(Output::Session(s))=>{a.verified=false;a.session=s;ui.set_account_email(a.session.email.clone().into());ui.set_account_name(a.session.name.clone().into());clear_profile_ui(&ui);a.device=None;a.last_snapshot.clear();ui.set_account_signed_in(true);ui.set_account_premium(a.session.premium);clear_device_ui(&ui);close_login_page();ui.set_account_status("Вхід виконано. Збережіть дані пристрою або відновіть хмарну бібліотеку.".into());}
                 Ok(Output::Pushed(revision,sent))=>{a.session.revision=Some(revision);a.last_snapshot=sent;ui.set_account_status("Бібліотеку збережено у хмарі".into());}
-                Ok(Output::Pulled(revision,cloud,force))=>{if !force && a.last_snapshot!=serde_json::to_string(&CloudLibrary::capture(&get(),ui.get_account_auto_upload())).unwrap_or_default(){a.session.auto_sync=false;ui.set_account_auto_sync(false);ui.set_account_status("Дані змінилися на обох пристроях. Виберіть зберегти або відновити бібліотеку.".into());let _=save_session(&a.session);continue;}a.session.revision=Some(revision);a.session.auto_upload=cloud.auto_upload;ui.set_account_auto_upload(cloud.auto_upload);let mut store=get();cloud.restore(&mut store);apply(store);a.last_snapshot=serde_json::to_string(&CloudLibrary::capture(&get(),a.session.auto_upload)).unwrap_or_default();ui.set_account_status("Бібліотеку й налаштування відновлено".into());}
-                Ok(Output::Account(value))=>{a.verified=true;a.session.premium=value["premium"].as_bool().unwrap_or(false);ui.set_account_premium(a.session.premium);ui.set_account_status(if a.session.premium{"Premium · доступ розробника або тестувальника"}else{"Базовий акаунт · синхронізація налаштувань, улюбленого та історії"}.into());}
+                Ok(Output::CatalogQueued(items,count,failure))=>{a.session.catalog_uploaded.extend(items);ui.set_account_status(match failure{Some(error)=>format!("До черги Blueberry додано {count}; решту буде повторено автоматично ({error})"),None=>format!("До черги Blueberry додано {count} треків")}.into());}
+                Ok(Output::Pulled(revision,cloud,force))=>{if !force && a.last_snapshot!=serde_json::to_string(&CloudLibrary::capture(&get(),ui.get_account_auto_upload())).unwrap_or_default(){a.session.auto_sync=false;ui.set_account_auto_sync(false);ui.set_account_status("Дані змінилися на обох пристроях. Виберіть зберегти або відновити бібліотеку.".into());let _=save_session(&a.session);continue;}a.session.revision=Some(revision);a.session.auto_upload=cloud.auto_upload;ui.set_account_auto_upload(cloud.auto_upload);let mut store=get();cloud.restore(&mut store);apply(store);a.last_snapshot=if revision==0&&a.session.auto_sync{String::new()}else{serde_json::to_string(&CloudLibrary::capture(&get(),a.session.auto_upload)).unwrap_or_default()};ui.set_account_status("Бібліотеку й налаштування відновлено".into());}
+                Ok(Output::Account(value,avatar))=>{a.verified=true;a.session.premium=value["premium"].as_bool().unwrap_or(false);apply_profile(&mut a.session,&ui,&value);set_avatar_image(&ui,avatar);ui.set_account_premium(a.session.premium);if a.session.revision.is_none()&&a.last_snapshot.is_empty(){a.last_snapshot=serde_json::to_string(&CloudLibrary::capture(&get(),a.session.auto_upload)).unwrap_or_default();}ui.set_account_status(if a.session.premium{"Premium · доступ розробника або тестувальника"}else{"Базовий акаунт · синхронізація налаштувань, улюбленого та історії"}.into());}
+                Ok(Output::Profile(value))=>{apply_profile(&mut a.session,&ui,&value);ui.set_account_status("Дані акаунта збережено".into());}
+                Ok(Output::Avatar(value,avatar))=>{apply_profile(&mut a.session,&ui,&value);set_avatar_image(&ui,avatar);ui.set_account_status("Аватар оновлено".into());}
+                Ok(Output::Password)=>{ui.set_account_current_password("".into());ui.set_account_new_password("".into());ui.set_account_status("Пароль змінено. Інші Vey-сесії завершено".into());}
                 Ok(Output::Files(files))=>{ui.set_account_cloud_files(Rc::new(slint::VecModel::from(files.iter().map(|f|format!("{} · {:.1} MiB",f.name,f.size as f64/1048576.).into()).collect::<Vec<slint::SharedString>>())).into());a.files=files;ui.set_account_status("Хмарні файли оновлено".into());}
                 Ok(Output::Device(value))=>{
                     if let (Some(code),Some(uri),Some(public_code))=(value["device_code"].as_str(),value.get("verification_uri_complete").or_else(||value.get("verification_uri")).and_then(Value::as_str),value["user_code"].as_str()) {
@@ -1088,10 +1752,10 @@ pub fn install(
                     } else {clear_device_ui(&ui);close_login_page();ui.set_account_status("Не вдалося створити код входу".into());}
                 }
                 Ok(Output::Pending(extra))=>{a.poll_interval+=extra;a.next_poll=crate::services::now_ms()+a.poll_interval;}
-                Ok(Output::Logout)=>{a.generation+=1;a.session=Session{api:a.session.api.clone(),email:a.session.email.clone(),..Session::default()};a.files.clear();a.device=None;ui.set_account_signed_in(false);ui.set_account_premium(false);ui.set_account_auto_upload(false);ui.set_account_status("Ви вийшли з акаунта".into());}
+                Ok(Output::Logout)=>{a.generation+=1;a.session=Session{api:a.session.api.clone(),email:a.session.email.clone(),..Session::default()};a.files.clear();a.device=None;ui.set_account_signed_in(false);ui.set_account_premium(false);ui.set_account_auto_upload(false);clear_profile_ui(&ui);ui.set_account_status("Ви вийшли з акаунта".into());}
                 Ok(Output::Uploaded(file,path,fingerprint))=>{a.session.uploaded.insert(fingerprint);let mut store=get();add_file(&mut store,&file,path.clone(),Some(&path));apply(store);a.files.push(file);ui.set_account_status("Аудіофайл збережено у приватній хмарі".into());}
                 Ok(Output::Downloaded(file,path))=>{let mut store=get();add_file(&mut store,&file,path,None);apply(store);ui.set_account_status("Пісню додано до бібліотеки пристрою".into());}
-                Err(error)=>{a.device=None;if a.session.token.is_empty(){close_login_page();clear_device_ui(&ui);}if error=="Сесія завершилася. Увійдіть знову."{a.session.token.clear();a.session.revision=None;a.files.clear();ui.set_account_signed_in(false);ui.set_account_premium(false);ui.set_account_cloud_files(slint::ModelRc::default());}ui.set_account_status(error.into());if a.session.revision.is_some(){a.session.auto_sync=false;ui.set_account_auto_sync(false);}}
+                Err(error)=>{a.device=None;if a.session.token.is_empty(){close_login_page();clear_device_ui(&ui);}if error=="Сесія завершилася. Увійдіть знову."{a.session.token.clear();a.session.revision=None;a.files.clear();ui.set_account_signed_in(false);ui.set_account_premium(false);ui.set_account_cloud_files(slint::ModelRc::default());clear_profile_ui(&ui);}ui.set_account_status(error.clone().into());if a.session.revision.is_some()&&(error.contains("Library changed on another device")||error.contains("Conflict")){a.session.auto_sync=false;ui.set_account_auto_sync(false);}}
             }
             if let Err(error)=save_session(&a.session){ui.set_account_status(error.into());}
         }
@@ -1109,7 +1773,7 @@ pub fn install(
         }
         if now<a.next_sync && now<a.next_ui{return;}
         let showing=ui.get_active_view()=="settings"&&ui.get_settings_section()=="account";
-        if !showing&&(a.session.token.is_empty()||now<a.next_sync){a.next_ui=now+3000;return;}
+        if !showing&&a.session.token.is_empty(){a.next_ui=now+3000;return;}
         let store=get();
         if now>=a.next_ui{
             a.next_ui=now+3000;
@@ -1118,14 +1782,17 @@ pub fn install(
             let model=ui.get_account_local_files();
             if model.row_count()!=names.len()||names.iter().enumerate().any(|(i,n)|model.row_data(i).as_ref()!=Some(n)){ui.set_account_local_files(Rc::new(slint::VecModel::from(names)).into());}
         }
-        if !a.session.token.is_empty()&&now>=a.next_sync{
-            a.next_sync=now+15000;
+        if !a.session.token.is_empty(){
+            let check_due=now>=a.next_sync;
+            if check_due{a.next_sync=now+15000;}
             let current=CloudLibrary::capture(&store,a.session.auto_upload);let text=serde_json::to_string(&current).unwrap_or_default();
+            let pending_catalog=if check_due{catalog_candidates(&store,&a.session.catalog_uploaded)}else{Vec::new()};
             let action=if !a.verified{Some(Action::Account)}
-                else if a.session.revision.is_none(){None}
+                else if a.session.revision.is_none(){(check_due&&a.session.auto_sync).then_some(Action::Check)}
                 else if a.session.auto_sync&&a.last_snapshot!=text{Some(Action::Push(current))}
-                else if a.session.auto_upload&&a.session.premium{Some(Action::Auto(store.tracks.iter().filter(|t|!cloud_key(&t.path)).map(|t|t.path.clone()).collect()))}
-                else if a.session.auto_sync{Some(Action::Check)}else{None};
+                else if check_due&&!pending_catalog.is_empty(){Some(Action::CatalogImport(pending_catalog))}
+                else if check_due&&a.session.auto_upload&&a.session.premium{Some(Action::Auto(store.tracks.iter().filter(|t|!cloud_key(&t.path)).map(|t|t.path.clone()).collect()))}
+                else if check_due&&a.session.auto_sync{Some(Action::Check)}else{None};
             if let Some(action)=action{CANCEL_UPLOAD.store(false,std::sync::atomic::Ordering::Relaxed);a.active=true;ui.set_account_busy(true);dispatch(a.generation,a.session.clone(),action);}
         }
     });
@@ -1160,6 +1827,89 @@ fn open_page(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_retry_keeps_public_metadata_and_cached_lyrics_only_until_acknowledged() {
+        let track = Track {
+            path: "C:/Music/song.flac".into(),
+            video_id: Some("abcdefghijk".into()),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            duration_secs: 181.0,
+            thumbnail_url: "https://img.youtube.com/vi/abcdefghijk/hqdefault.jpg".into(),
+            ..Default::default()
+        };
+        let mut store = Store {
+            tracks: vec![track.clone()],
+            ..Default::default()
+        };
+        store.cache_lyrics(
+            track.path.clone(),
+            vec![crate::lyrics::LyricsAlternative {
+                provider: "local".into(),
+                sync_type: crate::lyrics::LyricsSyncType::Synced,
+                format: "lrc".into(),
+                lyrics: crate::lyrics::ParsedLyrics {
+                    lines: vec![crate::lyrics::LyricLine {
+                        start_ms: 1250,
+                        text: "歌詞".into(),
+                        romanization: "kashi".into(),
+                        translation: "Переклад".into(),
+                        translations: BTreeMap::from([("uk".into(), "Переклад".into())]),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            }],
+        );
+
+        let pending = catalog_candidates(&store, &BTreeMap::new());
+        assert_eq!(pending.len(), 1);
+        let (id, fingerprint, item) = &pending[0];
+        assert_eq!(id, "yt://abcdefghijk");
+        assert!(item.path.starts_with("yt://"));
+        assert!(item.thumbnail_url.starts_with("https://"));
+        assert!(item.lyrics_text.contains("歌詞"));
+        assert!(item.lyrics_tracks.iter().any(|layer| layer.kind == "romanization" && layer.text.contains("kashi")));
+        assert!(item.lyrics_tracks.iter().any(|layer| layer.kind == "translation" && layer.text.contains("Переклад")));
+        let public_json = serde_json::to_string(item).unwrap();
+        assert!(!public_json.contains("C:/Music"));
+        assert!(!public_json.contains("audio"));
+
+        let acknowledged = BTreeMap::from([(id.clone(), fingerprint.clone())]);
+        assert!(catalog_candidates(&store, &acknowledged).is_empty());
+        store.tracks[0].album = "Updated album".into();
+        assert_eq!(catalog_candidates(&store, &acknowledged).len(), 1);
+    }
+
+    #[test]
+    fn imported_playlists_use_deployed_cloud_contract_and_keep_local_appearance() {
+        let mut store = Store::default();
+        let imported = crate::library_import::ImportedPlaylist {
+            id: "youtube-PL1234567890".into(),
+            name: "Imported".into(),
+            tracks: vec![Track {
+                path: "yt://abcdefghijk".into(),
+                video_id: Some("abcdefghijk".into()),
+                ..Default::default()
+            }],
+        };
+        crate::library_import::apply(&mut store, &imported, None).unwrap();
+        store.settings.home_layout = 4;
+        store.settings.home_rotate = true;
+        store.settings.lyrics_theme_css = "local style".into();
+        let cloud = CloudLibrary::capture(&store, false);
+        let value = serde_json::to_value(&cloud).unwrap();
+        assert_eq!(value["playlists"][0]["tracks"][0], "yt://abcdefghijk");
+        assert!(value["settings"].get("home_layout").is_none());
+        assert!(value["settings"].get("lyrics_theme_css").is_none());
+        let received: CloudLibrary = serde_json::from_value(value).unwrap();
+        received.restore(&mut store);
+        assert_eq!(store.settings.home_layout, 4);
+        assert!(store.settings.home_rotate);
+        assert_eq!(store.settings.lyrics_theme_css, "local style");
+    }
     #[test]
     fn cloud_snapshot_excludes_local_paths_and_credentials_and_preserves_settings() {
         let mut store = Store::default();
@@ -1183,17 +1933,20 @@ mod tests {
             id: "mixed".into(),
             name: "My playlist".into(),
             tracks: vec![remote.path.clone(), local.path.clone()],
+            ..Default::default()
         });
         store.history = vec![
             History {
                 track: remote.clone(),
                 played_at: 123,
                 play_count: 4,
+                ..Default::default()
             },
             History {
                 track: local.clone(),
                 played_at: 124,
                 play_count: 2,
+                ..Default::default()
             },
         ];
         store
@@ -1225,6 +1978,98 @@ mod tests {
         assert_eq!(store.history.len(), 2);
         assert!(store.legacy.contains_key("password"));
     }
+
+    #[test]
+    fn recommendation_profile_is_private_and_restores_from_account_snapshot() {
+        let mut local = Store::default();
+        local.recommendations.profile_updated_at = 10;
+        local.recommendations.track_weights.insert("yt://abcdefghijk".into(), 7);
+        local.recommendations.track_weights.insert("C:/private/song.mp3".into(), 9);
+        let captured = CloudLibrary::capture(&local, false);
+        assert!(captured.recommendations.track_weights.contains_key("yt://abcdefghijk"));
+        assert!(!captured.recommendations.track_weights.contains_key("C:/private/song.mp3"));
+        assert!(!serde_json::to_string(&captured).unwrap().contains("C:/private"));
+
+        let restored = CloudLibrary {
+            recommendations: RecommendationModel {
+                schema_version: 1,
+                profile_updated_at: 20,
+                updated_at: 30,
+                personalized: true,
+                track_weights: BTreeMap::from([("yt://abcdefghijk".into(), 42)]),
+                artist_weights: BTreeMap::from([("artist".into(), 11)]),
+                disliked_tracks: BTreeSet::from(["yt://lmnopqrstuv".into()]),
+                tracks: vec![Track {
+                    path: "yt://lmnopqrstuv".into(),
+                    video_id: Some("lmnopqrstuv".into()),
+                    title: "Recommended".into(),
+                    ..Default::default()
+                }],
+            },
+            ..Default::default()
+        };
+        restored.restore(&mut local);
+        assert_eq!(local.recommendations.profile_updated_at, 20);
+        assert_eq!(local.recommendations.track_weights["yt://abcdefghijk"], 42);
+        assert!(local.recommendations.disliked_tracks.contains("yt://lmnopqrstuv"));
+        assert_eq!(local.recommendations.tracks[0].title, "Recommended");
+    }
+
+    #[test]
+    fn tagged_local_files_sync_under_their_video_key() {
+        let local = Track {
+            path: "C:/private/music/song.mp3".into(),
+            video_id: Some("abcdefghijk".into()),
+            title: "Local song".into(),
+            ..Default::default()
+        };
+        let mut store = Store {
+            tracks: vec![local.clone()],
+            ..Default::default()
+        };
+        store.likes.insert(local.path.clone());
+        store.playlists.push(Playlist {
+            id: "mix".into(),
+            name: "Mix".into(),
+            tracks: vec![local.path.clone()],
+            ..Default::default()
+        });
+        store.history.push(History {
+            track: local.clone(),
+            played_at: 10,
+            play_count: 3,
+            ..Default::default()
+        });
+        store.offsets.insert(local.path.clone(), 500);
+        store.lyrics_choices.insert(
+            local.path.clone(),
+            crate::services::LyricsChoice {
+                provider: "auto".into(),
+                format: "lrc".into(),
+                sync_type: crate::lyrics::LyricsSyncType::Synced,
+                fingerprint: "match".into(),
+            },
+        );
+        let cloud = CloudLibrary::capture(&store, false);
+        let text = serde_json::to_string(&cloud).unwrap();
+        assert!(!text.contains("C:/private"));
+        assert_eq!(cloud.tracks[0].path, "yt://abcdefghijk");
+        assert_eq!(cloud.likes.iter().collect::<Vec<_>>(), ["yt://abcdefghijk"]);
+        assert_eq!(cloud.playlists[0].tracks, ["yt://abcdefghijk"]);
+        assert_eq!(cloud.history[0].track.path, "yt://abcdefghijk");
+        assert_eq!(cloud.offsets["yt://abcdefghijk"], 500);
+        assert!(cloud.lyrics_choices.contains_key("yt://abcdefghijk"));
+
+        let mut restored = store.clone();
+        cloud.restore(&mut restored);
+        assert!(restored.tracks.iter().any(|t| t.path == local.path));
+        assert!(restored.likes.contains("yt://abcdefghijk"));
+        assert!(!restored.likes.contains(&local.path));
+        assert_eq!(restored.playlists[0].tracks, ["yt://abcdefghijk"]);
+        assert_eq!(restored.history.len(), 1);
+        assert_eq!(restored.offsets["yt://abcdefghijk"], 500);
+    }
+
     #[test]
     fn api_url_cannot_embed_credentials_or_downgrade_https() {
         assert_eq!(
@@ -1312,6 +2157,7 @@ mod tests {
                 track: track.clone(),
                 played_at: 1234,
                 play_count: 7,
+                ..Default::default()
             });
             store.lyrics_choices.insert(
                 track.path.clone(),

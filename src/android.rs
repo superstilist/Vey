@@ -135,6 +135,21 @@ pub fn bridge_poll() -> Result<String, String> {
     })
 }
 
+pub fn media_update(payload: &str) -> Result<(), String> {
+    bridge_call("media", payload)
+}
+
+pub fn media_poll() -> Result<String, String> {
+    with_activity(&app()?, |env, activity| {
+        let class = bridge_class(env, activity)?;
+        let class: &JClass = class.as_obj().into();
+        let value = env
+            .call_static_method(class, "mediaPoll", "()Ljava/lang/String;", &[])?
+            .l()?;
+        Ok(env.get_string(&JString::from(value))?.into())
+    })
+}
+
 fn app() -> Result<AndroidApp, String> {
     APP.lock()
         .unwrap()
@@ -229,7 +244,8 @@ pub fn has_window_focus() -> bool {
         .unwrap_or(false)
 }
 
-/// Includes all indexed external audio (not just Music), including removable volumes.
+/// Music-flagged audio on every external volume. Voice notes, ringtones and
+/// other indexed recordings are excluded so the library count matches songs.
 /// Android 11+ permits direct file access to media granted by the audio permission.
 pub fn audio_paths() -> Result<Vec<String>, String> {
     with_activity(&app()?, |env, activity| {
@@ -251,9 +267,10 @@ pub fn audio_paths() -> Result<Vec<String>, String> {
         let projection = env.new_object_array(1, "java/lang/String", JObject::null())?;
         let column = env.new_string("_data")?;
         env.set_object_array_element(&projection, 0, &column)?;
+        let selection = env.new_string("is_music != 0")?;
         let null = JObject::null();
         let cursor = env.call_method(&resolver, "query", "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;", &[
-            JValue::Object(&uri), JValue::Object(&projection), JValue::Object(&null), JValue::Object(&null), JValue::Object(&null),
+            JValue::Object(&uri), JValue::Object(&projection), JValue::Object(&selection), JValue::Object(&null), JValue::Object(&null),
         ])?.l()?;
         if cursor.is_null() {
             return Err(jni::errors::Error::NullPtr("MediaStore cursor"));

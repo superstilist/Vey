@@ -1,0 +1,20 @@
+/* Native adaptation inspired by adidotzip/Material3 at 27624e01549beaf2f7747d3e3a44b1126e8eab6d. */
+.blyrics-container {
+    --blyrics-lyric-active-color: #e9ddff;
+    --blyrics-lyric-inactive-color: #b3a7c580;
+    --blyrics-font-family: "Roboto";
+    --blyrics-font-size: 48px;
+    --blyrics-font-weight: 700;
+    --blyrics-glow-color: #b59bfa40;
+    --blyrics-highlight-glow-radius-from: 7px;
+    --blyrics-animate-highlight-glow: 1;
+    --blyrics-animate-highlight-swipe: 1;
+    --blyrics-animate-letter-wave: 0;
+    --blyrics-animate-word-wobble: 1;
+    --vey-word-wobble-strength: 0.4;
+    --blyrics-letter-wave-duration: 900ms;
+    --blyrics-line-height: 1.4;
+    --blyrics-active-scale: 1.02;
+    --blyrics-scale: 0.94;
+    --blyrics-inactive-blur: 2px;
+}

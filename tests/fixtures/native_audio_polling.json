@@ -1,0 +1,201 @@
+{
+  "provider": "native polling regression",
+  "sync_type": "RichSync",
+  "format": "ttml",
+  "lyrics": {
+    "title": null,
+    "artist": null,
+    "album": null,
+    "offset_ms": 0,
+    "lines": [
+      {
+        "start_ms": 31317,
+        "duration_ms": 1243,
+        "text": "First sample keeps moving gently",
+        "parts": [
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 31317,
+            "duration_ms": 248,
+            "text": "First ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 31565,
+            "duration_ms": 249,
+            "text": "sample ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 31814,
+            "duration_ms": 248,
+            "text": "keeps ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 32062,
+            "duration_ms": 249,
+            "text": "moving ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 32311,
+            "duration_ms": 249,
+            "text": "gently",
+            "is_background": false
+          }
+        ]
+      },
+      {
+        "start_ms": 32728,
+        "duration_ms": 1899,
+        "text": "Second sample keeps moving gently",
+        "parts": [
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 32728,
+            "duration_ms": 379,
+            "text": "Second ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 33107,
+            "duration_ms": 380,
+            "text": "sample ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 33487,
+            "duration_ms": 380,
+            "text": "keeps ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 33867,
+            "duration_ms": 380,
+            "text": "moving ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 34247,
+            "duration_ms": 380,
+            "text": "gently",
+            "is_background": false
+          }
+        ]
+      },
+      {
+        "start_ms": 35324,
+        "duration_ms": 1360,
+        "text": "Third sample keeps moving gently",
+        "parts": [
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 35324,
+            "duration_ms": 272,
+            "text": "Third ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 35596,
+            "duration_ms": 272,
+            "text": "sample ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 35868,
+            "duration_ms": 272,
+            "text": "keeps ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 36140,
+            "duration_ms": 272,
+            "text": "moving ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 36412,
+            "duration_ms": 272,
+            "text": "gently",
+            "is_background": false
+          }
+        ]
+      },
+      {
+        "start_ms": 36778,
+        "duration_ms": 1882,
+        "text": "Fourth sample keeps moving gently",
+        "parts": [
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 36778,
+            "duration_ms": 376,
+            "text": "Fourth ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 37154,
+            "duration_ms": 376,
+            "text": "sample ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 37530,
+            "duration_ms": 377,
+            "text": "keeps ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 37907,
+            "duration_ms": 376,
+            "text": "moving ",
+            "is_background": false
+          },
+          {
+            "explicit": true,
+            "start_time_explicit": true,
+            "start_ms": 38283,
+            "duration_ms": 377,
+            "text": "gently",
+            "is_background": false
+          }
+        ]
+      }
+    ]
+  }
+}

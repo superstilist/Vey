@@ -2,12 +2,13 @@
 use playervf::{MainWindow, TrackRow};
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::{cell::Cell, rc::Rc, time::Duration};
+static OUTPUT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 fn save(window: &MainWindow, name: &str) {
     let frame = window.window().take_snapshot().unwrap();
-    std::fs::create_dir_all("docs/screenshots").unwrap();
+    let dir = OUTPUT.get().unwrap();
     image::save_buffer(
-        format!("docs/screenshots/navigation-{name}.png"),
+        dir.join(format!("navigation-{name}.png")),
         frame.as_bytes(),
         frame.width(),
         frame.height(),
@@ -39,6 +40,13 @@ fn check_corners(window: &MainWindow) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let output = std::env::args().nth(1).map(std::path::PathBuf::from);
+    if let Some(path) = &output {
+        std::fs::create_dir(path)?;
+    }
+    OUTPUT
+        .set(output.unwrap_or_else(|| "docs/screenshots".into()))
+        .unwrap();
     let window = MainWindow::new()?;
     playervf::i18n::install(&window);
     playervf::navigation_fx::install(&window);
@@ -82,8 +90,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 check_corners(&w);
                 save(&w, "settled"); w.set_active_view("library".into()); step.set(1);
             }
-            1 if (w.get_camera_travelling() && p > 0.2) || !w.get_page_moving() => {
-                if !w.get_navigation_fx_ready() && w.get_camera_travelling() && p<0.65 {return;}
+            1 if (w.get_camera_travelling() && p > 0.05) || !w.get_page_moving() => {
+                if w.get_navigation_snapshot_fx() && !w.get_navigation_fx_ready() && w.get_camera_travelling() && p<0.65 {return;}
                 if w.get_navigation_fx_ready() {
                     let pixels = w.get_navigation_to_image().to_rgba8().unwrap();
                     assert!(pixels.width() <= 768 && pixels.height() <= 640);
@@ -93,8 +101,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 save(&w, "diagonal");
                 w.set_active_view("settings".into()); step.set(2);
             }
-            2 if w.get_camera_travelling() && p > 0.3 && p < 0.9 && w.get_camera_end_y() == -1. => {
-                assert!(w.get_navigation_pulse() > 0.);
+            2 if w.get_camera_end_y() == -1. && (w.get_camera_travelling() || !w.get_page_moving()) => {
+                if w.get_camera_travelling() && p < 0.999 { assert!(w.get_navigation_pulse() > 0.); }
                 save(&w, "retarget"); step.set(3);
             }
             3 if !w.get_page_moving() => {
@@ -112,6 +120,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 w.window().set_size(slint::LogicalSize::new(390., 760.)); step.set(6);
             }
             6 => {
+                w.invoke_open_settings("audio".into());
+                assert_eq!(w.get_settings_section(), "audio", "settings commit on the input callback");
+                w.invoke_open_settings("appearance".into());
+                assert_eq!(w.get_settings_section(), "appearance", "rapid settings retarget stays immediate");
                 check_corners(&w); save(&w, "mobile-rounded");
                 println!("PASS native navigation: blur pixels verified={}, live fallback when late, diagonal travel, retarget, blur switch, reduced motion, desktop/mobile corners",blur_verified.get());
                 slint::quit_event_loop().unwrap(); step.set(7);

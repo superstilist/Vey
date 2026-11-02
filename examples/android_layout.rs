@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                     .into(),
                     detail: format!("{} композицій", index + 3).into(),
+                    art: Default::default(),
                 })
                 .collect::<Vec<_>>(),
         ))

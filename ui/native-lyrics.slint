@@ -25,7 +25,10 @@ export component NativeLyrics inherits Rectangle {
     in property <float> render-bottom: 0;
     in property <InstrumentalFrames> instrumental-frames;
     in property <int> active-line;
+    in property <int> preload-line: -1;
     in property <float> scroll-position;
+    in property <float> camera-position;
+    in property <bool> camera-driven;
     in property <float> passive-progress;
     in property <int> time-ms;
     in property <bool> timed;
@@ -36,11 +39,14 @@ export component NativeLyrics inherits Rectangle {
     in property <bool> manual;
     in property <bool> richsync;
     in property <float> size;
+    in property <float> secondary-gap: 0.65;
     in property <color> active-color;
     in property <color> inactive-color;
     in property <int> weight;
     in property <LyricStyle> style;
     in property <bool> native-text-gradients: true;
+    in property <bool> compact-padding: false;
+    in property <bool> interactive: true;
     in property <int> scroll-duration;
     in property <bool> scroll-snap;
     in property <float> scroll-ratio;
@@ -55,6 +61,7 @@ export component NativeLyrics inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
         view := LyricsView {
+            interactive: root.interactive;
             vertical-stretch: 1;
             lines: root.lines;
             focus-values: root.focus-values;
@@ -66,19 +73,21 @@ export component NativeLyrics inherits Rectangle {
             background-color: transparent;
             foreground-color: root.active-color;
             muted-color: root.timed && !root.manual
-                ? root.inactive-color.with-alpha(min(root.inactive-color.alpha, 0.5))
+                ? root.inactive-color.with-alpha(min(root.inactive-color.alpha / 255.0, 0.5))
                 : root.inactive-color;
             accent-color: root.active-color;
             font-family: root.style.family;
             font-weight: root.weight;
             lyric-size: root.size * 1px;
+            secondary-gap: root.secondary-gap;
             active-line: root.active-line;
-            scroll-position: root.scroll-position;
+            preload-line: root.preload-line;
+            scroll-position: root.camera-driven ? root.camera-position : root.scroll-position;
             target-scroll-pos-ratio: root.scroll-ratio;
             scroll-duration-ms: root.scroll-duration;
             scroll-easing-profile: 7;
-            line-padding: root.size >= 40 ? 32px : 20px;
-            scroll-padding: root.size >= 40 ? 36px : 24px;
+            line-padding: root.compact-padding ? 8px : root.size >= 40 ? 32px : 20px;
+            scroll-padding: root.compact-padding ? 8px : root.size >= 40 ? 36px : 24px;
             line-spacing: root.style.line-spacing;
             active-scale: root.style.active-scale;
             inactive-scale: root.style.inactive-scale;
@@ -89,6 +98,7 @@ export component NativeLyrics inherits Rectangle {
             swipe-duration-ratio: root.style.swipe-duration;
             finish-fill-at-cue-end: true;
             cue-bounded-glow: true;
+            filled-glow: true;
             native-text-gradients: root.native-text-gradients;
             swipe-wave-em: 0;
             swipe-lead-ratio: root.style.swipe-lead;
@@ -104,7 +114,7 @@ export component NativeLyrics inherits Rectangle {
             line-scale-duration-ms: root.reduced ? 0 : 220;
             external-focus-mix: true;
             smooth-highlight-fade: true;
-            animate-scroll: !root.reduced && !root.scroll-snap;
+            animate-scroll: !root.camera-driven && !root.reduced && !root.scroll-snap;
             animate-line-scale: !root.reduced;
             animate-instrumental: !root.reduced;
             animate-decorations: !root.reduced;

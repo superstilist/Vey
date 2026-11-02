@@ -22,6 +22,8 @@ try {
     New-Item -ItemType Directory -Force -Path $packagePath | Out-Null
     Copy-Item -LiteralPath $binaryPath -Destination (Join-Path $packagePath 'vey.exe') -Force
     Copy-Item -LiteralPath docs/RELEASE.md -Destination (Join-Path $packagePath 'README.md') -Force
+    Copy-Item -LiteralPath docs/ACCOUNTS.md -Destination (Join-Path $packagePath 'ACCOUNTS.md') -Force
+    Copy-Item -LiteralPath docs/MUSIC-ACCOUNTS.md -Destination (Join-Path $packagePath 'MUSIC-ACCOUNTS.md') -Force
     Copy-Item -LiteralPath web/braccato/LICENSES.txt -Destination (Join-Path $packagePath 'THIRD-PARTY-LICENSES.txt') -Force
     $archivePath = Join-Path $projectRoot "dist/$packageName.zip"
     Compress-Archive -LiteralPath $packagePath -DestinationPath $archivePath -Force

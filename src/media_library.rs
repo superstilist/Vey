@@ -4,15 +4,52 @@ use lofty::{
     picture::{MimeType, Picture, PictureType},
     prelude::*,
     probe::Probe,
-    tag::{Tag, TagType},
+    tag::{ItemKey, Tag, TagType},
 };
 use std::{io::Cursor, path::Path};
 
+/// Comment prefix used to persist the YouTube Music identity beside the audio.
+pub const YTM_ID_PREFIX: &str = "ytmusic:";
+
+/// The 11-character YouTube/YouTube Music video id, if the text contains one.
+/// Accepts the stored `ytmusic:<id>` comment, a bare id, or a public video URL.
+pub fn ytmusic_id(text: &str) -> Option<String> {
+    fn valid(id: &str) -> bool {
+        id.len() == 11
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    }
+    let text = text.trim();
+    let candidate = match text.strip_prefix(YTM_ID_PREFIX) {
+        Some(id) => id.trim(),
+        None => text
+            .split_once("v=")
+            .map(|(_, id)| id)
+            .or_else(|| text.rsplit('/').next())
+            .unwrap_or(text),
+    };
+    let candidate = candidate
+        .split(['&', '#', '?', ' '])
+        .next()
+        .unwrap_or(candidate)
+        .trim();
+    valid(candidate).then(|| candidate.to_string())
+}
+
+/// Parse the ` [video-id]` suffix that downloaded files carry.
+pub fn id_from_file_stem(stem: &str) -> Option<String> {
+    let start = stem.rfind('[')?;
+    let id = stem.get(start + 1..)?.strip_suffix(']')?;
+    ytmusic_id(id).filter(|_| !stem[..start].trim().is_empty())
+}
+
 pub async fn fetch_cover(url: &str) -> Result<Vec<u8>, String> {
-    let client = reqwest::Client::builder()
+    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> = std::sync::OnceLock::new();
+    let client = CLIENT.get_or_init(|| reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())).as_ref().map_err(Clone::clone)?;
     let mut response = client
         .get(url)
         .send()
@@ -55,6 +92,7 @@ pub fn write_tags(
     title: &str,
     artist: &str,
     album: &str,
+    ytm_id: Option<&str>,
     cover: Option<&[u8]>,
 ) -> Result<(), String> {
     let mut file = Probe::open(path)
@@ -85,6 +123,9 @@ pub fn write_tags(
     if !album.is_empty() {
         tag.set_album(album.to_owned());
     }
+    if let Some(id) = ytm_id.and_then(ytmusic_id) {
+        tag.insert_text(ItemKey::Comment, format!("{YTM_ID_PREFIX}{id}"));
+    }
     if let Some(bytes) = cover {
         let cover = jpeg(bytes)?;
         tag.remove_picture_type(PictureType::CoverFront);
@@ -110,7 +151,7 @@ pub fn replace_cover(path: &Path, bytes: &[u8]) -> Result<(), String> {
     ));
     let result = (|| {
         std::fs::copy(path, &stage).map_err(|e| e.to_string())?;
-        write_tags(&stage, "", "", "", Some(bytes))?;
+        write_tags(&stage, "", "", "", None, Some(bytes))?;
         let original = Probe::open(path)
             .and_then(|p| p.read())
             .map_err(|e| e.to_string())?;
@@ -139,4 +180,47 @@ pub fn replace_cover(path: &Path, bytes: &[u8]) -> Result<(), String> {
         let _ = std::fs::remove_file(stage);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_stored_and_bare_video_ids() {
+        assert_eq!(
+            ytmusic_id("ytmusic:dQw4w9WgXcQ").as_deref(),
+            Some("dQw4w9WgXcQ")
+        );
+        assert_eq!(ytmusic_id("dQw4w9WgXcQ").as_deref(), Some("dQw4w9WgXcQ"));
+        assert_eq!(
+            ytmusic_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RD").as_deref(),
+            Some("dQw4w9WgXcQ")
+        );
+        assert_eq!(
+            ytmusic_id("https://youtu.be/dQw4w9WgXcQ").as_deref(),
+            Some("dQw4w9WgXcQ")
+        );
+    }
+
+    #[test]
+    fn rejects_non_video_comments() {
+        assert_eq!(ytmusic_id("some listener comment"), None);
+        assert_eq!(ytmusic_id("ytmusic:short"), None);
+        assert_eq!(ytmusic_id(""), None);
+    }
+
+    #[test]
+    fn reads_download_filename_suffix() {
+        assert_eq!(
+            id_from_file_stem("Artist - Title [dQw4w9WgXcQ]").as_deref(),
+            Some("dQw4w9WgXcQ")
+        );
+        assert_eq!(
+            id_from_file_stem("Artist - Title [Live]"),
+            None,
+            "ordinary brackets are not ids"
+        );
+        assert_eq!(id_from_file_stem("[dQw4w9WgXcQ]"), None);
+    }
 }

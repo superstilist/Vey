@@ -20,7 +20,7 @@ The TypeScript/Tauri source project was read as the reference and was not delete
 
 ## Remaining parity work
 
-- Live public streaming reached the upstream media service but both tested tracks failed with HTTP 403 during ranged download. Search is verified; end-to-end public audio playback is not. The browser reports the playback failure.
+- Public audio: both reported tracks failed with HTTP 403 during ranged download before 2026-10-21. The visionOS resolution path now downloads them completely and decodes their full durations; see [playback recovery](PLAYBACK-RECOVERY.md). Broader catalog coverage, the browser stream path and audible device playback remain unverified.
 - Inline video surface adapters now exist for web, Windows, Android and Linux (optional FFmpeg). Browser fixture playback is checked separately from live streams and device acceptance; native playback acceptance is pending. See PLAYER-REFINEMENT.md.
 - Android 0.1.5 requests runtime audio permission and scans MediaStore instead of a desktop Music folder. Native layout consumes status/navigation/cutout insets. SAF file/save dialogs, browser intents and device runtime acceptance remain; manual app-accessible paths are available. APK packaging checks do not establish device playback/permission behavior. See ANDROID-FIXES.md.
 - The embedded challenge host is implemented for Windows, web and Android. Android device acquisition is pending runtime acceptance; Linux still needs a challenge host.
@@ -40,7 +40,7 @@ Recorded during implementation on Windows; see adjacent build/test logs in the w
 - Live public YTM search returned songs/videos and paired real clips.
 - Windows native screenshots generated at 1440×900, 900×900 and 390×844; reference data is fixed and separate from user state.
 - Native UI was inspected through Windows UI Automation; the Library callback was exercised. Accessibility actions were subsequently added to custom controls.
-- Rust/WASM compiled and bindings generated. The browser rendered the UI, accepted search input, returned 15 public tracks, and updated the player on selection. Browser checks found and fixed relative API URLs, an unsupported WASM clock, initial sizing, and a false startup error. Media download then failed upstream with HTTP 403; see `screenshots/28-wasm-stream-error.png`.
+- Rust/WASM compiled and bindings generated. The browser rendered the UI, accepted search input, returned 15 public tracks, and updated the player on selection. Browser checks found and fixed relative API URLs, an unsupported WASM clock, initial sizing, and a false startup error. Media download then failed upstream with HTTP 403 (historical; `screenshots/28-wasm-stream-error.png`). The 2026-10-21 native recovery in [PLAYBACK-RECOVERY.md](PLAYBACK-RECOVERY.md) does not re-verify this browser path.
 - Android aarch64 library check and link succeeded with NDK 28.2.13676358; `adb devices` returned no devices. No Android runtime pass is claimed.
 - Linux runtime/build was blocked: the installed Ubuntu WSL distribution failed to attach its missing `ext4.vhdx`. Linux CI is supplied but has not run here.
 - Automatic Windows acquisition was verified against the official challenge and exchange service with a fresh auth cache (about three seconds, no manual paste). Contract/error handling is also covered by local HTTP fixtures.

@@ -37,14 +37,24 @@ Unreadable state is copied to a timestamped backup before recovery.
 
 ## Latest release
 
-Version 0.1.16 improves mobile lyrics scrolling and player gestures, and keeps
-search input responsive while entering or editing a query. It includes the local
-downloads, artwork, lyric source selection, translation and romanization features
-from previous releases. See [release notes](docs/RELEASE.md) and
-[lyric controls](docs/LYRICS-PREFERENCES.md).
-Windows x64 ZIP, Linux x64 tar.gz/.deb, Android ARM64/x86_64 APKs and a Web ZIP
-are available on the GitHub Releases page. Linux targets Mint 22/Ubuntu 24.04+
-(glibc 2.39). See [Linux packaging](docs/LINUX-RELEASE.md) and
+Version 0.1.40 keeps lyric credits and the manual time offset in the tools menu.
+Version 0.1.39 adds adjustable lyric spacing for romanization and translations.
+Version 0.1.38 adds system media controls for desktop, Android and browser playback.
+Version 0.1.37 improves lyric spacing and the Home recommendations empty state.
+Version 0.1.36 improves audio caching, artwork loading and native animation work.
+Version 0.1.35 updates the desktop player with larger artwork, synchronized lyrics,
+and expanded and focus layouts. It blends Home recommendations from the current song, listening
+history and liked tracks, ranks radio consensus and varies artists. It also
+includes six Home layouts with previews and random-on-entry selection. Whole-
+player themes, 20 offline presets, custom CSS/RICS roles and lyric rendering
+improvements remain included. See [release notes](docs/RELEASE.md),
+[lyric controls](docs/LYRICS-PREFERENCES.md), [theme presets](docs/LYRIC-THEMES.md)
+and [account/import setup](docs/MUSIC-ACCOUNTS.md).
+
+The latest published GitHub release is 0.1.16, with Windows x64 ZIP, Linux x64
+tar.gz/.deb, Android ARM64/x86_64 APKs and a Web ZIP. Version 0.1.40 is the local
+Windows x64 portable build. Linux targets Mint 22/Ubuntu 24.04+ (glibc 2.39). See
+[Linux packaging](docs/LINUX-RELEASE.md) and
 [Web startup](docs/WEB-RELEASE.md); the Web online features need the Vey backend.
 
 ## Responsiveness
@@ -101,15 +111,20 @@ lyric caches and imported theme data. Tag backups are stored separately under
 The Windows challenge window hosts only the lyric provider challenge. Its IPC
 passes just the Turnstile token to Rust, which exchanges and caches the JWT in a
 separate `lyrics-auth.json`; that file is never part of data migration or backups.
-Google sign-in opens the system browser and has no account callback or session APIs.
+Public YouTube Music playlist links can be imported without sign-in. Connected
+accounts lets you choose Vey, YouTube Music or Spotify independently. Desktop
+connections pull playlists with read-only access. YouTube uses normal
+Google v3 browser login without app credentials; Spotify uses OAuth. Setup, platform
+limits, six Home layouts and search behavior: [MUSIC-ACCOUNTS.md](docs/MUSIC-ACCOUNTS.md).
 
 ## Source map
 
 - `src/native.rs`: adapted original audio, scanning, public YTM and caption services.
 - `src/services.rs`: typed portable store, queue, migration and source normalization.
 - `src/app.rs`: native callbacks, background work, stale-result protection and player polling.
-- `src/lyrics.rs`, `src/renderer.rs`: parser models and native styled-text word rendering.
-- `src/lyrics_widget.rs`: embedded upstream renderer, geometry and playback bridge.
+- `src/lyrics.rs`: parser models for every accepted lyric dialect.
+- `src/renderer.rs`: native Braccato view driver; writes only active/changed rows per frame.
+- `src/lyrics_widget.rs`: browser-only upstream iframe bridge (geometry and playback).
 - `third-party/braccato/`: complete unmodified upstream source at the pinned revision.
 - `tools/braccato-widget/`: reproducible bundle and browser integration checks.
 - `src/lyrics_service.rs`: provider fallback, cache and JWT lifecycle.
@@ -154,8 +169,9 @@ a lost response. Windows no longer paints a duplicated lyric-child backdrop.
 Run `npm run test:ambient` in `tools/braccato-widget` with the fixture server
 running (`npm run serve`) to check GPU output, motion and artwork updates.
 
-The player uses an open, borderless layout, neutral controls, a red progress
-accent, and plain underlined tabs. Lyrics follow the active line with an eased
+The player uses an open, borderless layout, tonal pill segments for the player
+tabs, neutral controls and a cover-derived accent on progress and primary
+transport. Lyrics follow the active line with an eased
 scroll, use their measured row heights for wrapping, and fade words in as they
 start. Plain text remains freely scrollable.
 
@@ -169,12 +185,12 @@ absolute song times; enhanced LRC end markers preserve gaps between lines.
 Translations and backing vocals remain separate from lead words. Invalid XML
 is rejected so another provider can supply usable lyrics.
 
-Windows and browser builds mount the original upstream `<braccato-lyrics>`
-element for the lyric surface, with word-by-word timing, translations,
-romanization, backing vocals, instrumental effects and upstream themes.
-`ui/braccato-lyrics.slint` is the native fallback when the web renderer is
-unavailable. Source provenance and platform details are in
-`src/braccato/README.md`.
+Native targets mount the copied Rust Braccato Slint surface
+(`ui/braccato-lyrics.slint`, rows driven by `src/renderer.rs`); the browser
+mounts the original upstream `<braccato-lyrics>` element through the iframe
+bridge in `src/lyrics_widget.rs`. Both keep word-by-word timing, translations,
+romanization, backing vocals, instrumental effects and upstream themes. Source
+provenance and platform details are in `src/braccato/README.md`.
 
 Authentication matches the WebStorm app: `/verify-turnstile` takes JSON
 `{token}` and accepts either `jwt` or `token` in its response. Lyrics use

@@ -13,6 +13,100 @@ binds palette, layout, playback, seek, reduced motion and manual-scroll resume.
 Translation and romanization visibility remains controlled by display clones,
 without altering cached/exported sources.
 
+## Sharp-letter artifact follow-up (2026-10-29)
+
+The filled-glow change below did not resolve the reported sharp-letter artifacts.
+Its halo-on/off comparison used the same sharp renderer on both sides, so it
+could not detect damage produced by that renderer itself.
+
+`examples/native_ink_artifacts.rs` now imports the actual `LyricInk` component
+and compares partial fill with solid base/highlight reference images under
+fractional placement and 1.0/1.011/1.025/1.04 transforms. The old GPU brush path
+reproduces slivered/dark letter interiors in “bedroom” and “AVATAR”: 8,812 wrong
+fully-sung/unsung core pixels over 48 samples, with maximum error 160/255.
+
+Native ink now defaults to `stable-fill`: solid, fully shaped text painted
+through fixed physical-pixel fill clips. GPU ink is composed into a local
+surface before word/letter/line transforms. Empty, partial and completed ink
+keep that same composition path, avoiding a renderer handoff. The common glyph
+origin and source timings stay intact. The previous gradient brush remains only
+as the probe's explicit `--legacy` diagnostic; software retains its solid path.
+
+Commands: `cargo run --locked --example native_ink_artifacts --
+target/NEW_OUTPUT_DIRECTORY --assert`, or `--legacy` to reproduce the old path.
+Expanded stable runs include Latin, Cyrillic, ligatures and combining accents:
+64 samples at 1x and 64 at 1.25x both report zero wrong core pixels outside
+the feather. These are glyph-rendering checks, separate from the halo
+measurements below. The old-path comparison used the original six-case,
+48-sample fixture; its broken interiors were also inspected in screenshots.
+
+The full phrase fixture passes with wave/wobble on GPU and software and with
+reduced motion. The effect fixture reports zero backing-cue residue, zero
+transparent-margin violations and zero letter-return deficit; identical-radius
+glow feathers differ by at most 1/255. The fractional-scale quality fixture
+passes short/long cues, glyph endpoints, ligatures, marks and translucent colors.
+Rust lib/integration checks: 256 pass, eight ignored, one known locale-catalog
+test excluded. WASM compile and Windows release build pass. These use synthetic
+cues on Windows; the user's original track and other devices are not certified.
+
+The optimized 300-line/2,400-word wobble fixture, without snapshot readback,
+records 80 timer samples: median 16.32ms, p95 17.15ms, and 78 word-model reads
+(`performance-stable-fill-release.json` under `target/native-lyrics-check`).
+This is a current event-loop observation, not a matched speedup comparison or
+an FPS guarantee. A debug run during release compilation measured 66.13/92.77ms
+and is not comparable to the optimized run.
+
+Rebuilt `target/release/vey.exe` (0.1.33, 2026-10-29) SHA-256:
+`08CFB381E9A628AB9D98224713C9A7F82ED725789AC90EB22E1BBF91C433B4C0`.
+Close an already running Vey and launch this binary to load the repair. No
+package/release was published.
+
+## Filled-prefix glow and edge sampling (2026-10-29)
+
+The supplied “So she ran into the bedroom” crop was reproduced with explicit
+fixture cues. Completed lead words previously lost their halo at each word's
+cue end, even while the source line remained active. The native host now opts
+into `filled-glow`: a soft halo remains on the sung lead prefix until the line
+ends. Secondary layers and backing cues keep their existing cue-bounded release.
+The existing Glow control and reduced-motion setting remain authoritative.
+
+Glow feather strips now clip one complete radius tile using a common image
+origin and physical-pixel boundaries. Independently cropped/rescaled strips
+could expose different bilinear sampling phases at their seams. Tint/atlas
+pixels remain immutable; the fix does not create per-frame glow uploads or
+Gaussian filters. Sharp text still uses the same shaped run and fill clock.
+
+Lead paint deadlines are shared by the follow index, stale-result checks and
+release path, and extend through the line. A late seek can prepare its sung
+prefix without reviving finished background cues. Assets still use the bounded
+worker and existing generation checks; canonical word/syllable times are unchanged.
+
+Reproduction: `cargo run --locked --example native_filled_glow --
+target/NEW_OUTPUT_DIRECTORY --assert`. Optional `--wave`, `--wobble` and
+`--reduced` modes cover presentation settings. Use new output directories for
+software and `SLINT_SCALE_FACTOR=1.25` runs. This fixture uses synthetic timings
+for the supplied phrase, not the user's original track payload.
+
+At the 1.3s sample, the sung-prefix background halo changed 4,287 pixels, versus
+zero before the change. Across the paused samples no sharp ink pixels were
+erased, and the halo had zero residual pixels after the line ended. The existing
+effect fixture reports zero expired backing-cue glow, zero transparent-margin
+violations, zero letter-return fill deficit, and an identical-radius feather
+maximum difference of 1/255. Rust checks: 256 pass, eight ignored, known
+locale-catalog failure excluded. WASM compile check passes; browser lyrics keep
+their existing iframe renderer.
+
+The phrase fixture passed GPU/software at 1x, GPU at 1.25x with letter waves
+and wobble, and reduced motion (zero halo). Spatial fill passed Latin/Cyrillic
+and phrase samples on both renderers, including reduced motion. The existing
+short/long cue, kerning/ligature/combining-mark and translucent-color quality
+fixture passed at 1.25x. An initial concurrent GPU spatial run could not take a
+FemtoVG snapshot during startup; its isolated rerun passed. These are Windows
+fixture results, not original-song or other-device acceptance.
+
+`cargo build --release --locked --bin vey` completed after the changes; the
+updated executable is `target/release/vey.exe`. No package/release was published.
+
 The adapter explicitly removes the Rust demo's optional synthetic 50ms
 line-word stagger. Line-synced rows use whole shaped text runs after native
 wrapping; only actual word/syllable cues drive word effects. Wrapped fragments
@@ -778,3 +872,300 @@ EXE SHA-256: `50f0f986c57aec8f3a1f7a2c8c323057037ef491d1e00b0dc5af72285d58d16b`.
 Local ZIP: `dist/Vey-0.1.26-windows-x64.zip`, SHA-256
 `2c62b378648371a5b5fa9ea37b9b4e9f570ec732cc4fa69d02f7182e13f3e164`.
 This is a local Windows build; no tag or cross-platform publication was performed.
+
+## 0.1.27: prompt line launch and retained velocity
+
+The old native `content-y` animation restarted its easing at rest whenever a
+short or wrapped cue changed the scroll target. This introduced a visible
+braking pause even when the event loop continued producing frames. The
+`native_line_flow` fixture samples actual content position around a 400ms cue,
+then retargets an unfinished 750ms move. Its `--legacy` flag exercises the old
+path in the same executable; reports are `line-flow-LABEL.json`.
+
+The host now drives scroll position with `src/native_lyric_camera.rs`. Each
+retarget samples the existing segment's position and velocity, then starts a
+monotone cubic Hermite segment from those values. Zero terminal velocity and a
+bounded initial slope prevent overshoot. A very close forward target shortens
+the remaining duration to preserve incoming speed. Reverse targets discard
+opposite velocity rather than moving away from the target.
+
+A camera at rest uses a front-loaded start slope instead of a zero-slope
+ease-in. Previously the first third of a settled line transition travelled
+almost no distance, which read as a freeze even though frames kept arriving.
+The launch now covers 20px in 65.6ms in the release fixture (66.6ms on the
+software renderer), versus 121.4ms for the legacy path; a moving retarget still
+keeps its exact incoming velocity. The fixture also asserts that the displayed
+`content-y` tracks the settled camera and that the target settles exactly.
+
+Slint's own scroll easing is disabled only while this native driver owns the
+position. The render window follows the displayed camera, including exact seek
+snaps. Manual scroll, passive and stage paths keep their existing ownership;
+returning to follow rebases at the displayed position. Source cue times, fill,
+focus, glow, fonts, themes and word wobble are unchanged. The camera evaluates one
+retained segment per tick; it does not read word
+models or allocate per frame. Hidden/minimized lyric work remains suspended.
+
+Five unit regressions cover position/velocity continuity, rapid repeated cues,
+close targets, front-loaded launch from rest, reverse motion, exact snaps and
+manual rebasing. Existing native fixtures cover actual wheel/resume, cue
+deadlines, spatial fill and reduced motion. Release line-flow, timing, boundary,
+autoscroll, focus handoff and the 300-line stutter fixture passed after the
+change. This fixes the easing restart and slow launch; GPU
+rendering/readback costs documented for 0.1.26 remain a separate source of
+possible long frames.
+
+The optimized Windows executable was packaged locally. The packaged EXE
+matches `target/release/vey.exe` byte-for-byte.
+
+EXE SHA-256: `79c236b6cfbba8f933994a34c9ddc6c1d1a7813e88b196109f2076ab56c25c35`.
+Local ZIP: `dist/Vey-0.1.27-windows-x64.zip`, SHA-256
+`6d0685a68afb28d0ac6171169c7de8b0f4df205565465e436fe1c1db75edc706`.
+This is a local Windows build; no tag or cross-platform publication was performed.
+Browser runtime and physical-device acceptance were not repeated for 0.1.27.
+
+### 2026-10-28: incoming scroll after a delayed frame
+
+Compared the preserved original Braccato `packages/core/src/engine.ts`
+(`startPreparedLineScroll`, explicit per-line animation, 750 ms fallback) with
+native scroll ownership. Native `snap_until` classified every media-clock delta
+above 500 ms as a seek, including ordinary playback while a UI frame was late.
+That bypassed the camera animation at the next cue. `playback_jump` now compares
+media travel with elapsed wall time and playback rate. Backward/forward seeks,
+paused seeks, rebuilds and reduced motion retain immediate positioning.
+
+Regression: `cargo run --locked --example native_lyric_gap -- label` uses an
+8-second explicit gap and a 650 ms delayed frame spanning the incoming cue.
+Before the change it failed: zero intermediate camera samples, first incoming
+position already equal to target and snap=true. Outputs use the supplied label
+under `target/native-lyrics-check/long-gap-*.json`. This reproduction establishes
+a delayed-frame snapping path, not the cause of every reported long-gap event.
+
+Fresh Windows checks: the delayed-frame fixture now passes with 19 intermediate
+camera samples on GPU and 12 on software, versus zero before. The playback-jump
+regression and all five retained-camera unit tests pass. Source cue times and
+highlight fading are unchanged; no original-song payload was supplied.
+
+## 0.1.28 — prepared and stable line transitions (2026-10-28)
+
+The previous delayed-frame correction did not resolve the user's observed
+transition. This pass also addresses actual wrapped focus, rest motion and
+per-frame rendering work:
+
+- `FollowIndex` excludes synthetic line-synced tokens from word-follow cues.
+  Every fragment starts together, so selecting the final equal-start cue was
+  incorrectly focusing the last wrapped row. The first row now stays selected;
+  real word/syllable follow remains timestamp-driven.
+- `Timeline::scroll_groups` and `FollowIndex::prepare_targets` prepare camera
+  destinations for cue, overlap and policy changes after layout. The table is
+  keyed by group, source and visual row and invalidated by geometry/policy
+  changes. Work/storage have explicit budgets and an exact live fallback for
+  exceptional groups, seeks and resumes.
+- Settled cameras use zero initial velocity and eased acceleration/deceleration,
+  replacing the maximum initial slope of 3. Moving retargets still retain
+  velocity; close targets remain monotone and settle exactly.
+- A bounded pair of upcoming row bodies is selected up to one second before
+  its cue. Current row bodies remain available while the camera enters them.
+  Keeping every overscan row fully prepared was measured and rejected because
+  it increased rendering cost.
+- Trailing spaces stay in their word's shaping run. Text, whitespace, line cue
+  times and whole-word motion are preserved without separate empty-space
+  delegates. This reduces work for synchronized line-only lyrics.
+
+Fresh checks on Windows:
+
+| Check | Result |
+| --- | --- |
+| Native lyric unit tests | 34 passed |
+| Clock/scroll-policy unit tests | 9 passed |
+| WASM compile | `cargo check --locked --lib --target wasm32-unknown-unknown` passed |
+| Release line flow, GPU | Retarget speed 356 -> 422 -> 473 px/s; 20px launch 167.7ms; exact settlement |
+| Release line flow, software | Retarget speed 368 -> 432 -> 475 px/s; 20px launch 177.8ms; exact settlement |
+| Long wrapped source, eight-second gap and delayed UI frame | GPU desktop 21 and mobile 20 intermediate camera samples; software mobile 22; first-row and prewarming assertions passed |
+| Actual wheel / resume / wrapped real word cues / optional early camera | Passed on GPU and software with a wheel event over visible lyric text |
+| Debug stress, line-only, before -> final | First-entry playback p95 91.04 -> 78.42ms; repeated-entry playback p95 91.82 -> 83.97ms |
+| Release stress, line-only, GPU | Playback phase p95 19.19ms and 20.56ms; maxima 56.27ms and 83.73ms; render CPU p95 9.97ms |
+| Release stress, line-only, software | Playback phase p95 21.30ms and 18.87ms; maxima 38.63ms and 25.68ms |
+
+Stress command: `native_lyric_stutter -- label --line-only --no-blur` uses 300
+lines, cold/repeated player entry and continuous cue handoffs without snapshot
+readback. These are fixture event-loop intervals, not FPS guarantees; debug
+before/after and optimized results are separate. The optimized GPU run still
+had two intervals above 50ms. Reports are under `target/native-lyrics-check/`
+with `stability-*` labels. The full-buffer rendering experiment is retained
+only as diagnostic output, not implementation.
+
+`native_lyric_gap -- label --wrapped --mobile --capture` captures the actual
+native window before/after a deliberately tall source. Images were inspected;
+the incoming source starts at its first visual row. Existing screenshots in
+`docs/screenshots/` were not regenerated. The original wheel fixture's fixed
+500px Y coordinate failed on GPU in a padding band; its visible-text coordinate
+now passes. This is not an exhaustive acceptance test of all wheel hit regions.
+
+The default local profile had reduced motion disabled and no custom lyric CSS;
+no user settings were changed. The original-song payload was not supplied, so
+acceptance of that exact incident remains unverified. Android/Linux runtime and
+browser runtime were not exercised. Package version is now 0.1.28 to distinguish
+this build from earlier 0.1.27 artifacts.
+
+## 0.1.29 — audio polling cancelled the reported song transition
+
+The user identified Smooth Criminal, line 2 to line 3. The default local profile
+contained a saved Binimum RichSync selection. Only that song's first six cached
+lines were copied to an ignored diagnostic directory; no user settings/library
+or authentication data were modified. No copyrighted song text was added to the
+repository. The checked-in polling fixture uses neutral text with equivalent
+cue boundaries.
+
+Actual source cues: second line [32728,34627), third line [35324,36684) ms.
+Replaying them with ideal fresh media positions did not fail. Replaying the
+native transport cadence did: `audio_thread` publishes about every 100ms, while
+the UI polls on its frame timer at >=100ms (typically 112ms). A cached audio
+sample can therefore be almost 100ms old when the UI receives it. The previous
+clock treated negative errors >=60ms as discontinuities, rewound presentation
+time, and `playback_jump` treated every backwards clock step as a seek.
+
+The reproduced 2→3 transition began at camera=385.30px with target=575.91px.
+A late status then changed the lyric clock from 35364ms to 35329ms, enabled
+`snap_until`, and jumped the camera by 190.61px in one sample. There was no
+layout rebuild or camera retarget discontinuity. The earlier easing/focus
+changes did not address this audio handoff.
+
+Changes:
+
+- `src/native.rs`: private shared status records when its position was sampled;
+  reads project that age only during playback, honoring rate/duration and a
+  250ms stale-sample limit. Confirmed successful loads/seeks update a serial
+  atomically with their position. The serial is omitted from serialized status.
+- `src/app.rs` / `ui/main.slint`: confirmed serial changes advance the native
+  seek revision together with the new media position.
+- `src/braccato/engine.rs`: late but advancing actual samples cannot rewind the
+  rendered clock. Corrections adjust future speed, bounded to a 10% slowdown.
+  Real backwards samples and explicit clock resets remain exact.
+- `src/native_lyrics.rs`: camera/focus reset follows confirmed transport seeks,
+  page entry, paused seeks and explicit presentation changes. Ordinary playing
+  clock corrections, including late catch-up, do not cancel camera motion.
+
+Fresh optimized Windows results (7.5-second replay, no snapshot readback):
+
+| Case | Clock reversals | Snap samples | Largest camera step |
+| --- | --- | --- | --- |
+| 0.1.28, sampled worker/UI cadence | 8 | 95 unintended | 190.61px |
+| 0.1.29, same cached cues/cadence, GPU | 0 | 0 | 17.73px |
+| 0.1.29, same cached cues/cadence, software | 0 | 0 | 13.41px |
+| 0.1.29, real native worker + muted silent WAV, GPU | 0 | 0 | 18.43px |
+| Real native worker, deliberately confirmed small seek | 1 expected seek rewind | 12 expected seek-window samples | 107.65px expected seek reposition |
+
+The explicit-seek fixture verifies the backend seek serial reaches the UI and
+that the camera snaps exactly to its target. This is a controlled silent-file
+native-audio test; it does not establish original streaming playback or output
+switching acceptance. The neutral fixture also passes the sampled-audio
+assertions. WASM compilation passed.
+
+Targeted clock/transport regressions passed. The complete library suite reported
+187 passed, 7 ignored and one failure in the unchanged locale catalog test
+(`i18n::tests::catalogs_have_all_languages_and_unique_keys`, a one-field row
+instead of eight). That existing unrelated catalog change was preserved.
+
+Reproduction:
+
+```
+cargo run --release --locked --example native_lyric_song -- tests/fixtures/native_audio_polling.json target/native-lyrics-check/polling-new --sampled-audio --assert-smooth
+```
+
+Use another output directory for each run. `--confirm-seek` checks a deliberate
+25ms seek during the camera move; `--narrow` changes window width. A canonical
+`LyricsAlternative` JSON can replace the neutral fixture to test a supplied
+provider document. Optional `--audio=ABSOLUTE_WAV_PATH` uses the native audio
+worker (muted inside this test) instead of synthetic media samples. Private
+song data and local traces remain under ignored `target/` only.
+
+## 0.1.30 — native letter and fill quality
+
+The quality fixture isolates short (400ms) and long (4s) word cues with camera,
+focus scaling, glow and whole-word wobble disabled. It compares AVATAR, Toffee,
+office and a combining-accent word with letter waves on/off at cue start, return
+and cue end. Extra samples near both endpoints check ink mass, catching both
+dim pulses and duplicate heavy edges. Orange active ink over translucent blue
+inactive ink checks alpha and feather interpolation. Outputs require a new
+directory, and the window fits the physical display at fractional scale.
+
+Reproduced causes and changes:
+
+- Negative planned letter delays made future letters start already lifted in
+  short cues. Settled motion now maps the full neutral-to-neutral plan into the
+  existing cue/fragment interval, including its negative start; fill clocks are
+  independent and unchanged.
+- Nominal per-character advances omitted pair kerning and split ligatures or
+  combining marks. The host now caches HarfRust-shaped runs at the selected
+  weight, retaining cluster advances in em units and merging their existing
+  animation windows. Contextual/joining/reordered runs retain whole-word text
+  when independent cluster ink would differ. Font revisions invalidate caches
+  and prevent stale computations from being published into a newer generation.
+- Femtovg rounds each Text node's canvas origin, while positions within a run
+  retain fractions (`i-slint-renderer-femtovg` 1.18.1, `align_canvas_during`).
+  Letters now share a Text origin and place the cluster inside right-aligned
+  text using its actual isolated shaped advance. A 0.001 physical-pixel bias
+  keeps exact half-pixel ties from rounding differently after float translation
+  cancellation. Glyph paint width is separate from the kerned layout advance.
+  Solid letters retain direct Text rendering; only transformed gradients use a
+  local bitmap surface, avoiding a cached-raster handoff at neutral endpoints.
+- Software fill formerly divided the whole word into at most 256 logical-pixel
+  strips. It now paints the solid prefix/suffix once and samples only the
+  feather at physical-pixel resolution (512-band cap for broad custom feathers).
+  Text origins remain fixed under the clipping bands.
+- Slint Color.mix uses Sass alpha weighting; Femtovg and Skia also interpolate
+  gradient alpha differently. Software uses premultiplied samples, and native
+  gradients receive eight matching feather intervals. The host normalizes byte
+  alpha before applying its inactive-text cap, preserving faint custom colors.
+
+Reproduction (use different output directories per invocation):
+
+```
+cargo run --locked --example native_lyric_quality -- target/quality-gpu-new
+cargo run --locked --example native_lyric_origin -- target/origin-new
+```
+
+Repeat the quality fixture with `SLINT_BACKEND=winit-software` and with
+`SLINT_SCALE_FACTOR=1.25`. `native_fill_spatial -- --motion` checks short-cue fill
+during whole-word motion. Its prefix now has a finite already-completed cue;
+the earlier untimed prefix was still moving in the off reference and could
+pollute the timed word's core mask, producing a false early-fill failure.
+
+These checks cover bundled fonts on Windows GPU/software, including fractional
+display scale. They do not establish Android/Linux runtime behavior or every
+imported font's optional size-dependent shaping. Source timestamps, real-timing
+classification, the audio clock and camera policy are preserved.
+
+Fresh Windows verification:
+
+- All 32 word/duration/renderer/scale combinations pass the quality assertions
+  at 1x and 1.25x. Start/return differences fell from hundreds or thousands of
+  pixels to at most two pixels above a 3-level RGB tolerance. Software matches
+  exactly; cue-end comparisons are zero on both renderers. The 192 near-endpoint
+  samples retain 0.9945–1.0076 of plain ink mass, with no duplicate heavy edge.
+- The isolated common-origin proof includes a physical half-pixel tie at 1.25x.
+  Both direct shared placement and cancelling a positioned parent's offset pass.
+- Translucent color comparisons over 1302 common glyph-core pixels at 1x and
+  2298 at 1.25x differ by at most 4/255 per RGB channel, compared with 28–42
+  before the shared feather samples. Mean error is 0.24–0.56/255. Requested
+  inactive alpha 64 and 128 produce distinct off-state colors as expected.
+- GPU/software spatial fill passes all 96 partial-fill comparisons, including
+  400ms cues, a finished prefix, whole-word wobble and reduced motion. Effect
+  checks report zero expired glow residual and zero letter-return fill deficit.
+  Wide/narrow fill error is 0.16/255 on GPU and 0.00 on software. Continuity
+  checks have no backward fill pixels; independent letter waves, exact word
+  rest and reduced motion pass on both renderers.
+- The 38 targeted native tests pass, including shaped cluster/worker geometry
+  and stale-font revision rejection. The library test executable reports 192
+  passed, 7 ignored and the pre-existing locale catalog failure (one field where
+  eight are required). That unrelated catalog edit is preserved. WASM checking
+  and targeted formatting/diff checks pass.
+- `cargo build --release --locked --bin vey` succeeds. The optimized library
+  also passes the quality fixture on GPU at 1.25x, including the half-pixel
+  endpoint case. The 0.1.30 portable package is built from that executable.
+
+Relevant source entry points: `src/native_lyric_fonts.rs:417` (safe shaped
+clusters), `src/native_lyric_glyphs.rs:77` (timing/model projection),
+`src/native_lyric_paint.rs:95` (worker transfer), `ui/native-lyrics.slint:72`
+(inactive alpha), and `third-party/braccato-rust/crates/slint/ui/lyrics.slint:149`
+(ink), `:408` (neutral cue-bounded wave) and `:640` (gradient-only cache).

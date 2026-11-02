@@ -384,6 +384,12 @@ production signing remains a separate release decision.
 linked commands/paths exist. A later release records actual package build,
 checksums and target acceptance rather than copying previous results.
 
+**Status 2026-10-27:** the documentation half of this is done for the issues
+listed in `.agent/issues.md` I-13 to I-17 — README release/tab/lyric-surface
+text, the dated PARITY 403 note, the corrupted refinement sentence and the
+widget `npm` aliases. Text-only; no build, package or device acceptance was
+re-run, so the release half of the acceptance still stands.
+
 ### F-19 — P1: library scanning, metadata and artwork resilience
 
 **Evidence:** Source: native scan/add-path/add-source/remove-source callbacks

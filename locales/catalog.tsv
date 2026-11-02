@@ -23,6 +23,18 @@ Vey · Головна	Vey · Home	Vey · Domů	Vey · Strona główna	Vey · Sta
 Новий список відтворення	New playlist	Nový seznam skladeb	Nowa lista odtwarzania	Neue Wiedergabeliste	Nueva lista de reproducción	Nouvelle liste de lecture	新しいプレイリスト
 Назад до налаштувань	Back to settings	Zpět do nastavení	Powrót do ustawień	Zurück zu Einstellungen	Volver a ajustes	Retour aux paramètres	設定に戻る
 Для вас	For you	Pro vás	Dla Ciebie	Für dich	Para ti	Pour vous	あなた向け
+Обліковий запис	Account	Účet	Konto	Konto	Cuenta	Compte	アカウント
+Базовий акаунт	Basic account	Základní účet	Konto podstawowe	Basiskonto	Cuenta básica	Compte standard	標準アカウント
+Рекомендовано для вас	Recommended for you	Doporučeno pro vás	Polecane dla Ciebie	Empfehlungen für dich	Recomendado para ti	Recommandé pour vous	あなたへのおすすめ
+Розгорнути програвач	Expand player	Rozbalit přehrávač	Rozwiń odtwarzacz	Player vergrößern	Ampliar reproductor	Agrandir le lecteur	プレーヤーを拡大
+Звичайний вигляд	Normal view	Normální zobrazení	Widok standardowy	Normale Ansicht	Vista normal	Affichage normal	通常表示
+На основі нещодавнього прослуховування	Based on recent listening	Na základě posledních poslechů	Na podstawie ostatnich odsłuchań	Basierend auf deinen letzten Titeln	Según tus últimas escuchas	Selon vos dernières écoutes	最近聴いた曲をもとに
+На основі ваших прослуховувань	Based on your listening	Na základě vašeho poslechu	Na podstawie Twoich odsłuchań	Basierend auf deinem Hörverlauf	Según tus escuchas	Selon vos écoutes	あなたの再生履歴をもとに
+Свіжі композиції з YouTube Music	Fresh picks from YouTube Music	Nové tipy z YouTube Music	Nowe propozycje z YouTube Music	Neue Empfehlungen von YouTube Music	Novedades de YouTube Music	Nouveautés de YouTube Music	YouTube Musicの新着おすすめ
+Підбираємо композиції…	Finding music for you…	Hledáme hudbu…	Szukamy muzyki…	Wir suchen Musik für dich…	Buscando música para ti…	Recherche de musique…	おすすめを読み込み中…
+Не вдалося завантажити рекомендації	Couldn't load recommendations	Doporučení se nepodařilo načíst	Nie udało się wczytać polecanych utworów	Empfehlungen konnten nicht geladen werden	No se pudieron cargar las recomendaciones	Impossible de charger les recommandations	おすすめを読み込めませんでした
+Рекомендацій поки немає	No recommendations yet	Zatím žádná doporučení	Brak jeszcze poleceń	Noch keine Empfehlungen	Aún no hay recomendaciones	Pas encore de recommandations	おすすめはまだありません
+Спробувати ще раз	Try again	Zkusit znovu	Spróbuj ponownie	Erneut versuchen	Intentar de nuevo	Réessayer	もう一度試す
 Зосередження	Focus	Soustředění	Skupienie	Konzentration	Concentración	Concentration	集中
 Відпочинок	Relax	Odpočinek	Odpoczynek	Entspannung	Relajación	Détente	リラックス
 Енергія	Energy	Energie	Energia	Energie	Energía	Énergie	エネルギー
@@ -34,6 +46,8 @@ Vey · Головна	Vey · Home	Vey · Domů	Vey · Strona główna	Vey · Sta
 Відкривайте	Discover	Objevujte	Odkrywaj	Entdecken	Descubre	Découvrez	見つけよう
 Відкрити нову музику	Discover new music	Objevit novou hudbu	Odkrywaj nową muzykę	Neue Musik entdecken	Descubrir música	Découvrir de la musique	新しい音楽を見つける
 Послухати ще раз	Listen again	Poslechnout znovu	Posłuchaj ponownie	Erneut hören	Volver a escuchar	Réécouter	もう一度聴く
+Каталог поки не знайшов збігів	The catalog has no matches yet	Katalog zatím nic nenašel	Katalog na razie nie znalazł wyników	Der Katalog hat noch keine Treffer	El catálogo aún no encuentra coincidencias	Le catalogue n’a pas encore trouvé de résultats	カタログに一致する曲がまだありません
+Спробувати огляд	Explore music	Prozkoumat hudbu	Odkryj muzykę	Musik entdecken	Explorar música	Explorer la musique	音楽を探す
 Відкривайте нову музику	Discover new music	Objevujte novou hudbu	Odkrywaj nową muzykę	Neue Musik entdecken	Descubre música nueva	Découvrez de la musique	新しい音楽を見つけよう
 Музика, яка сподобалась	Liked music	Oblíbená hudba	Polubiona muzyka	Lieblingsmusik	Música favorita	Musique aimée	高評価の音楽
 Черга відтворення	Play queue	Fronta přehrávání	Kolejka odtwarzania	Warteschlange	Cola de reproducción	File de lecture	再生キュー
@@ -66,6 +80,7 @@ Vey · Головна	Vey · Home	Vey · Domů	Vey · Strona główna	Vey · Sta
 Менше руху	Reduced motion	Omezit pohyb	Ograniczony ruch	Weniger Bewegung	Reducir movimiento	Réduire les animations	動きを減らす
 Рух інтерфейсу	Interface motion	Pohyb rozhraní	Ruch interfejsu	Bewegung der Oberfläche	Movimiento de la interfaz	Mouvement de l’interface	インターフェースの動き
 Розмиття під час переходів	Blur during transitions	Rozostření při přechodech	Rozmycie podczas przejść	Unschärfe bei Übergängen	Desenfoque en las transiciones	Flou pendant les transitions	画面遷移時にぼかす
+Розмиття переходів	Transition blur	Rozostření přechodů	Rozmycie przejść	Übergangsunschärfe	Desenfoque de transiciones	Flou des transitions	遷移時のぼかし
 Вимкнути всі анімації	Disable all animations	Vypnout všechny animace	Wyłącz wszystkie animacje	Alle Animationen ausschalten	Desactivar todas las animaciones	Désactiver toutes les animations	すべてのアニメーションを無効化
 Вимикає рух сторінок, панелей і тексту.	Disables motion for pages, panels, and text.	Vypne pohyb stránek, panelů a textu.	Wyłącza ruch stron, paneli i tekstu.	Deaktiviert Bewegungen von Seiten, Bereichen und Text.	Desactiva el movimiento de páginas, paneles y texto.	Désactive le mouvement des pages, des panneaux et du texte.	ページ、パネル、テキストの動きを無効にします。
 Гучність	Volume	Hlasitost	Głośność	Lautstärke	Volumen	Volume	音量
@@ -139,7 +154,6 @@ Braccato · синхронізовані слова	Braccato · synchronized lyr
 YT теги	YT tags	YT značky	Tagi YT	YT-Tags	Etiquetas YT	Tags YT	YTタグ
 Авто	Auto	Automaticky	Auto	Auto	Auto	Auto	自動
 Параметри	Settings	Nastavení	Ustawienia	Einstellungen	Ajustes	Paramètres	設定
-Розгорнути програвач	Expand player	Rozbalit přehrávač	Rozwiń odtwarzacz	Player ausklappen	Expandir reproductor	Agrandir le lecteur	プレーヤーを展開
 Доступ до слів пісень	Lyrics access	Přístup k textům	Dostęp do tekstów	Liedtextzugriff	Acceso a letras	Accès aux paroles	歌詞へのアクセス
 Вставити слова пісні	Paste song lyrics	Vložit text písně	Wklej tekst piosenki	Liedtext einfügen	Pegar letra de canción	Coller les paroles du titre	歌詞を貼り付け
 Шлях до папки або файлу	Folder or file path	Cesta ke složce nebo souboru	Ścieżka folderu lub pliku	Ordner- oder Dateipfad	Ruta de carpeta o archivo	Chemin du dossier ou fichier	フォルダーまたはファイルのパス
@@ -270,7 +284,6 @@ JWT прострочено	Lyrics token expired	Platnost tokenu vypršela	Token 
 Романізуємо слова…	Romanizing lyrics…	Přepisování textu latinkou…	Transkrypcja tekstu na łacinę…	Songtext wird romanisiert…	Romanizando la letra…	Romanisation des paroles…	歌詞をローマ字に変換中…
 Романізація недоступна. Спробуйте оновити слова.	Romanization unavailable. Try refreshing lyrics.	Přepis není dostupný. Zkuste obnovit text.	Transkrypcja niedostępna. Spróbuj odświeżyć tekst.	Umschrift nicht verfügbar. Aktualisiere den Songtext.	Romanización no disponible. Prueba a actualizar la letra.	Romanisation indisponible. Actualisez les paroles.	ローマ字に変換できません。歌詞を更新してください。
 Автоматична романізація: Unison / Google	Automatic romanization: Unison / Google	Automatický přepis: Unison / Google	Automatyczna transkrypcja: Unison / Google	Automatische Umschrift: Unison / Google	Romanización automática: Unison / Google	Romanisation automatique : Unison / Google	自動ローマ字変換：Unison / Google
-
 Вигляд слів	Lyrics appearance	Vzhled textu	Wygląd tekstu	Liedtextdarstellung	Aspecto de la letra	Apparence des paroles	歌詞の外観
 Шрифт слів	Lyrics font	Písmo textu	Czcionka tekstu	Liedtextschrift	Fuente de la letra	Police des paroles	歌詞のフォント
 Імпортувати шрифт…	Import font…	Importovat písmo…	Importuj czcionkę…	Schrift importieren…	Importar fuente…	Importer une police…	フォントを読み込む…
@@ -279,3 +292,147 @@ JWT прострочено	Lyrics token expired	Platnost tokenu vypršela	Token 
 Власна тема CSS / RICS	Custom CSS / RICS theme	Vlastní motiv CSS / RICS	Własny motyw CSS / RICS	Eigenes CSS-/RICS-Theme	Tema CSS / RICS personalizado	Thème CSS / RICS personnalisé	カスタム CSS / RICS テーマ
 Застосувати	Apply	Použít	Zastosuj	Anwenden	Aplicar	Appliquer	適用
 Власна тема	Custom theme	Vlastní motiv	Własny motyw	Eigenes Theme	Tema personalizado	Thème personnalisé	カスタムテーマ
+Тема слів	Lyric theme	Motiv textu	Motyw tekstu	Liedtext-Theme	Tema de letras	Thème des paroles	歌詞テーマ
+Наступний рядок	Next line	Další řádek	Następny wiersz	Nächste Zeile	Siguiente línea	Ligne suivante	次の行
+Слова рухаються з музикою	Words move with the music	Slova se pohybují s hudbou	Słowa poruszają się z muzyką	Worte bewegen sich zur Musik	Las palabras se mueven con la música	Les mots suivent la musique	音楽とともに動く歌詞
+Оригінальна тема Vey	Vey original	Originální motiv Vey	Oryginalny motyw Vey	Vey-Original	Tema original de Vey	Création Vey	Vey オリジナル
+Адаптація Better Lyrics	Better Lyrics adaptation	Adaptace Better Lyrics	Adaptacja Better Lyrics	Better-Lyrics-Adaption	Adaptación de Better Lyrics	Adaptation de Better Lyrics	Better Lyrics アレンジ
+Збалансоване сяйво й плавний рух слів.	Balanced glow and smooth word motion.	Vyvážená záře a plynulý pohyb slov.	Zrównoważona poświata i płynny ruch słów.	Ausgewogener Schein und sanfte Wortbewegung.	Brillo equilibrado y movimiento suave.	Éclat équilibré et mouvement fluide.	程よい輝きとなめらかな単語の動き。
+М’яке біле сяйво та повільне згасання.	Soft white glow with a gentle fade.	Jemná bílá záře s pozvolným slábnutím.	Miękka biała poświata z łagodnym wygaszaniem.	Weißer Schimmer mit sanftem Ausblenden.	Brillo blanco con desvanecimiento suave.	Lueur blanche et fondu délicat.	柔らかな白い輝きと穏やかなフェード。
+Контрастний текст без декоративного руху.	Crisp text without decorative motion.	Ostrý text bez ozdobného pohybu.	Wyraźny tekst bez ozdobnego ruchu.	Klarer Text ohne dekorative Bewegung.	Texto nítido sin movimiento decorativo.	Texte net sans mouvement décoratif.	装飾的な動きのない鮮明な文字。
+М’ятне сяйво та м’який рух.	Mint glow and gentle motion.	Mátová záře a jemný pohyb.	Miętowa poświata i delikatny ruch.	Mintfarbener Schein und sanfte Bewegung.	Brillo menta y movimiento suave.	Lueur menthe et mouvement doux.	ミント色の輝きと優しい動き。
+Теплий бурштин і делікатне підсвічування.	Warm amber and delicate highlights.	Teplý jantar a jemné zvýraznění.	Ciepły bursztyn i delikatne podświetlenie.	Warmer Bernstein und dezente Akzente.	Ámbar cálido y realce delicado.	Ambre chaleureux et accents délicats.	温かい琥珀色と繊細なハイライト。
+Блакитний текст, легкі хвилі та простір.	Sky-blue text, light waves and breathing room.	Blankytný text, lehké vlny a vzdušnost.	Błękitny tekst, lekkie fale i przestrzeń.	Himmelblauer Text, leichte Wellen und Freiraum.	Texto celeste, ondas suaves y espacio.	Texte bleu ciel, vagues légères et espace.	空色の文字、軽やかな波とゆとり。
+Ніжні рожеві відтінки та плавне сяйво.	Soft pink tones and a flowing glow.	Jemné růžové tóny a plynulá záře.	Delikatne różowe odcienie i płynna poświata.	Zarte Rosatöne und fließender Schein.	Tonos rosas suaves y brillo fluido.	Tons roses doux et lueur fluide.	優しいピンク色となめらかな輝き。
+Неоновий акцент і виразні хвилі літер.	Neon accents and expressive letter waves.	Neonové akcenty a výrazné vlny písmen.	Neonowe akcenty i wyraziste fale liter.	Neonakzente und ausdrucksstarke Buchstabenwellen.	Acentos neón y ondas expresivas en las letras.	Accents néon et vagues de lettres expressives.	ネオンのアクセントと表情豊かな文字の波。
+Спокійний нічний текст без зайвого руху.	Quiet night colors with restrained motion.	Klidné noční barvy a střídmý pohyb.	Spokojne nocne kolory i oszczędny ruch.	Ruhige Nachtfarben und zurückhaltende Bewegung.	Colores nocturnos y movimiento discreto.	Couleurs nocturnes et mouvement discret.	静かな夜の色と控えめな動き。
+Чіткі слова без сяйва та коливань.	Clear words without glow or wobble.	Čistá slova bez záře a kolébání.	Czytelne słowa bez poświaty i kołysania.	Klare Worte ohne Schein oder Wippen.	Palabras claras sin brillo ni balanceo.	Mots nets sans lueur ni oscillation.	輝きや揺れのない読みやすい文字。
+Точна заливка з мінімумом ефектів.	Precise fill with minimal effects.	Přesné vyplnění s minimem efektů.	Precyzyjne wypełnienie z minimum efektów.	Präzise Füllung mit wenigen Effekten.	Relleno preciso con efectos mínimos.	Remplissage précis avec peu d’effets.	効果を抑えた正確な塗り。
+Великі білі рядки та стриманий фокус.	Large white lines with restrained focus.	Velké bílé řádky a střídmé zvýraznění.	Duże białe wiersze i subtelne wyróżnienie.	Große weiße Zeilen mit dezentem Fokus.	Líneas blancas grandes y enfoque discreto.	Grandes lignes blanches et accent discret.	大きな白い行と控えめな強調。
+Легкий фокус і прозорі неактивні рядки.	Light focus and translucent inactive lines.	Jemný důraz a průsvitné neaktivní řádky.	Lekki akcent i półprzezroczyste nieaktywne wiersze.	Sanfter Fokus und durchscheinende inaktive Zeilen.	Enfoque suave y líneas inactivas translúcidas.	Accent léger et lignes inactives translucides.	穏やかな強調と半透明の非アクティブ行。
+Яскравий поточний рядок і розмитий фон.	Bright current line and softly blurred context.	Jasný aktuální řádek a jemně rozostřené okolí.	Jasny bieżący wiersz i miękko rozmyte otoczenie.	Helle aktuelle Zeile und weichgezeichneter Kontext.	Línea actual brillante y contexto desenfocado.	Ligne actuelle lumineuse et contexte flouté.	明るい現在の行と柔らかくぼかした周囲。
+Легкий шрифт і короткі спокійні хвилі.	Light type and short, calm waves.	Lehké písmo a krátké klidné vlny.	Lekkie pismo i krótkie spokojne fale.	Leichte Schrift und kurze, ruhige Wellen.	Tipografía ligera y ondas breves y tranquilas.	Typographie légère et vagues courtes et calmes.	軽やかな書体と短く穏やかな波。
+М’який бузковий акцент і округлий фокус.	Soft lilac accents and rounded focus.	Jemné šeříkové akcenty a zaoblený důraz.	Delikatne liliowe akcenty i łagodne wyróżnienie.	Sanfte Fliederakzente und weicher Fokus.	Acentos lilas suaves y enfoque redondeado.	Accents lilas doux et mise en valeur arrondie.	柔らかなライラック色と丸みのある強調。
+Збережіть власні кольори, шрифти та ефекти.	Keep your own colors, fonts and effects.	Zachovejte vlastní barvy, písma a efekty.	Zachowaj własne kolory, czcionki i efekty.	Eigene Farben, Schriften und Effekte beibehalten.	Conserva tus colores, fuentes y efectos.	Conservez vos couleurs, polices et effets.	自分の色、フォント、効果を保持します。
+Тема, шрифт та ефекти тексту пісні	Theme, typography and lyric effects	Motiv, písmo a efekty textu	Motyw, czcionka i efekty tekstu	Thema, Schrift und Texteffekte	Tema, tipografía y efectos de letra	Thème, typographie et effets des paroles	テーマ、書体、歌詞エフェクト
+Тема плеєра, текст і ефекти	Player theme, lyrics and effects	Motiv přehrávače, text a efekty	Motyw odtwarzacza, tekst i efekty	Player-Thema, Liedtext und Effekte	Tema del reproductor, letra y efectos	Thème du lecteur, paroles et effets	プレーヤーのテーマ、歌詞、エフェクト
+Попередня тема	Previous theme	Předchozí motiv	Poprzedni motyw	Vorheriges Thema	Tema anterior	Thème précédent	前のテーマ
+Наступна тема	Next theme	Další motiv	Następny motyw	Nächstes Thema	Tema siguiente	Thème suivant	次のテーマ
+Попередній перегляд	Preview	Náhled	Podgląd	Vorschau	Vista previa	Aperçu	プレビュー
+Розмір тексту	Text size	Velikost textu	Rozmiar tekstu	Textgröße	Tamaño del texto	Taille du texte	文字サイズ
+Товщина шрифту	Font weight	Tloušťka písma	Grubość czcionki	Schriftstärke	Grosor de fuente	Graisse de police	文字の太さ
+Міжрядковий інтервал	Line spacing	Řádkování	Odstęp między wierszami	Zeilenabstand	Interlineado	Interligne	行間
+Розмиття неактивних рядків	Inactive line blur	Rozostření neaktivních řádků	Rozmycie nieaktywnych wierszy	Unschärfe inaktiver Zeilen	Desenfoque de líneas inactivas	Flou des lignes inactives	非アクティブ行のぼかし
+Ефекти	Effects	Efekty	Efekty	Effekte	Efectos	Effets	エフェクト
+Сяйво тексту	Text glow	Záře textu	Poświata tekstu	Textleuchten	Resplandor del texto	Lueur du texte	文字の光彩
+Радіус сяйва	Glow radius	Poloměr záře	Promień poświaty	Leuchtradius	Radio del resplandor	Rayon de la lueur	光彩の半径
+Рух слів	Word motion	Pohyb slov	Ruch słów	Wortbewegung	Movimiento de palabras	Mouvement des mots	単語の動き
+Хвиля літер	Letter wave	Vlna písmen	Fala liter	Buchstabenwelle	Onda de letras	Vague de lettres	文字のウェーブ
+Плавне згасання	Smooth fade	Plynulé slábnutí	Płynne wygaszanie	Sanftes Ausblenden	Desvanecimiento suave	Fondu progressif	滑らかなフェード
+Рух вимкнено в налаштуваннях анімації	Motion is disabled in animation settings	Pohyb je vypnutý v nastavení animací	Ruch jest wyłączony w ustawieniach animacji	Bewegung ist in den Animationseinstellungen deaktiviert	El movimiento está desactivado en los ajustes de animación	Le mouvement est désactivé dans les paramètres d’animation	アニメーション設定で動きが無効になっています
+Не підтримується	Unsupported	Nepodporováno	Nieobsługiwane	Nicht unterstützt	No compatible	Non pris en charge	非対応
+Текст	Text	Text	Tekst	Text	Texto	Texte	テキスト
+Скинути	Reset	Obnovit	Resetuj	Zurücksetzen	Restablecer	Réinitialiser	リセット
+Теми плеєра	Player themes	Motivy přehrávače	Motywy odtwarzacza	Player-Themen	Temas del reproductor	Thèmes du lecteur	プレーヤーのテーマ
+Оформити весь плеєр	Theme the entire player	Použít motiv v celém přehrávači	Zastosuj motyw w całym odtwarzaczu	Gesamten Player gestalten	Aplicar al reproductor completo	Appliquer à tout le lecteur	プレーヤー全体に適用
+Кольори, форми та фон	Colors, shapes and background	Barvy, tvary a pozadí	Kolory, kształty i tło	Farben, Formen und Hintergrund	Colores, formas y fondo	Couleurs, formes et arrière-plan	色、形、背景
+Кольори цієї теми застосовані до всіх сторінок.	This theme sets the colors on every page.	Tento motiv nastavuje barvy na všech stránkách.	Ten motyw ustawia kolory na wszystkich stronach.	Dieses Thema legt die Farben auf allen Seiten fest.	Este tema define los colores de todas las páginas.	Ce thème définit les couleurs de toutes les pages.	このテーマはすべてのページの色に適用されます。
+Плеєр	Player	Přehrávač	Odtwarzacz	Player	Reproductor	Lecteur	プレーヤー
+Заокруглення	Corners	Zaoblení	Zaokrąglenie	Ecken	Esquinas	Coins	角の丸み
+Заокруглення обкладинки	Artwork corners	Zaoblení obalu	Zaokrąglenie okładki	Cover-Ecken	Esquinas de portada	Coins de la pochette	アートワークの角
+Розмір обкладинки	Artwork size	Velikost obalu	Rozmiar okładki	Cover-Größe	Tamaño de portada	Taille de la pochette	アートワークのサイズ
+Сила фону	Background strength	Intenzita pozadí	Intensywność tła	Hintergrundstärke	Intensidad del fondo	Intensité du fond	背景の強さ
+Графітовий інтерфейс і чистий текст.	Graphite surfaces and clean typography.	Grafitové plochy a čisté písmo.	Grafitowe powierzchnie i czytelny tekst.	Graphitfarbene Flächen und klare Schrift.	Superficies de grafito y tipografía clara.	Surfaces graphite et typographie nette.	グラファイトの画面と明瞭な文字。
+Тепле мідне світло й м’які форми.	Warm copper light and soft shapes.	Teplé měděné světlo a jemné tvary.	Ciepłe miedziane światło i łagodne kształty.	Warmes Kupferlicht und weiche Formen.	Luz cobriza cálida y formas suaves.	Lumière cuivrée et formes douces.	暖かな銅色の光と柔らかな形。
+Глибокий синій фон і чіткі акценти.	Deep blue surfaces and crisp accents.	Tmavě modré plochy a výrazné akcenty.	Głęboki błękit i wyraźne akcenty.	Tiefblaue Flächen und klare Akzente.	Superficies azul profundo y acentos nítidos.	Surfaces bleu profond et accents nets.	深い青の画面と鮮明なアクセント。
+Теплий паперовий текст у нічній палітрі.	Warm paper-like text in a night palette.	Teplý papírový text v noční paletě.	Ciepły papierowy tekst w nocnej palecie.	Warmer papierfarbener Text in einer Nachtpalette.	Texto cálido de papel en una paleta nocturna.	Texte aux tons papier dans une palette nocturne.	夜の配色に暖かな紙色の文字。
+Загальні	General	Obecné	Ogólne	Allgemein	General	Général	一般
+Про застосунок	About	O aplikaci	O aplikacji	Über die App	Acerca de	À propos	アプリについて
+Версія	Version	Verze	Wersja	Version	Versión	Version	バージョン
+Акаунт Vey	Vey account	Účet Vey	Konto Vey	Vey-Konto	Cuenta de Vey	Compte Vey	Vey アカウント
+Синхронізація	Synchronization	Synchronizace	Synchronizacja	Synchronisierung	Sincronización	Synchronisation	同期
+Хмарні файли	Cloud files	Soubory v cloudu	Pliki w chmurze	Cloud-Dateien	Archivos en la nube	Fichiers cloud	クラウドのファイル
+Резервні копії	Backups	Zálohy	Kopie zapasowe	Sicherungen	Copias de seguridad	Sauvegardes	バックアップ
+Макет головної	Home layout	Rozložení domovské stránky	Układ strony głównej	Startseitenlayout	Diseño de inicio	Disposition de l’accueil	ホームのレイアウト
+Імпорт плейліста	Import playlist	Importovat playlist	Importuj playlistę	Playlist importieren	Importar playlist	Importer une playlist	プレイリストをインポート
+Новий макет при відкритті головної	Change layout on each visit	Měnit rozložení při otevření	Zmieniaj układ przy otwarciu	Layout bei jedem Besuch wechseln	Cambiar diseño en cada visita	Changer de disposition à chaque visite	ホームを開くたびに変更
+Випадковий макет	Random layout	Náhodné rozložení	Losowy układ	Zufälliges Layout	Diseño aleatorio	Disposition aléatoire	ランダムレイアウト
+Ваша колекція	Your collection	Vaše sbírka	Twoja kolekcja	Deine Sammlung	Tu colección	Votre collection	あなたのコレクション
+Що послухаємо?	What shall we play?	Co si pustíme?	Czego posłuchamy?	Was hören wir?	¿Qué escuchamos?	Qu’allons-nous écouter ?	何を聴きますか？
+Підключені акаунти	Connected accounts	Připojené účty	Połączone konta	Verbundene Konten	Cuentas conectadas	Comptes connectés	連携アカウント
+Не підключено	Not connected	Nepřipojeno	Niepołączone	Nicht verbunden	Sin conectar	Non connecté	未接続
+Підключити	Connect	Připojit	Połącz	Verbinden	Conectar	Connecter	接続
+Відключити	Disconnect	Odpojit	Rozłącz	Trennen	Desconectar	Déconnecter	接続解除
+Імпортувати	Import	Importovat	Importuj	Importieren	Importar	Importer	インポート
+Синхронізувати	Sync	Synchronizovat	Synchronizuj	Synchronisieren	Sincronizar	Synchroniser	同期
+Підключити Vey	Connect Vey	Připojit Vey	Połącz Vey	Vey verbinden	Conectar Vey	Connecter Vey	Veyを連携
+Керувати акаунтом Vey	Manage Vey account	Spravovat účet Vey	Zarządzaj kontem Vey	Vey-Konto verwalten	Gestionar cuenta Vey	Gérer le compte Vey	Veyアカウントを管理
+Оновлювати кожні 15 хвилин	Update every 15 minutes	Aktualizovat každých 15 minut	Aktualizuj co 15 minut	Alle 15 Minuten aktualisieren	Actualizar cada 15 minutos	Actualiser toutes les 15 minutes	15分ごとに更新
+Скасувати імпорт	Cancel import	Zrušit import	Anuluj import	Import abbrechen	Cancelar importación	Annuler l’import	インポートを中止
+Посилання YouTube Music або Spotify	YouTube Music or Spotify link	Odkaz YouTube Music nebo Spotify	Link YouTube Music lub Spotify	YouTube-Music- oder Spotify-Link	Enlace de YouTube Music o Spotify	Lien YouTube Music ou Spotify	YouTube MusicまたはSpotifyのリンク
+Вставте посилання на публічний плейліст YouTube Music. Вхід не потрібен.	Paste a public YouTube Music playlist link. No sign-in needed.	Vložte odkaz na veřejný playlist YouTube Music. Přihlášení není nutné.	Wklej link do publicznej playlisty YouTube Music. Logowanie nie jest wymagane.	Link zu einer öffentlichen YouTube-Music-Playlist einfügen. Keine Anmeldung nötig.	Pega un enlace público de YouTube Music. No necesitas iniciar sesión.	Collez un lien de playlist YouTube Music publique. Aucune connexion requise.	公開YouTube Musicプレイリストのリンクを貼り付けてください。ログインは不要です。
+Для приватних плейлістів і Spotify спочатку підключіть відповідний акаунт.	For private playlists and Spotify, connect the relevant account first.	Pro soukromé playlisty a Spotify nejprve připojte příslušný účet.	Dla prywatnych playlist i Spotify najpierw połącz odpowiednie konto.	Für private Playlists und Spotify zuerst das entsprechende Konto verbinden.	Para playlists privadas y Spotify, conecta primero la cuenta correspondiente.	Pour les playlists privées et Spotify, connectez d’abord le compte concerné.	非公開プレイリストやSpotifyは、先に該当アカウントを連携してください。
+Виберіть, який акаунт підключити. YouTube Music та Vey працюють незалежно; можна підключити обидва.	Choose which account to connect. YouTube Music and Vey work independently; you can connect both.	Vyberte účet k připojení. YouTube Music a Vey fungují nezávisle; můžete připojit oba.	Wybierz konto do połączenia. YouTube Music i Vey działają niezależnie; możesz połączyć oba.	Wähle ein Konto. YouTube Music und Vey arbeiten unabhängig; beide lassen sich verbinden.	Elige qué cuenta conectar. YouTube Music y Vey son independientes; puedes conectar ambas.	Choisissez un compte. YouTube Music et Vey fonctionnent indépendamment ; vous pouvez connecter les deux.	連携するアカウントを選択してください。YouTube MusicとVeyは独立しており、両方を連携できます。
+Vey зберігає вашу бібліотеку, улюблене та плейлісти між пристроями.	Vey syncs your library, favorites and playlists across devices.	Vey synchronizuje knihovnu, oblíbené a playlisty mezi zařízeními.	Vey synchronizuje bibliotekę, ulubione i playlisty między urządzeniami.	Vey synchronisiert Bibliothek, Favoriten und Playlists zwischen Geräten.	Vey sincroniza tu biblioteca, favoritos y playlists entre dispositivos.	Vey synchronise bibliothèque, favoris et playlists entre appareils.	Veyはライブラリ、お気に入り、プレイリストをデバイス間で同期します。
+Підключіть сервіси у настільній Vey. На цьому пристрої плейлісти доступні через акаунт Vey.	Connect services in desktop Vey. On this device, access synced playlists with your Vey account.	Připojte služby v počítačové Vey. Na tomto zařízení jsou playlisty dostupné přes účet Vey.	Połącz usługi w Vey na komputerze. Na tym urządzeniu playlisty są dostępne przez konto Vey.	Dienste in Vey am Desktop verbinden. Hier sind Playlists über dein Vey-Konto verfügbar.	Conecta servicios en Vey de escritorio. Aquí accede a las playlists con tu cuenta Vey.	Connectez les services dans Vey sur ordinateur. Ici, accédez aux playlists via votre compte Vey.	デスクトップ版Veyでサービスを連携してください。このデバイスではVeyアカウントでプレイリストにアクセスできます。
+Вкажіть Client ID власного зареєстрованого застосунку та підтвердьте доступ у браузері.	Enter your registered app’s Client ID and approve access in your browser.	Zadejte Client ID své registrované aplikace a potvrďte přístup v prohlížeči.	Wpisz Client ID zarejestrowanej aplikacji i zatwierdź dostęp w przeglądarce.	Client-ID der registrierten App eingeben und Zugriff im Browser bestätigen.	Introduce el Client ID de tu aplicación y autoriza el acceso en el navegador.	Saisissez le Client ID de votre application et autorisez l’accès dans le navigateur.	登録したアプリのClient IDを入力し、ブラウザーでアクセスを承認してください。
+Відкриється звичайний вхід Google у Chrome або Edge. Виберіть акаунт і дочекайтеся YouTube Music — Vey підключиться автоматично.	Google sign-in opens in Chrome or Edge. Choose your account and wait for YouTube Music; Vey connects automatically.	Přihlášení Google se otevře v Chrome nebo Edge. Vyberte účet a počkejte na YouTube Music; Vey se připojí automaticky.	Logowanie Google otworzy się w Chrome lub Edge. Wybierz konto i poczekaj na YouTube Music; Vey połączy się automatycznie.	Die Google-Anmeldung öffnet sich in Chrome oder Edge. Konto wählen und auf YouTube Music warten; Vey verbindet sich automatisch.	Google se abrirá en Chrome o Edge. Elige tu cuenta y espera a YouTube Music; Vey se conectará automáticamente.	La connexion Google s’ouvre dans Chrome ou Edge. Choisissez un compte et attendez YouTube Music ; Vey se connectera automatiquement.	ChromeまたはEdgeでGoogleログインが開きます。アカウントを選び、YouTube Musicが開くとVeyが自動接続します。
+Для автоматичного оновлення залиште вкладку YouTube Music відкритою.	Keep the YouTube Music tab open for automatic updates.	Pro automatické aktualizace nechte kartu YouTube Music otevřenou.	Pozostaw kartę YouTube Music otwartą, aby aktualizować automatycznie.	Für automatische Aktualisierungen den YouTube-Music-Tab geöffnet lassen.	Mantén abierta la pestaña de YouTube Music para actualizar automáticamente.	Gardez l’onglet YouTube Music ouvert pour les mises à jour automatiques.	自動更新するにはYouTube Musicのタブを開いたままにしてください。
+Профіль акаунта	Account profile	Profil účtu	Profil konta	Kontoprofil	Perfil de la cuenta	Profil du compte	アカウントプロフィール
+Створено	Created	Vytvořeno	Utworzono	Erstellt	Creado	Créé	作成日
+Завантажити аватар	Upload avatar	Nahrát avatar	Prześlij awatar	Avatar hochladen	Subir avatar	Importer un avatar	アバターをアップロード
+Видалити аватар	Remove avatar	Odebrat avatar	Usuń awatar	Avatar entfernen	Quitar avatar	Supprimer l’avatar	アバターを削除
+Нікнейм	Nickname	Přezdívka	Pseudonim	Spitzname	Apodo	Pseudonyme	ニックネーム
+Поточний пароль для зміни email або пароля	Current password to change email or password	Současné heslo ke změně e-mailu nebo hesla	Bieżące hasło do zmiany e-maila lub hasła	Aktuelles Passwort zum Ändern von E-Mail oder Passwort	Contraseña actual para cambiar el correo o la contraseña	Mot de passe actuel pour modifier l’e-mail ou le mot de passe	メールアドレスまたはパスワードの変更に必要な現在のパスワード
+Зберегти профіль	Save profile	Uložit profil	Zapisz profil	Profil speichern	Guardar perfil	Enregistrer le profil	プロフィールを保存
+Зміна пароля	Change password	Změna hesla	Zmiana hasła	Passwort ändern	Cambiar contraseña	Changer le mot de passe	パスワードの変更
+Новий пароль · щонайменше 10 символів	New password · at least 10 characters	Nové heslo · alespoň 10 znaků	Nowe hasło · co najmniej 10 znaków	Neues Passwort · mindestens 10 Zeichen	Nueva contraseña · mínimo 10 caracteres	Nouveau mot de passe · 10 caractères minimum	新しいパスワード · 10文字以上
+Змінити пароль	Change password	Změnit heslo	Zmień hasło	Passwort ändern	Cambiar contraseña	Changer le mot de passe	パスワードを変更
+Підключення приватних плейлістів використовує окремий профіль Vey.	Private playlist sync uses a separate Vey profile.	Synchronizace soukromých playlistů používá samostatný profil Vey.	Synchronizacja prywatnych playlistów korzysta z osobnego profilu Vey.	Die Synchronisierung privater Playlists verwendet ein separates Vey-Profil.	La sincronización de playlists privadas usa un perfil de Vey independiente.	La synchronisation des playlists privées utilise un profil Vey distinct.	非公開プレイリストの同期には専用のVeyプロフィールを使います。
+Типовий браузер відкриває його поточний профіль, але не підключає Vey до приватних списків.	The default browser opens its current profile, but does not connect Vey to private playlists.	Výchozí prohlížeč otevře aktuální profil, ale Vey tím nezíská přístup k soukromým playlistům.	Domyślna przeglądarka otworzy bieżący profil, ale nie połączy Vey z prywatnymi playlistami.	Der Standardbrowser öffnet sein aktuelles Profil, verbindet Vey aber nicht mit privaten Playlists.	El navegador predeterminado abre su perfil actual, pero no conecta Vey con las playlists privadas.	Le navigateur par défaut ouvre son profil actuel, mais ne connecte pas Vey aux playlists privées.	既定のブラウザーで現在のプロフィールを開きますが、Veyは非公開プレイリストに接続されません。
+Відкрити в типовому браузері	Open in default browser	Otevřít ve výchozím prohlížeči	Otwórz w domyślnej przeglądarce	Im Standardbrowser öffnen	Abrir en el navegador predeterminado	Ouvrir dans le navigateur par défaut	既定のブラウザーで開く
+ джерел	 sources	 zdrojů	 źródeł	 Quellen	 fuentes	 sources	 ソース
+Email або інший сервер	Email or another server	E-mail nebo jiný server	E-mail lub inny serwer	E-Mail oder anderer Server	Correo u otro servidor	E-mail ou autre serveur	メールアドレスまたは別のサーバー
+Premium для завантаження власного аудіо зараз видається лише розробникам і тестувальникам. Купівля недоступна.	Premium uploads for personal audio are currently available to developers and testers only. Purchases are unavailable.	Premium pro nahrávání vlastního audia je nyní dostupné pouze vývojářům a testerům. Nákup není možný.	Premium do przesyłania własnego audio jest obecnie dostępne tylko dla deweloperów i testerów. Zakup jest niedostępny.	Premium für eigene Audiodateien ist derzeit nur für Entwickler und Tester verfügbar. Ein Kauf ist nicht möglich.	Premium para subir audio propio solo está disponible para desarrolladores y testers. No se puede comprar.	L’offre Premium pour l’audio personnel est réservée aux développeurs et testeurs. L’achat n’est pas disponible.	個人用音声のPremiumアップロードは現在、開発者とテスターのみ利用できます。購入はできません。
+Або відкрий посилання та введи код:	Or open the link and enter the code:	Nebo otevřete odkaz a zadejte kód:	Albo otwórz link i wpisz kod:	Oder öffne den Link und gib den Code ein:	O abre el enlace e introduce el código:	Ou ouvrez le lien et saisissez le code :	またはリンクを開いてコードを入力してください:
+Автоматична синхронізація	Automatic sync	Automatická synchronizace	Automatyczna synchronizacja	Automatische Synchronisierung	Sincronización automática	Synchronisation automatique	自動同期
+Автоматичне завантаження працює для пісень із вашої бібліотеки, поки Vey відкритий.	Automatic uploads cover songs in your library while Vey is open.	Automatické nahrávání zahrnuje skladby z knihovny, když je Vey spuštěný.	Automatyczne przesyłanie obejmuje utwory z biblioteki, gdy Vey jest uruchomiony.	Automatische Uploads umfassen Titel aus deiner Bibliothek, solange Vey geöffnet ist.	La subida automática incluye canciones de tu biblioteca mientras Vey está abierto.	L’envoi automatique concerne les titres de votre bibliothèque lorsque Vey est ouvert.	Veyを開いている間、ライブラリの曲を自動でアップロードします。
+Автоматично завантажувати локальні пісні	Automatically upload local songs	Automaticky nahrávat místní skladby	Automatycznie przesyłaj lokalne utwory	Lokale Titel automatisch hochladen	Subir canciones locales automáticamente	Envoyer automatiquement les titres locaux	ローカルの曲を自動アップロード
+Адреса API Vey	Vey API address	Adresa API Vey	Adres API Vey	Vey-API-Adresse	Dirección de la API de Vey	Adresse de l’API Vey	Vey APIアドレス
+Видалити	Delete	Smazat	Usuń	Löschen	Eliminar	Supprimer	削除
+Видалити плейлист	Delete playlist	Smazat playlist	Usuń playlistę	Playlist löschen	Eliminar playlist	Supprimer la playlist	プレイリストを削除
+Вийти з акаунта	Sign out	Odhlásit se	Wyloguj się	Abmelden	Cerrar sesión	Se déconnecter	ログアウト
+Виразний	Bold	Výrazný	Wyrazisty	Markant	Intenso	Soutenu	はっきり
+Відкрити сторінку входу	Open sign-in page	Otevřít přihlašovací stránku	Otwórz stronę logowania	Anmeldeseite öffnen	Abrir página de inicio de sesión	Ouvrir la page de connexion	ログインページを開く
+Відновити дані з хмари на цьому пристрої	Restore cloud data on this device	Obnovit cloudová data do tohoto zařízení	Przywróć dane z chmury na tym urządzeniu	Clouddaten auf diesem Gerät wiederherstellen	Restaurar datos de la nube en este dispositivo	Restaurer les données du cloud sur cet appareil	このデバイスにクラウドデータを復元
+Відстань до романізації	Gap before romanization	Mezera před přepisem výslovnosti	Odstęp przed transkrypcją	Abstand vor der Romanisierung	Espacio antes de la romanización	Espace avant la romanisation	ローマ字表記との間隔
+Відтворити плейлист	Play playlist	Přehrát playlist	Odtwórz playlistę	Playlist abspielen	Reproducir playlist	Lire la playlist	プレイリストを再生
+Власне аудіо · приватне сховище	Personal audio · private storage	Vlastní audio · soukromé úložiště	Własne audio · prywatny magazyn	Eigene Audiodateien · privater Speicher	Audio propio · almacenamiento privado	Audio personnel · stockage privé	個人用音声 · プライベートストレージ
+Додавайте пісні через меню композиції	Add songs from the track menu	Skladby přidávejte přes nabídku skladby	Dodawaj utwory z menu utworu	Füge Titel über das Titelmenü hinzu	Añade canciones desde el menú de la canción	Ajoutez des titres depuis le menu du morceau	曲のメニューから追加してください
+Завантажити вибрану пісню у хмару	Upload selected song to the cloud	Nahrát vybranou skladbu do cloudu	Prześlij wybrany utwór do chmury	Ausgewählten Titel in die Cloud hochladen	Subir la canción seleccionada a la nube	Envoyer le titre sélectionné dans le cloud	選択した曲をクラウドにアップロード
+Завантажити пісню на пристрій	Download song to device	Stáhnout skladbu do zařízení	Pobierz utwór na urządzenie	Titel auf das Gerät herunterladen	Descargar canción al dispositivo	Télécharger le titre sur l’appareil	曲をデバイスにダウンロード
+Зберегти дані цього пристрою у хмарі	Save this device's data to the cloud	Uložit data tohoto zařízení do cloudu	Zapisz dane z tego urządzenia w chmurze	Daten dieses Geräts in der Cloud speichern	Guardar los datos de este dispositivo en la nube	Enregistrer les données de cet appareil dans le cloud	このデバイスのデータをクラウドに保存
+Ім’я	Name	Jméno	Imię	Name	Nombre	Nom	名前
+Ім’я для нового акаунта	Name for the new account	Jméno nového účtu	Imię nowego konta	Name für das neue Konto	Nombre de la cuenta nueva	Nom du nouveau compte	新しいアカウント名
+Код діє ще	Code expires in	Kód vyprší za	Kod wygaśnie za	Code läuft ab in	El código caduca en	Le code expire dans	コードの有効期限まで
+Не рекомендувати	Don't recommend	Nedoporučovat	Nie polecaj	Nicht empfehlen	No recomendar	Ne pas recommander	おすすめしない
+Оновити доступ акаунта	Refresh account access	Obnovit přístup k účtu	Odśwież dostęp do konta	Kontozugriff aktualisieren	Actualizar acceso a la cuenta	Actualiser l’accès au compte	アカウントアクセスを更新
+Оновити список хмарних файлів	Refresh cloud file list	Obnovit seznam cloudových souborů	Odśwież listę plików w chmurze	Liste der Cloud-Dateien aktualisieren	Actualizar lista de archivos en la nube	Actualiser la liste des fichiers cloud	クラウドファイル一覧を更新
+Опубліковано	Published	Zveřejněno	Opublikowano	Veröffentlicht	Publicado	Publié	公開済み
+Опубліковано у профілі	Published on profile	Zveřejněno v profilu	Opublikowano w profilu	Im Profil veröffentlicht	Publicado en el perfil	Publié sur le profil	プロフィールに公開
+Опублікувати	Publish	Zveřejnit	Opublikuj	Veröffentlichen	Publicar	Publier	公開
+Пароль Vey	Vey password	Heslo Vey	Hasło Vey	Vey-Passwort	Contraseña de Vey	Mot de passe Vey	Veyのパスワード
+Показати у профілі	Show on profile	Zobrazit v profilu	Pokaż w profilu	Im Profil anzeigen	Mostrar en el perfil	Afficher sur le profil	プロフィールに表示
+Продовжити з Vey	Continue with Vey	Pokračovat s Vey	Kontynuuj z Vey	Mit Vey fortfahren	Continuar con Vey	Continuer avec Vey	Veyで続行
+сек	sec	s	 s	Sek.	s	 s	秒
+Синхронізуються посилання на відео, улюблене, історія, списки та налаштування. Файли пристрою залишаються локальними.	Video links, liked songs, history, playlists and settings are synced. Device files stay local.	Synchronizují se odkazy na videa, oblíbené skladby, historie, playlisty a nastavení. Soubory zařízení zůstávají místní.	Synchronizowane są linki do filmów, polubione utwory, historia, playlisty i ustawienia. Pliki urządzenia pozostają lokalne.	Videos, Favoriten, Verlauf, Playlists und Einstellungen werden synchronisiert. Gerätedateien bleiben lokal.	Se sincronizan enlaces de vídeo, canciones favoritas, historial, playlists y ajustes. Los archivos del dispositivo permanecen locales.	Les liens vidéo, les titres aimés, l’historique, les playlists et les réglages sont synchronisés. Les fichiers de l’appareil restent locaux.	動画リンク、高評価、履歴、プレイリスト、設定を同期します。デバイスのファイルはローカルに保存されます。
+Скануй QR-код камерою телефона	Scan the QR code with your phone camera	Naskenujte QR kód fotoaparátem telefonu	Zeskanuj kod QR aparatem telefonu	Scanne den QR-Code mit der Handykamera	Escanea el código QR con la cámara del teléfono	Scannez le QR code avec l’appareil photo de votre téléphone	スマートフォンのカメラでQRコードを読み取ってください
+Скасувати вхід	Cancel sign-in	Zrušit přihlášení	Anuluj logowanie	Anmeldung abbrechen	Cancelar inicio de sesión	Annuler la connexion	ログインをキャンセル
+Скасувати завантаження	Cancel upload	Zrušit nahrávání	Anuluj przesyłanie	Upload abbrechen	Cancelar subida	Annuler l’envoi	アップロードをキャンセル
+Спокійний	Calm	Klidný	Spokojny	Ruhig	Tranquilo	Calme	穏やか
+Створити акаунт	Create account	Vytvořit účet	Utwórz konto	Konto erstellen	Crear cuenta	Créer un compte	アカウントを作成
+У списку ще немає композицій	There are no tracks in this list yet	V tomto seznamu zatím nejsou žádné skladby	Na tej liście nie ma jeszcze utworów	Diese Liste enthält noch keine Titel	Todavía no hay canciones en esta lista	Cette liste ne contient pas encore de titres	このリストにはまだ曲がありません
+Увійдіть, щоб зберігати бібліотеку та налаштування між пристроями.	Sign in to sync your library and settings across devices.	Přihlaste se a synchronizujte knihovnu a nastavení mezi zařízeními.	Zaloguj się, aby synchronizować bibliotekę i ustawienia między urządzeniami.	Melde dich an, um deine Bibliothek und Einstellungen zwischen Geräten zu synchronisieren.	Inicia sesión para sincronizar tu biblioteca y ajustes entre dispositivos.	Connectez-vous pour synchroniser votre bibliothèque et vos réglages entre appareils.	ログインするとライブラリと設定をデバイス間で同期できます。
+Увійти	Sign in	Přihlásit se	Zaloguj się	Anmelden	Iniciar sesión	Se connecter	ログイン
+Увійти через QR-код	Sign in with QR code	Přihlásit se pomocí QR kódu	Zaloguj się kodem QR	Mit QR-Code anmelden	Iniciar sesión con código QR	Se connecter avec un QR code	QRコードでログイン
+Улюблене, історія та налаштування у хмарі	Favorites, history and settings in the cloud	Oblíbené, historie a nastavení v cloudu	Ulubione, historia i ustawienia w chmurze	Favoriten, Verlauf und Einstellungen in der Cloud	Favoritos, historial y ajustes en la nube	Favoris, historique et réglages dans le cloud	お気に入り、履歴、設定をクラウドに保存

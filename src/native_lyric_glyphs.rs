@@ -65,27 +65,67 @@ impl GlyphPlans {
             theme.highlight_swipe_start_to,
             theme.highlight_swipe_end_to,
         );
-        let count = planned.row_count();
+        let mut byte = 0;
+        let raw = (0..planned.row_count())
+            .filter_map(|i| planned.row_data(i))
+            .map(|glyph| {
+                let first = byte;
+                byte += glyph.text.len();
+                (first..byte, glyph)
+            })
+            .collect::<Vec<_>>();
+        let shaped = if raw.is_empty() {
+            None
+        } else {
+            crate::native_lyric_fonts::letter_geometry(text, family, weight)
+        };
+        let glyphs = shaped
+            .and_then(|geometry| {
+                geometry
+                    .into_iter()
+                    .map(|cluster| {
+                        let timed = raw
+                            .iter()
+                            .filter(|(range, _)| {
+                                range.start < cluster.byte_end && range.end > cluster.byte_start
+                            })
+                            .collect::<Vec<_>>();
+                        let first = &timed.first()?.1;
+                        let delay = timed
+                            .iter()
+                            .map(|(_, g)| g.delay_ms)
+                            .fold(f32::INFINITY, f32::min);
+                        let until = timed
+                            .iter()
+                            .map(|(_, g)| g.delay_ms + g.wave_ms)
+                            .fold(delay, f32::max);
+                        Some(LyricGlyph {
+                            text: cluster.text.into(),
+                            start: cluster.start,
+                            width: cluster.width,
+                            start_em: cluster.start_em,
+                            width_em: cluster.width_em,
+                            isolated_advance_em: cluster.isolated_advance_em,
+                            delay_ms: delay,
+                            wave_ms: until - delay,
+                            sweep_delay_ms: first.sweep_delay_ms,
+                            sweep_duration_ms: first.sweep_duration_ms,
+                            sweep_from: first.sweep_from,
+                            sweep_to: first.sweep_to,
+                            sweep_feather: first.sweep_feather,
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()
+            })
+            .unwrap_or_default();
+        let count = glyphs.len();
+        if count > 32768 {
+            return ModelRc::default();
+        }
         let plan = if count == 0 {
             ModelRc::default()
         } else {
-            ModelRc::new(Rc::new(VecModel::from(
-                (0..count)
-                    .filter_map(|i| planned.row_data(i))
-                    .map(|g| LyricGlyph {
-                        text: g.text,
-                        start: g.start,
-                        width: g.width,
-                        delay_ms: g.delay_ms,
-                        wave_ms: g.wave_ms,
-                        sweep_delay_ms: g.sweep_delay_ms,
-                        sweep_duration_ms: g.sweep_duration_ms,
-                        sweep_from: g.sweep_from,
-                        sweep_to: g.sweep_to,
-                        sweep_feather: g.sweep_feather,
-                    })
-                    .collect::<Vec<_>>(),
-            )))
+            ModelRc::new(Rc::new(VecModel::from(glyphs)))
         };
         while self.entries.len() >= 1024 || self.glyphs + count > 32768 {
             let Some(old) = self.order.pop_front() else {
@@ -156,5 +196,29 @@ mod tests {
         }
         assert_eq!(plans.entries.len(), 1024);
         assert!(plans.glyphs <= 32768);
+    }
+
+    #[test]
+    fn animated_clusters_keep_shaped_kerning_ligatures_and_marks() {
+        let mut shadows = crate::native_lyric_fonts::cache();
+        let mut plans = GlyphPlans::default();
+        let theme = LyricsTheme::default();
+        for text in ["AVATAR", "office", "e\u{301}cole"] {
+            let metrics = shadows.word(text, "Satoshi", 700);
+            let plan = plans.get(&text.into(), "Satoshi", 700, 400., &theme, &metrics);
+            let geometry = crate::native_lyric_fonts::letter_geometry(text, "Satoshi", 700)
+                .expect("independently paintable shaped clusters");
+            assert_eq!(plan.row_count(), geometry.len());
+            let mut restored = String::new();
+            for (i, cluster) in geometry.iter().enumerate() {
+                let glyph = plan.row_data(i).unwrap();
+                restored.push_str(&glyph.text);
+                assert_eq!(glyph.start_em, cluster.start_em);
+                assert_eq!(glyph.width_em, cluster.width_em);
+                assert_eq!(glyph.isolated_advance_em, cluster.isolated_advance_em);
+                assert!(glyph.wave_ms > 0. && glyph.delay_ms.is_finite());
+            }
+            assert_eq!(restored, text);
+        }
     }
 }

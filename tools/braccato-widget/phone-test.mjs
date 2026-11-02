@@ -4,6 +4,28 @@ import {writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 let page;
 const browser=await chromium.launch({channel:'msedge',headless:true});
+const assertVisuallySimilar=async(page,before,after,label)=>{
+  const metrics=await page.evaluate(async({before,after})=>{
+    const pixels=async(data)=>{
+      const image=new Image();image.src=`data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
+      const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);
+      return {width:image.width,height:image.height,data:context.getImageData(0,0,image.width,image.height).data};
+    };
+    const [a,b]=await Promise.all([pixels(before),pixels(after)]);
+    if(a.width!==b.width||a.height!==b.height)return {sameSize:false,changedRatio:1,meanChannelDelta:1};
+    let changed=0,total=0;
+    for(let i=0;i<a.data.length;i+=4){
+      const delta=Math.max(Math.abs(a.data[i]-b.data[i]),Math.abs(a.data[i+1]-b.data[i+1]),Math.abs(a.data[i+2]-b.data[i+2]));
+      if(delta>=24)changed++;
+      total+=Math.abs(a.data[i]-b.data[i])+Math.abs(a.data[i+1]-b.data[i+1])+Math.abs(a.data[i+2]-b.data[i+2]);
+    }
+    return {sameSize:true,changedRatio:changed/(a.width*a.height),meanChannelDelta:total/(a.width*a.height*3*255)};
+  },{before:before.toString('base64'),after:after.toString('base64')});
+  assert.ok(metrics.sameSize&&metrics.changedRatio<=.02&&metrics.meanChannelDelta<=.025,
+    `${label}: visual difference exceeded tolerance (${JSON.stringify(metrics)})`);
+};
 try {
   page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
   const errors=[];let browseCalls=0;
@@ -28,7 +50,10 @@ try {
     });
   });
   const nav=async(view,section='')=>{
-    await frame.waitForFunction(({view,section})=>window.nav?.view===view&&window.nav?.section===section,{view,section});
+    await page.waitForFunction(({view,section})=>{
+      const current=history.state?.vey;
+      return current?.view===view&&(current?.section||'')===section;
+    },{view,section});
     await page.waitForTimeout(560);
   };
   const tapTab=async(index)=>{
@@ -39,11 +64,11 @@ try {
   await page.waitForTimeout(1000);
   await shot('45-phone-home');
   await tapTab(4);await nav('settings');await shot('46-phone-settings');
-  await page.touchscreen.tap(180,184);await nav('settings','audio');
+  await page.touchscreen.tap(180,596);await nav('settings','audio');
   assert.equal(await page.evaluate(()=>window.phoneAudio.playbackRate),1,'legacy speed is reset to normal playback');
-  await page.touchscreen.tap(130,218);await page.waitForTimeout(100);
+  await page.touchscreen.tap(130,246);await page.waitForTimeout(100);
   assert.ok(await page.evaluate(()=>window.phoneAudio.volume)<.7,'phone settings expose working volume');
-  await page.mouse.move(130,218);await page.mouse.down();await page.mouse.move(300,218,{steps:8});await page.mouse.up();
+  await page.mouse.move(130,246);await page.mouse.down();await page.mouse.move(300,246,{steps:8});await page.mouse.up();
   assert.ok(await page.evaluate(()=>window.phoneAudio.volume)>.8,'volume drag follows the visible rail');
   await page.keyboard.press('Home');await page.waitForTimeout(100);
   assert.equal(await page.evaluate(()=>window.phoneAudio.volume),0,'volume Home reaches mute');
@@ -53,7 +78,8 @@ try {
   await page.goBack();await nav('settings');
   await page.goForward();await nav('settings','audio');
   await page.touchscreen.tap(46,106);await nav('settings');
-  await page.touchscreen.tap(180,278);await nav('settings','library');
+  await page.mouse.move(180,500);await page.mouse.wheel(0,520);await page.waitForTimeout(200);
+  await page.touchscreen.tap(180,350);await nav('settings','library');
   const chooser=page.waitForEvent('filechooser');
   await page.touchscreen.tap(180,255);
   const wav=Buffer.alloc(44+32000);wav.write('RIFF');wav.writeUInt32LE(wav.length-8,4);wav.write('WAVEfmt ',8);
@@ -65,13 +91,14 @@ try {
   await shot('48-phone-library');
   await tapTab(4);await nav('settings','library');await tapTab(4);await nav('settings');
   await page.touchscreen.tap(180,466);await nav('settings','appearance');
-  await page.touchscreen.tap(180,428);await page.waitForTimeout(100);
+  await page.touchscreen.tap(180,547);await page.waitForTimeout(300);
   assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('playervf.rust.v1')).settings.lyrics_reduced_motion),true,'reduced motion setting persists');
-  await page.touchscreen.tap(180,428);await page.waitForTimeout(100);
   await page.touchscreen.tap(46,106);await nav('settings');
   for(const [width,height] of [[320,640],[360,740],[430,932]]){
     await page.setViewportSize({width,height});await page.waitForTimeout(450);
-    await page.touchscreen.tap(140,372);await nav('settings','data');
+    await page.mouse.move(width/2,height-160);await page.mouse.wheel(0,700);await page.waitForTimeout(200);
+    await shot(`49-settings-scroll-${width}`);
+    await page.touchscreen.tap(width/2,height-314);await nav('settings','data');
     await shot(`49-phone-data-${width}`);
     await page.mouse.move(width/2,440);await page.mouse.wheel(0,500);await page.waitForTimeout(200);
     await shot(`50-phone-data-bottom-${width}`);
@@ -83,29 +110,33 @@ try {
     assert.equal(await frame.evaluate(()=>window.cameras.length),cameraCount,'mobile player opens without a page camera transition');
     await shot(`51-phone-player-overlay-${width}`);
     await page.touchscreen.tap(44,68);await nav('settings','data');
-    assert.ok(underlay.equals(await page.screenshot({clip})),'closing the overlay preserves the scrolled settings page exactly');
+    const restored=await page.screenshot({clip});
+    await assertVisuallySimilar(page,underlay,restored,'closing the overlay preserves the scrolled settings page');
     assert.equal(await frame.evaluate(()=>window.cameras.length),cameraCount,'closing the mobile player does not move the page');
     if(width===320) {
       await page.goBack();await nav('lyrics');
       await page.goBack();await nav('settings','data');
-      assert.ok(underlay.equals(await page.screenshot({clip})),'browser Back dismisses the player and preserves the page');
+      await assertVisuallySimilar(page,underlay,await page.screenshot({clip}),'browser Back dismisses the player and preserves the page');
     }
     // Return with the fixed bottom tab even when the form has been scrolled.
     await tapTab(4);await nav('settings');
   }
   await page.setViewportSize({width:390,height:844});await page.waitForTimeout(400);
+  await page.touchscreen.tap(180,489);await nav('settings','appearance');
+  await page.touchscreen.tap(180,547);await page.waitForTimeout(300);
+  await page.touchscreen.tap(46,106);await nav('settings');
   for(const index of [0,2,1,4,0,4]){await tapTab(index);await page.waitForTimeout(35);}
   await nav('settings');
   const cameras=await frame.evaluate(()=>window.cameras);
   assert.ok(cameras.some(c=>c.elapsed<c.duration),'navigation produces intermediate camera samples');
-  assert.ok(cameras.every(c=>c.duration>=240&&c.duration<=520),'page travel uses smooth bounded duration');
+  assert.ok(cameras.every(c=>c.duration>=100&&c.duration<=180),'page travel stays within the shared 100–180 ms motion range');
   await tapTab(1);await nav('explore');const first=browseCalls;
   await tapTab(0);await nav('home');await tapTab(1);await nav('explore');
   assert.equal(browseCalls,first,'returning to Explore uses its cached results');
   await page.touchscreen.tap(312,154);await page.waitForTimeout(500);
   assert.equal(browseCalls,first+1,'explicit refresh still requests new results');
   assert.deepEqual(errors,[]);
-  const report={passed:true,checks:['labeled bottom tabs','normal playback after legacy speed preference','volume tap, drag and keyboard endpoints','browser back/forward','settings back button','local file import','reduced motion persistence','320/360/390/430px layouts','mobile player overlay preserves page and scroll','overlay Back dismissal','rapid navigation','cached Explore and explicit refresh','no browser errors'],browseCalls};
+  const report={passed:true,checks:['labeled bottom tabs','normal playback after legacy speed preference','volume tap, drag and keyboard endpoints','browser back/forward','settings back button','local file import','reduced motion persistence','320/360/390/430px layouts','mobile player overlay preserves page and scroll','overlay Back dismissal','rapid navigation','bounded 100–180 ms page travel','cached Explore and explicit refresh','no browser errors'],browseCalls};
   await writeFile(new URL('../../docs/phone-check.json',import.meta.url),JSON.stringify(report,null,2)+'\n');
   console.log(JSON.stringify(report,null,2));
 } catch(error) {

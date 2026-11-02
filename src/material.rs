@@ -217,12 +217,34 @@ pub fn install(w: &MainWindow) {
             }
             transition.art = art;
         }
-        let target = artwork_target(
+        let mut target = artwork_target(
             ColorMode::from_name(&w.get_color_mode()),
             w.get_color_hue(),
             transition.cover,
             transition.chroma,
         );
+        let p = w.get_player_theme_style();
+        if p.enabled {
+            target = Palette([
+                p.primary,
+                p.primary_light,
+                p.primary_dark,
+                p.on_primary,
+                p.primary_container,
+                p.secondary_container,
+                p.tertiary_container,
+                p.background,
+                p.surface_lowest,
+                p.surface,
+                p.surface_high,
+                p.surface_higher,
+                p.outline,
+                p.ink,
+                p.ink_soft,
+                p.muted,
+                p.quiet,
+            ]);
+        }
         if w.get_lyrics_reduced_motion() {
             timer.stop();
             target.paint(&w);

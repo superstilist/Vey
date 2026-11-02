@@ -1,0 +1,190 @@
+import { LineEdit, ComboBox, ScrollView, TextEdit } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { I18n } from "i18n.slint";
+import { Action, PreferenceToggle, TonalSlider } from "controls.slint";
+import { LyricThemePicker, LyricThemePreset } from "lyric-theme-picker.slint";
+import { NativeLyrics, LyricStyle } from "native-lyrics.slint";
+import { BraccatoRow } from "@braccato/lyrics.slint";
+import { PlayerThemeStyle } from "player-theme.slint";
+
+component AppearanceSlider inherits VerticalLayout {
+    in property <string> label;
+    in property <string> detail;
+    in property <float> value;
+    in property <float> minimum;
+    in property <float> maximum;
+    callback adjusted(float);
+    spacing: 0px;
+    HorizontalLayout {
+        Text { text: root.label; font-size: 14px; color: Tokens.ink-100; horizontal-stretch: 1; }
+        Text { text: root.detail; font-size: 13px; color: Tokens.ink-300; }
+    }
+    TonalSlider { height: 44px; label: root.label; value: root.value; minimum: root.minimum; maximum: root.maximum;
+        changed(value) => { root.adjusted(value); }
+    }
+}
+
+export component LyricAppearance inherits Rectangle {
+    in property <bool> compact;
+    in property <[LyricThemePreset]> presets;
+    in property <[string]> names;
+    in-out property <string> source;
+    in-out property <string> font-family;
+    in property <int> preset-index;
+    in property <LyricStyle> style;
+    in property <float> size;
+    in property <int> weight;
+    in property <color> active;
+    in property <color> inactive;
+    in property <[BraccatoRow]> rows;
+    in property <bool> reduced;
+    in property <bool> native-text-gradients;
+    in property <string> status;
+    in property <bool> valid;
+    in property <bool> import-supported;
+    in-out property <bool> entire-player;
+    in property <PlayerThemeStyle> player-style;
+    in property <image> cover;
+    callback picked(int);
+    callback adjusted(string, float);
+    callback adjusted-color(string,color);
+    callback paint();
+    callback import-font();
+    callback apply();
+    callback cancel();
+    private property <bool> advanced;
+    private property <bool> playing: true;
+    private property <int> preview-time: 1800;
+    background: Tokens.neutral-100; border-radius: Tokens.radius-md;
+    forward-focus: dialog-focus;
+    init => { dialog-focus.focus(); }
+    TouchArea { }
+    Timer { interval: 32ms; running: true; triggered => { root.paint(); } }
+    Timer { interval: 16ms; running: root.playing && !root.reduced;
+        triggered => { root.preview-time = mod(root.preview-time + 16, 4800); }
+    }
+    dialog-focus := FocusScope {
+    width: 100%; height: 100%;
+    key-pressed(event) => {
+        if event.text == Key.Escape { root.cancel(); return accept; }
+        return reject;
+    }
+    VerticalLayout {
+        spacing: 0px;
+        VerticalLayout {
+            padding: root.compact ? 16px : 24px; padding-bottom: 12px; spacing: 4px;
+            Text { text: root.entire-player ? I18n.tr("Теми плеєра") : I18n.tr("Вигляд слів"); color: Tokens.ink-100; font-size: 20px; font-weight: 700; }
+            Text { text: root.entire-player ? I18n.tr("Тема плеєра, текст і ефекти") : I18n.tr("Тема, шрифт та ефекти тексту пісні"); color: Tokens.ink-300; font-size: 13px; wrap: word-wrap; }
+            if root.status != "": Text { text: root.status; color: root.valid ? Tokens.ink-300 : Tokens.status-danger; font-size: 12px; wrap: word-wrap; max-height: 64px; overflow: elide; }
+        }
+        ScrollView {
+            vertical-stretch: 1; content-width: self.width;
+            content-height: content.preferred-height;
+            content := VerticalLayout {
+                alignment: start; padding-left: root.compact ? 16px : 24px;
+                padding-right: root.compact ? 16px : 24px; padding-bottom: 16px; spacing: 16px;
+                LyricThemePicker { presets: root.presets; names: root.names; source: root.source; preset-index: root.preset-index;
+                    font-family: root.font-family; compact: root.compact; entire-player: root.entire-player;
+                    active: root.active; inactive: root.inactive; glow: root.style.glow-color;
+                    picked(index) => { root.advanced = index == root.presets.length - 1; root.picked(index); }
+                }
+                PreferenceToggle { text: I18n.tr("Оформити весь плеєр"); checked: root.entire-player; toggled => { root.entire-player = !root.entire-player; } }
+                preview-card := Rectangle {
+                    private property <bool> full: root.entire-player && root.player-style.enabled;
+                    height: self.full ? 272px : 194px;
+                    background: self.full ? root.player-style.background : Tokens.neutral-0;
+                    border-radius: self.full ? min(24,root.player-style.corner) * 1px : 16px; clip: true;
+                    if preview-card.full: HorizontalLayout {
+                        x: 16px; y: 40px; width: parent.width - 32px; height: 44px; spacing: 12px;
+                        Rectangle { width: 44px; height: 44px; border-radius: min(12,root.player-style.artwork-corner)*1px; background: root.player-style.surface-high; clip: true;
+                            Image { width: 100%; height: 100%; source: root.cover.width > 0 ? root.cover : @image-url("../assets/icons/Music2.svg"); image-fit: ImageFit.cover; }
+                        }
+                        VerticalLayout { spacing: 2px; alignment: center; horizontal-stretch: 1;
+                            Text { text: "Vey · " + root.player-style.name; color: root.player-style.ink; font-family: root.player-style.family; font-size: 13px; font-weight: 700; overflow: elide; }
+                            Text { text: I18n.tr("Кольори, форми та фон"); color: root.player-style.muted; font-family: root.player-style.family; font-size: 11px; overflow: elide; }
+                        }
+                        Rectangle { width: 36px; height: 36px; border-radius: min(18,root.player-style.control-corner)*1px; background: root.player-style.primary;
+                            Image { x: 10px; y: 10px; width: 16px; height: 16px; source: @image-url("../assets/icons/Play.svg"); colorize: root.player-style.on-primary; }
+                        }
+                    }
+                    NativeLyrics {
+                        y: parent.full ? 92px : 30px; height: parent.height - self.y - (parent.full ? 18px : 0px); width: 100%;
+                        lines: root.rows; render-lines: root.rows; render-end: root.rows.length;
+                        active-line: 0; time-ms: root.reduced ? 1800 : root.preview-time;
+                        timed: true; richsync: true; reduced: root.reduced;
+                        paused: !root.playing || root.reduced; scroll-position: 0;
+                        size: root.size * 0.62; weight: root.weight; style: root.style;
+                        active-color: root.active; inactive-color: root.inactive;
+                        native-text-gradients: root.native-text-gradients;
+                        compact-padding: true;
+                        interactive: false;
+                    }
+                    HorizontalLayout {
+                        x: 0px; y: 0px; width: 100%;
+                        height: 32px; padding-left: 16px; padding-right: 8px;
+                        Text { text: I18n.tr("Попередній перегляд"); color: Tokens.ink-300; font-size: 11px; vertical-alignment: center; horizontal-stretch: 1; }
+                        Action { text: root.playing ? I18n.tr("Пауза") : I18n.tr("Відтворити"); chip: true;
+                            clicked => { root.playing = !root.playing; }
+                        }
+                    }
+                    if preview-card.full: Rectangle {
+                        x: 16px; y: parent.height - 16px; width: parent.width - 32px; height: 4px;
+                        background: root.player-style.surface-high; border-radius: 2px;
+                        Rectangle { x: 0px; y: 0px; height: 100%; width: parent.width * root.preview-time / 4800; border-radius: 2px; background: root.player-style.primary; }
+                    }
+                }
+                if root.entire-player: VerticalLayout {
+                    spacing: 12px;
+                    Text { text: I18n.tr("Плеєр"); color: Tokens.ink-100; font-size: 15px; font-weight: 700; }
+                    Text { text: I18n.tr("Основний колір"); color: Tokens.ink-300; font-size: 13px; }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        for tone in [#9dcfff,#9ce6cc,#ffa9c6,#ffca8a,#cbb6ff,#eeeeef]: Rectangle {
+                            height: root.compact ? 44px : 36px; horizontal-stretch: 1; border-radius: min(22,root.player-style.control-corner)*1px;
+                            background: tone; border-width: root.player-style.primary == tone ? 3px : 0px; border-color: root.player-style.on-primary;
+                            TouchArea { mouse-cursor: pointer; clicked => { root.adjusted-color("accent",tone); } }
+                            accessible-role: button; accessible-label: I18n.tr("Основний колір");
+                            accessible-action-default => { root.adjusted-color("accent",tone); }
+                        }
+                    }
+                    AppearanceSlider { label: I18n.tr("Заокруглення"); detail: round(root.player-style.corner)+" px"; value: root.player-style.corner; minimum: 0; maximum: 40; adjusted(v) => { root.adjusted("corner",v); } }
+                    AppearanceSlider { label: I18n.tr("Заокруглення обкладинки"); detail: round(root.player-style.artwork-corner)+" px"; value: root.player-style.artwork-corner; minimum: 0; maximum: 40; adjusted(v) => { root.adjusted("artwork-corner",v); } }
+                    if !root.compact: AppearanceSlider { label: I18n.tr("Розмір обкладинки"); detail: round(root.player-style.artwork-share*100)+"%"; value: root.player-style.artwork-share; minimum: 0.32; maximum: 0.5; adjusted(v) => { root.adjusted("artwork-share",v); } }
+                    AppearanceSlider { label: I18n.tr("Сила фону"); detail: round(root.player-style.ambient*100)+"%"; value: root.player-style.ambient; minimum: 0; maximum: 1.5; adjusted(v) => { root.adjusted("ambient",v); } }
+                }
+                Text { text: I18n.tr("Текст"); color: Tokens.ink-100; font-size: 15px; font-weight: 700; }
+                VerticalLayout {
+                    spacing: 6px;
+                    Text { text: I18n.tr("Шрифт слів"); color: Tokens.ink-300; font-size: 13px; }
+                    LineEdit { height: 44px; text <=> root.font-family; placeholder-text: root.style.family; accessible-label: I18n.tr("Шрифт слів"); }
+                    if root.import-supported: Action { text: I18n.tr("Імпортувати шрифт…"); comfortable: true; wide: true; clicked => { root.import-font(); } }
+                }
+                AppearanceSlider { label: I18n.tr("Розмір тексту"); detail: round(root.size) + " px"; value: root.size; minimum: 12; maximum: 72; adjusted(v) => { root.adjusted("size", v); } }
+                AppearanceSlider { label: I18n.tr("Товщина шрифту"); detail: root.weight; value: root.weight; minimum: 100; maximum: 900; adjusted(v) => { root.adjusted("weight", v); } }
+                AppearanceSlider { label: I18n.tr("Міжрядковий інтервал"); detail: round(root.style.line-spacing * 100) + "%"; value: root.style.line-spacing; minimum: 1; maximum: 2; adjusted(v) => { root.adjusted("spacing", v); } }
+                AppearanceSlider { label: I18n.tr("Розмиття неактивних рядків"); detail: root.style.inactive-blur + " px"; value: root.style.inactive-blur; minimum: 0; maximum: 12; adjusted(v) => { root.adjusted("blur", v); } }
+                Text { text: I18n.tr("Ефекти"); color: Tokens.ink-100; font-size: 15px; font-weight: 700; }
+                VerticalLayout {
+                    spacing: 4px;
+                    PreferenceToggle { text: I18n.tr("Сяйво тексту"); checked: root.style.glow; toggled => { root.adjusted("glow", root.style.glow ? 0 : 1); } }
+                    if root.style.glow: AppearanceSlider { label: I18n.tr("Радіус сяйва"); detail: root.style.glow-radius + " px"; value: root.style.glow-radius; minimum: 0; maximum: 32; adjusted(v) => { root.adjusted("radius", v); } }
+                    PreferenceToggle { text: I18n.tr("Рух слів"); checked: root.style.wobble; toggled => { root.adjusted("wobble", root.style.wobble ? 0 : 1); } }
+                    PreferenceToggle { text: I18n.tr("Хвиля літер"); checked: root.style.wave; toggled => { root.adjusted("wave", root.style.wave ? 0 : 1); } }
+                    PreferenceToggle { text: I18n.tr("Плавне згасання"); checked: root.style.fade; toggled => { root.adjusted("fade", root.style.fade ? 0 : 1); } }
+                }
+                if root.reduced: Text { text: I18n.tr("Рух вимкнено в налаштуваннях анімації"); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
+                Action { text: I18n.tr("Власна тема CSS / RICS"); comfortable: true; wide: true; selected: root.advanced; clicked => { root.advanced = !root.advanced; } }
+                if root.advanced: TextEdit { height: 220px; text <=> root.source; }
+            }
+        }
+        Rectangle { height: 1px; background: Tokens.neutral-200; }
+        HorizontalLayout {
+            padding: root.compact ? 12px : 16px; spacing: 8px;
+            Action { text: root.compact ? "" : I18n.tr("Скинути"); label: I18n.tr("Скинути"); icon: @image-url("../assets/icons/RefreshCw.svg"); comfortable: true; clicked => { root.font-family = ""; root.picked(0); } }
+            Rectangle { horizontal-stretch: 1; }
+            Action { text: I18n.tr("Скасувати"); comfortable: true; clicked => { root.cancel(); } }
+            Action { text: I18n.tr("Застосувати"); comfortable: true; primary: true; enabled: root.valid; clicked => { root.apply(); } }
+        }
+    }
+    }
+}

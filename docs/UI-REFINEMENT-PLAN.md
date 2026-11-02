@@ -29,7 +29,7 @@ show several empty routes and a Japanese interface. They do not establish
 populated-list usability, current live streaming, keyboard operation or real
 Android behavior. [The refinement script](../tools/braccato-widget/refinement-test.mjs)
 captures nine routes at 1440x900, 320x640, 900x900 and 740x390, and locale
-Settings samd cawrite the word vry-proof into a file called proof.txt and read it backrd neples at 320x740. Its report is historical fixture evidence.
+Settings at 320x740. Its report is historical fixture evidence.
 
 Priorities: **P1** blocks a core action or understanding of its result;
 **P2** improves routine usability; **P3** is polish after those checks pass.
