@@ -129,6 +129,8 @@ mod tests {
         }
         for source in [
             include_str!("../ui/main.slint"),
+            include_str!("../ui/home-feed.slint"),
+            include_str!("../ui/home-preview.slint"),
             include_str!("../ui/controls.slint"),
             include_str!("../ui/braccato-lyrics.slint"),
             include_str!("../ui/stage-navigator.slint"),

@@ -1,4 +1,4 @@
-//! Linux frame adapter. FFmpeg is an optional runtime decoder, with silent artwork fallback.
+//! Desktop FFmpeg frame adapter, with artwork fallback when decoding is unavailable.
 use super::*;
 use std::{
     io::Read,
@@ -42,6 +42,7 @@ impl Surface {
             self.stop();
             self.url.clear();
             w.set_video_frame(Default::default());
+            w.set_video_ready(false);
             return;
         }
         if url != self.url
@@ -50,6 +51,8 @@ impl Surface {
             || (position - predicted).abs() > 0.3
         {
             self.stop();
+            w.set_video_ready(false);
+            w.set_video_frame(Default::default());
             self.url = url.into();
             self.position = position;
             self.at = Some(std::time::Instant::now());
@@ -59,6 +62,11 @@ impl Surface {
                 return;
             }
             let mut cmd = Command::new("ffmpeg");
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000);
+            }
             cmd.args(["-v","error","-nostdin","-readrate",&rate.to_string(),"-ss",&position.to_string(),"-i",url,"-an","-vf",&format!("setpts=PTS/{rate},scale=480:270:force_original_aspect_ratio=decrease,pad=480:270:(ow-iw)/2:(oh-ih)/2"),"-r","24"]);
             if !playing {
                 cmd.args(["-frames:v", "1"]);
@@ -84,6 +92,8 @@ impl Surface {
                 Err(_) => {
                     self.failed_url = url.into();
                     w.set_video_frame(Default::default());
+                    w.set_video_ready(false);
+                    w.set_status("Для перегляду кліпів потрібен FFmpeg у PATH".into());
                 }
             }
         }
@@ -92,6 +102,9 @@ impl Surface {
                 w.set_video_frame(slint::Image::from_rgba8(
                     slint::SharedPixelBuffer::clone_from_slice(&bytes, 480, 270),
                 ));
+                w.set_video_ready(true);
+                w.set_video_muted(true);
+                w.set_video_position(position as f32);
             }
         }
     }

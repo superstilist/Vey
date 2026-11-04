@@ -1,301 +1,108 @@
-//! A dedicated, isolated challenge window. No Google pages or account bridge.
-#[derive(Debug, PartialEq)]
-enum ChallengeEvent {
-    Token(String),
-    Progress(String),
-}
-fn navigation_allowed(url: &str) -> bool {
-    use base64::Engine;
-    use std::sync::LazyLock;
-    static BOOTSTRAPS: LazyLock<Vec<String>> = LazyLock::new(|| {
-        crate::i18n::LANGUAGES
-            .iter()
-            .map(|locale| {
-                let document = include_str!("../assets/lyrics-challenge.html").replace(
-                    "Перевірка доступу до слів пісень",
-                    &crate::i18n::translate(locale, "Перевірка доступу до слів пісень"),
-                );
-                base64::engine::general_purpose::STANDARD.encode(document)
-            })
-            .collect()
-    });
-    url == "about:blank"
-        || url.starts_with("https://lyrics.api.dacubeking.com/")
-        || url.starts_with("https://challenges.cloudflare.com/")
-        || [
-            "data:text/html;charset=utf-8;base64,",
-            "data:text/html;base64,",
-        ]
-        .iter()
-        .any(|prefix| {
-            url.strip_prefix(prefix)
-                .is_some_and(|data| BOOTSTRAPS.iter().any(|allowed| data == allowed))
-        })
-}
-fn parse_message(raw: &str) -> Option<ChallengeEvent> {
-    if raw.len() > 17000 {
+//! Lyrics verification in the system browser, with a one-use loopback callback.
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::time::{Duration, Instant};
+
+fn token_from_message(body: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    if value["type"].as_str()? != "turnstile-token" {
         return None;
     }
-    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
-    match value["type"].as_str()? {
-        "turnstile-token" => {
-            let token = value["token"].as_str()?.trim();
-            (!token.is_empty() && token.len() < 16384 && !token.contains(['\n', '\r']))
-                .then(|| ChallengeEvent::Token(token.into()))
-        }
-        "turnstile-error" => {
-            let code = value["error"]
-                .as_str()
-                .unwrap_or("unknown")
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-                .take(64)
-                .collect::<String>();
-            Some(ChallengeEvent::Progress(format!("Turnstile: {code}")))
-        }
-        "turnstile-expired" => Some(ChallengeEvent::Progress("Turnstile: expired".into())),
-        "turnstile-timeout" => Some(ChallengeEvent::Progress("Turnstile: timeout".into())),
-        "challenge-status" => match value["state"].as_str()? {
-            "host-ready" => Some(ChallengeEvent::Progress("challenge host ready".into())),
-            "frame-loaded" => Some(ChallengeEvent::Progress("challenge frame loaded".into())),
-            _ => None,
-        },
-        _ => None,
-    }
+    let token = value["token"].as_str()?.trim();
+    (!token.is_empty() && token.len() < 16384 && !token.contains(['\r', '\n']))
+        .then(|| token.to_string())
 }
-#[cfg(target_os = "windows")]
-pub fn run_helper() -> Result<(), String> {
-    use tao::{
-        event::{Event, WindowEvent},
-        event_loop::{ControlFlow, EventLoopBuilder},
-        window::WindowBuilder,
+
+fn respond(stream: &mut TcpStream, status: &str, body: &str, content_type: &str) {
+    let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n{body}", body.len());
+}
+
+fn handle(stream: &mut TcpStream, path: &str, origin: &str, html: &str) -> Option<String> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let mut data = Vec::new();
+    let mut buf = [0; 4096];
+    let header_end = loop {
+        let count = stream.read(&mut buf).ok()?;
+        if count == 0 { return None; }
+        data.extend_from_slice(&buf[..count]);
+        if data.len() > 32768 { return None; }
+        if let Some(index) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+            break index + 4;
+        }
     };
-    let event_loop = EventLoopBuilder::<String>::with_user_event().build();
-    let silent = std::env::args().any(|a| a == "--silent-challenge");
-    let locale = std::env::args()
-        .find_map(|arg| arg.strip_prefix("--lyrics-language=").map(str::to_owned))
-        .unwrap_or_else(|| "uk".into());
-    let prompt = crate::i18n::translate(&locale, "Перевірка доступу до слів пісень");
-    let builder = WindowBuilder::new()
-        .with_visible(!silent)
-        .with_focused(!silent)
-        .with_focusable(!silent)
-        .with_title(format!("Vey — {prompt}"))
-        .with_inner_size(tao::dpi::LogicalSize::new(500., 360.));
-    eprintln!("[lyrics-auth] starting browser host");
-    let window = builder.build(&event_loop).map_err(|e| e.to_string())?;
-    let proxy = event_loop.create_proxy();
-    let html = include_str!("../assets/lyrics-challenge.html")
-        .replace("Перевірка доступу до слів пісень", &prompt);
-    let mut context =
-        wry::WebContext::new(Some(std::env::temp_dir().join("playervf-lyrics-challenge")));
-    let webview = wry::WebViewBuilder::new_with_web_context(&mut context)
-        .with_focused(!silent)
-        .with_html(&html)
-        .with_navigation_handler(|url| {
-            let allowed = navigation_allowed(&url);
-            if !allowed {
-                eprintln!("[lyrics-auth] blocked unrelated browser navigation");
-            }
-            allowed
-        })
-        .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
-        .with_ipc_handler(move |request| {
-            let body = request.body();
-            if parse_message(body).is_some() {
-                let _ = proxy.send_event(body.clone());
-            }
-        })
-        .build(&window)
-        .map_err(|e| e.to_string())?;
-    eprintln!("[lyrics-auth] browser host ready");
-    let mut webview = Some(webview);
-    event_loop.run(move |event, _, flow| {
-        *flow = ControlFlow::Wait;
-        match event {
-            Event::UserEvent(message) => {
-                use std::io::Write;
-                let done = matches!(parse_message(&message), Some(ChallengeEvent::Token(_)));
-                if done {
-                    drop(webview.take());
-                }
-                let mut out = std::io::stdout().lock();
-                let _ = writeln!(out, "{message}");
-                let _ = out.flush();
-                if done {
-                    *flow = ControlFlow::Exit;
-                }
-            }
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => {
-                drop(webview.take());
-                *flow = ControlFlow::Exit;
-            }
-            _ => {}
-        }
+    let headers = std::str::from_utf8(&data[..header_end]).ok()?;
+    let request = headers.lines().next()?;
+    let is_get = request == format!("GET {path} HTTP/1.1");
+    let is_post = request == format!("POST {path} HTTP/1.1");
+    let length = headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().ok()).flatten()
+    }).unwrap_or(0);
+    let valid_origin = headers.lines().any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| name.eq_ignore_ascii_case("origin") && value.trim() == origin)
     });
+    if is_get {
+        respond(stream, "200 OK", html, "text/html; charset=utf-8");
+        return None;
+    }
+    if !is_post || !valid_origin || length == 0 || length > 17000 {
+        respond(stream, "403 Forbidden", "Forbidden", "text/plain");
+        return None;
+    }
+    while data.len() < header_end + length {
+        let count = stream.read(&mut buf).ok()?;
+        if count == 0 { return None; }
+        data.extend_from_slice(&buf[..count]);
+    }
+    let token = token_from_message(&data[header_end..header_end + length]);
+    respond(stream, "200 OK", "OK", "text/plain");
+    token
 }
-#[cfg(not(target_os = "windows"))]
+
 pub fn run_helper() -> Result<(), String> {
-    Err("Вбудована перевірка ще недоступна на цій платформі".into())
+    Err("Перевірка відкривається у системному браузері з налаштувань Vey".into())
+}
+
+pub async fn acquire_silent() -> Result<String, String> {
+    Err("Для оновлення доступу відкрийте перевірку в налаштуваннях".into())
 }
 
 pub async fn acquire() -> Result<String, String> {
-    acquire_mode(false).await
-}
-pub async fn acquire_silent() -> Result<String, String> {
-    acquire_mode(true).await
-}
-async fn acquire_mode(silent: bool) -> Result<String, String> {
-    #[cfg(target_os = "windows")]
-    {
-        tokio::task::spawn_blocking(move || {
-            use std::{
-                io::{BufRead, BufReader, Read},
-                process::{Command, Stdio},
-                time::{Duration, Instant},
-            };
-            let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
-            command.arg("--lyrics-challenge");
-            command.arg(format!("--lyrics-language={}", crate::i18n::current()));
-            if silent {
-                command.arg("--silent-challenge");
+    tokio::task::spawn_blocking(|| {
+        use rand::RngCore;
+        let mut nonce = [0u8; 24];
+        rand::rng().fill_bytes(&mut nonce);
+        let path = format!("/{}", nonce.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+        let origin = format!("http://127.0.0.1:{}", listener.local_addr().map_err(|e| e.to_string())?.port());
+        let bootstrap = format!("<script>window.ipc={{postMessage:function(body){{fetch('{}',{{method:'POST',headers:{{'Content-Type':'application/json'}},body}}).then(function(){{if(JSON.parse(body).type==='turnstile-token')document.body.textContent='Перевірку завершено. Поверніться до Vey.';}});}}}};</script>", path);
+        let html = include_str!("../assets/lyrics-challenge.html")
+            .replace("<script>", &format!("{bootstrap}<script>"))
+            .replace("Перевірка доступу до слів пісень", &crate::i18n::translate(crate::i18n::current(), "Перевірка доступу до слів пісень"));
+        crate::native::open_url(&format!("{origin}{path}"))?;
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, peer)) if peer.ip().is_loopback() => {
+                    if let Some(token) = handle(&mut stream, &path, &origin, &html) { return Ok(token); }
+                }
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(50)),
+                Err(e) => return Err(e.to_string()),
             }
-            let mut child = command
-                .stdout(Stdio::piped())
-                .stderr(Stdio::inherit())
-                .spawn()
-                .map_err(|e| e.to_string())?;
-            let stdout = child.stdout.take().ok_or("Немає відповіді перевірки")?;
-            let (tx, rx) = std::sync::mpsc::channel();
-            // Drain while the helper is running: Turnstile tokens can exceed
-            // the anonymous pipe buffer. Waiting for exit before reading deadlocks.
-            let reader = std::thread::spawn(move || {
-                for line in BufReader::new(stdout.take(65536))
-                    .lines()
-                    .map_while(Result::ok)
-                {
-                    if let Some(message) = parse_message(&line) {
-                        let _ = tx.send(message);
-                    }
-                }
-            });
-            let deadline = Instant::now() + Duration::from_secs(if silent { 20 } else { 120 });
-            let mut last_error = "Час перевірки вичерпано".to_string();
-            loop {
-                match rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(ChallengeEvent::Token(token)) => {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        let _ = reader.join();
-                        return Ok(token);
-                    }
-                    Ok(ChallengeEvent::Progress(message)) => {
-                        eprintln!("[lyrics-auth] {message}");
-                        if message.starts_with("Turnstile:") {
-                            last_error = message;
-                        }
-                    }
-                    Err(_) => {}
-                }
-                if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-                    let _ = reader.join();
-                    for message in rx.try_iter() {
-                        match message {
-                            ChallengeEvent::Token(token) => return Ok(token),
-                            ChallengeEvent::Progress(message) => last_error = message,
-                        }
-                    }
-                    return Err(format!("Перевірку не завершено ({status}): {last_error}"));
-                }
-                if Instant::now() > deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = reader.join();
-                    return Err(last_error);
-                }
-            }
-        })
-        .await
-        .map_err(|e| e.to_string())?
-    }
-    #[cfg(target_os = "android")]
-    {
-        let html = include_str!("../assets/lyrics-challenge.html").replace(
-            "Перевірка доступу до слів пісень",
-            &crate::i18n::translate(crate::i18n::current(), "Перевірка доступу до слів пісень"),
-        );
-        let request = serde_json::json!({"html":html,"silent":silent});
-        crate::android::bridge_call("challenge", &request.to_string())?;
-        let timeout = std::time::Duration::from_secs(if silent { 20 } else { 120 });
-        let started = std::time::Instant::now();
-        let result = loop {
-            let raw = match crate::android::bridge_poll() {
-                Ok(raw) => raw,
-                Err(error) => break Err(error),
-            };
-            match parse_message(&raw) {
-                Some(ChallengeEvent::Token(token)) => break Ok(token),
-                Some(ChallengeEvent::Progress(message)) if message.starts_with("Turnstile:") => {
-                    break Err(message)
-                }
-                _ => {}
-            }
-            if started.elapsed() >= timeout {
-                break Err("Час перевірки вичерпано".into());
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        };
-        let _ = crate::android::bridge_call("cancelChallenge", "{}");
-        result
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
-    {
-        Err("Вбудована перевірка ще недоступна на цій платформі".into())
-    }
+        }
+        Err("Час перевірки вичерпано".into())
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::token_from_message;
     #[test]
-    fn webview_bootstrap_navigation_allows_only_the_bundled_html() {
-        use base64::Engine;
-        let html = include_str!("../assets/lyrics-challenge.html");
-        let encoded = base64::engine::general_purpose::STANDARD.encode(html);
-        assert!(navigation_allowed(&format!(
-            "data:text/html;charset=utf-8;base64,{encoded}"
-        )));
-        assert!(navigation_allowed(
-            "https://lyrics.api.dacubeking.com/challenge"
-        ));
-        assert!(!navigation_allowed(
-            "data:text/html;charset=utf-8;base64,ZXZpbA=="
-        ));
-        assert!(!navigation_allowed(
-            "https://lyrics.api.dacubeking.com.evil.test/challenge"
-        ));
-        assert!(!navigation_allowed("https://example.com/"));
-    }
-    #[test]
-    fn helper_protocol_keeps_large_tokens_and_validates_messages() {
-        let token = "x".repeat(12000);
-        let json = serde_json::json!({"type":"turnstile-token","token":token}).to_string();
-        assert_eq!(parse_message(&json), Some(ChallengeEvent::Token(token)));
-        assert_eq!(
-            parse_message(r#"{"type":"turnstile-token","token":" "}"#),
-            None
-        );
-        assert_eq!(
-            parse_message(r#"{"type":"untrusted","token":"secret"}"#),
-            None
-        );
-        assert_eq!(parse_message("invalid"), None);
-        assert_eq!(
-            parse_message(r#"{"type":"turnstile-error","error":"110200"}"#),
-            Some(ChallengeEvent::Progress("Turnstile: 110200".into()))
-        );
+    fn accepts_only_bounded_single_line_tokens() {
+        assert_eq!(token_from_message(br#"{"type":"turnstile-token","token":"abc"}"#).as_deref(), Some("abc"));
+        assert!(token_from_message(br#"{"type":"turnstile-token","token":"x\ny"}"#).is_none());
+        assert!(token_from_message(br#"{"type":"challenge-status","token":"abc"}"#).is_none());
     }
 }

@@ -18,17 +18,18 @@ the same world-position-minus-camera transform. Diagonals move on both axes,
 and opposite destinations span two cells. Retargeting starts from the current
 camera position rather than restarting a canned entrance animation.
 Only content moves. The background, navigation, and playback bar stay fixed.
-Sparse anime-style speed lines follow the camera vector and fade with its
-progress, including interrupted journeys. Reduced motion suppresses the lines.
+Page travel has no animated path decorations; the renderer spends its frame
+budget on the cached page surfaces and camera motion.
 The complete lyric viewport moves as one object with the player. Its text,
 scrollbar and lyric controls keep their local layout throughout camera travel.
 Reduced motion moves the camera to its target immediately.
 
 Eight route surfaces and the player surface stay mounted at viewport size.
-While idle, one page at a time is painted through a clipped edge strip; the
-currently visible page is already warm. Travel starts on the route-change
-callback, without waiting for warming, screenshot readback or a preparation
-timer. Slint's rendering-cache hint keeps these surfaces ready
+After the first three seconds, one page at a time is painted through a clipped
+edge strip; the currently visible page is already warm. This leaves startup and
+the initial Home artwork pass free of offscreen page rasterization. Travel
+starts on the route-change callback, without waiting for warming, screenshot
+readback or a preparation timer. Slint's rendering-cache hint keeps these surfaces ready
 for compositing, trading viewport-scaled render-cache memory for fast returns.
 Normal model and size dependencies refresh the relevant cache when content or
 the viewport changes. Warming pauses during navigation and palette fades;

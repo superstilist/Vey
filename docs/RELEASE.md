@@ -1,3 +1,44 @@
+# Vey 0.1.48
+
+## Current source change, not yet released — Spotify playlist import (2026-11-04)
+
+The working tree removes Spotify account/OAuth connection and keeps public
+playlist URL import only. Accepted tracks are matched to YouTube Music and
+stored as `yt://` identities; private playlists, Spotify account sync and Spotify
+audio playback are out of scope. A response with 100 rows is rejected because
+the public embed does not report whether it was truncated. This change still
+needs a new build/package and fresh desktop, Web and Android acceptance before
+it can be described as released.
+
+## Smoother page travel and artwork loading, 2026-11-03
+
+Removes per-frame decorative path geometry during page transitions and keeps
+the existing camera animation, route timing and reduced-motion behavior.
+Offscreen page warming starts after a three-second startup grace period.
+Native and Web artwork queues now limit background decoding to two covers,
+with a reserved current-track slot, to avoid texture-upload bursts while pages
+move. Web cover decoding uses the browser's asynchronous image pipeline and
+retains the bounded CacheStorage cache.
+
+Windows x64 package. Device-wide animation smoothness and playback have not
+been established by this build; check the release profile figures in
+`PERFORMANCE.md` for the local benchmark scope.
+
+# Vey 0.1.47
+
+## Home discovery and video shelves, 2026-11-03
+
+The Home page now presents responsive shelves for listening history,
+recommendations, albums, artists, playlists and music videos. Cards keep their
+real collection or video destination, use the existing bounded artwork cache,
+and work with the six saved Home layouts. The compact player dock uses a flat
+desktop surface.
+
+This Windows x64 package contains the 0.1.47 Home updates. Packages for other
+platforms are built separately. Fixture and browser checks cover navigation,
+queue behavior, caching and responsive layout; they do not establish physical
+device playback or video decoding.
+
 # Vey 0.1.46
 
 ## Recommendations, library identity and Blueberry catalog, 2026-11-02

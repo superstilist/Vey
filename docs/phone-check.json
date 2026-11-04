@@ -12,8 +12,9 @@
     "mobile player overlay preserves page and scroll",
     "overlay Back dismissal",
     "rapid navigation",
+    "bounded 100–180 ms page travel",
     "cached Explore and explicit refresh",
     "no browser errors"
   ],
-  "browseCalls": 2
+  "browseCalls": 3
 }

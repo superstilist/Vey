@@ -1,7 +1,6 @@
-//! Real Windows WebView2 decoding/transport check using the generated MP4 fixture.
+//! Native decoded video and transport check using the generated MP4 fixture.
 #[cfg(target_os = "windows")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use base64::Engine;
     use playervf::{
         video::{install_source, VideoSource},
         MainWindow,
@@ -12,7 +11,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rc::Rc,
         time::{Duration, Instant},
     };
-    let video = std::fs::read("target/video-surface-fixture.mp4")?;
+    let video = std::fs::canonicalize(
+        std::env::args()
+            .nth(1)
+            .unwrap_or_else(|| "target/video-surface-fixture.mp4".into()),
+    )?;
     let window = MainWindow::new()?;
     playervf::i18n::install(&window);
     window.set_lyrics_reduced_motion(true);
@@ -26,10 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _surface = install_source(
         &window,
         VideoSource {
-            url: format!(
-                "data:video/mp4;base64,{}",
-                base64::engine::general_purpose::STANDARD.encode(video)
-            ),
+            url: video.to_string_lossy().into_owned(),
             mime: "video/mp4".into(),
         },
     );
@@ -87,5 +87,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 #[cfg(not(target_os = "windows"))]
 fn main() {
-    println!("This example checks the Windows WebView2 surface.");
+    println!("This example checks the Windows native video surface.");
 }

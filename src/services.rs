@@ -256,11 +256,16 @@ pub struct Store {
     pub playlists: Vec<Playlist>,
     pub history: Vec<History>,
     pub recommendations: RecommendationModel,
+    pub home_catalog: crate::discovery::Catalog,
     pub offsets: BTreeMap<String, i64>,
     pub legacy: BTreeMap<String, Value>,
     pub lyrics_cache: BTreeMap<String, std::sync::Arc<CachedLyrics>>,
     /// Public track key -> complete permanent local file, never the stream cache.
     pub downloads: BTreeMap<String, String>,
+    /// Explicitly hidden local library entries. This is optional in the v1
+    /// store so older saves load unchanged.
+    #[serde(default)]
+    pub library_excluded: BTreeSet<String>,
     pub lyrics_choices: BTreeMap<String, LyricsChoice>,
     pub lyrics_enrichment: BTreeMap<String, crate::lyrics_translation::Enrichment>,
 }
@@ -276,10 +281,12 @@ impl Default for Store {
             playlists: vec![],
             history: vec![],
             recommendations: RecommendationModel::default(),
+            home_catalog: crate::discovery::Catalog::default(),
             offsets: BTreeMap::new(),
             legacy: BTreeMap::new(),
             lyrics_cache: BTreeMap::new(),
             downloads: BTreeMap::new(),
+            library_excluded: BTreeSet::new(),
             lyrics_choices: BTreeMap::new(),
             lyrics_enrichment: BTreeMap::new(),
         }
@@ -558,6 +565,87 @@ impl Store {
             .map(|(key, _)| key.clone())
             .unwrap_or_else(|| track.path.clone())
     }
+    pub fn is_library_excluded(&self, track: &Track) -> bool {
+        self.library_excluded.contains(&track.path)
+            || self.library_excluded.contains(&self.identity_key(track))
+    }
+    pub fn set_library_excluded(&mut self, track: &Track, excluded: bool) {
+        let key = self.identity_key(track);
+        if excluded {
+            self.library_excluded.insert(key);
+        } else {
+            self.library_excluded.remove(&key);
+            self.library_excluded.remove(&track.path);
+        }
+    }
+    /// Relink a local file path while retaining every saved collection and
+    /// playback reference that points at the old path.
+    pub fn relink_local_path(&mut self, old_path: &str, replacement: Track) -> bool {
+        let old_normalized = normalize_path(old_path);
+        let Some(index) = self.tracks.iter().position(|track| {
+            track.path == old_path || normalize_path(&track.path) == old_normalized
+        }) else {
+            return false;
+        };
+        if key_is_remote(&replacement.path) || replacement.path.trim().is_empty() {
+            return false;
+        }
+        let old = self.tracks[index].clone();
+        let old_key = self.identity_key(&old);
+        let new_key = track_video_id(&replacement)
+            .map(|id| format!("yt://{id}"))
+            .or_else(|| key_is_remote(&old_key).then(|| old_key.clone()))
+            .unwrap_or_else(|| replacement.path.clone());
+        self.tracks[index] = replacement.clone();
+        let replace_key = |key: &str| {
+            if key == old_key
+                || key == old_path
+                || (!key_is_remote(key) && normalize_path(key) == old_normalized)
+            {
+                new_key.clone()
+            } else {
+                key.to_owned()
+            }
+        };
+        self.likes = self.likes.iter().map(|key| replace_key(key)).collect();
+        for playlist in &mut self.playlists {
+            for key in &mut playlist.tracks {
+                *key = replace_key(key);
+            }
+        }
+        for entry in &mut self.history {
+            if entry.track.path == old_path || normalize_path(&entry.track.path) == old_normalized {
+                entry.track = replacement.clone();
+            }
+        }
+        for path in self.downloads.values_mut() {
+            if path == old_path || normalize_path(path) == old_normalized {
+                *path = replacement.path.clone();
+            }
+        }
+        if key_is_remote(&old_key) {
+            self.downloads.insert(old_key.clone(), replacement.path.clone());
+        }
+        self.offsets = std::mem::take(&mut self.offsets)
+            .into_iter()
+            .map(|(key, value)| (replace_key(&key), value))
+            .collect();
+        self.lyrics_choices = std::mem::take(&mut self.lyrics_choices)
+            .into_iter()
+            .map(|(key, value)| (replace_key(&key), value))
+            .collect();
+        self.lyrics_cache = std::mem::take(&mut self.lyrics_cache)
+            .into_iter()
+            .map(|(key, value)| (replace_key(&key), value))
+            .collect();
+        self.lyrics_enrichment = std::mem::take(&mut self.lyrics_enrichment)
+            .into_iter()
+            .map(|(key, value)| (replace_key(&key), value))
+            .collect();
+        self.library_excluded = self.library_excluded.iter().map(|key| replace_key(key)).collect();
+        self.refresh_recommendation_signals();
+        true
+    }
     pub fn is_liked(&self, track: &Track) -> bool {
         if self.likes.contains(&track.path) {
             return true;
@@ -625,6 +713,11 @@ impl Store {
             .iter()
             .map(|key| resolve(key).unwrap_or_else(|| key.clone()))
             .collect();
+        self.library_excluded = self
+            .library_excluded
+            .iter()
+            .map(|key| resolve(key).unwrap_or_else(|| key.clone()))
+            .collect();
         self.refresh_recommendation_signals();
     }
     /// The library list: scanned local files plus saved remote songs. Search
@@ -645,27 +738,38 @@ impl Store {
             .collect();
         let local = self.tracks
             .iter()
-            .filter(|track| !key_is_remote(&track.path))
+            .filter(|track| !key_is_remote(&track.path) && !self.is_library_excluded(track))
             .cloned();
         let remote = self
             .tracks
             .iter()
             .filter(|track| {
                 track.path.strip_prefix("yt://").is_some_and(|id| {
-                    saved.contains(track.path.as_str()) && !downloaded.contains(id)
+                    saved.contains(track.path.as_str())
+                        && !downloaded.contains(id)
+                        && !self.is_library_excluded(track)
                 })
             })
             .cloned();
         deduplicate_tracks(local.chain(remote))
+    }
+    pub fn excluded_library_tracks(&self) -> Vec<Track> {
+        deduplicate_tracks(
+            self.tracks
+                .iter()
+                .filter(|track| self.is_library_excluded(track))
+                .cloned(),
+        )
     }
     /// Resolve in playlist order, including repeats; ignore missing references.
     pub fn playlist_tracks(&self, id: &str) -> Vec<Track> {
         let Some(playlist) = self.playlists.iter().find(|p| p.id == id) else {
             return vec![];
         };
-        let mut tracks = std::collections::HashMap::with_capacity(self.tracks.len());
+        let mut tracks = std::collections::HashMap::with_capacity(self.tracks.len() * 2);
         for track in &self.tracks {
-            tracks.entry(track.path.as_str()).or_insert(track);
+            tracks.entry(track.path.clone()).or_insert(track);
+            tracks.entry(self.identity_key(track)).or_insert(track);
         }
         playlist
             .tracks
@@ -900,6 +1004,30 @@ impl Store {
             self.refresh_recommendation_signals();
         }
     }
+    pub fn rename_playlist(&mut self, id: &str, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() {
+            return false;
+        }
+        let Some(playlist) = self.playlists.iter_mut().find(|playlist| playlist.id == id) else {
+            return false;
+        };
+        playlist.name = name.to_owned();
+        playlist.updated_at = now_ms();
+        true
+    }
+    pub fn move_playlist_track(&mut self, id: &str, from: usize, to: usize) -> bool {
+        let Some(playlist) = self.playlists.iter_mut().find(|playlist| playlist.id == id) else {
+            return false;
+        };
+        if from >= playlist.tracks.len() || to >= playlist.tracks.len() || from == to {
+            return false;
+        }
+        let track = playlist.tracks.remove(from);
+        playlist.tracks.insert(to, track);
+        playlist.updated_at = now_ms();
+        true
+    }
     /// Import an explicitly exported localStorage object, once. Values may be JSON strings.
     /// An allowlist prevents credentials, Google sessions, JWTs and challenge tokens entering the store.
     pub fn migrate(&mut self, raw: &str) -> Result<usize, String> {
@@ -1029,6 +1157,395 @@ impl Store {
         Ok(count)
     }
 }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum LibraryFilter {
+    #[default]
+    All,
+    Local,
+    Downloaded,
+    Liked,
+    Missing,
+    Excluded,
+}
+
+impl LibraryFilter {
+    pub(crate) fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Local,
+            2 => Self::Downloaded,
+            3 => Self::Liked,
+            4 => Self::Missing,
+            5 => Self::Excluded,
+            _ => Self::All,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum LibrarySort {
+    #[default]
+    Artist,
+    Title,
+    Album,
+    Duration,
+    Source,
+    RecentlyPlayed,
+}
+
+impl LibrarySort {
+    pub(crate) fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Title,
+            2 => Self::Album,
+            3 => Self::Duration,
+            4 => Self::Source,
+            5 => Self::RecentlyPlayed,
+            _ => Self::Artist,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum LibraryCategory {
+    #[default]
+    Songs,
+    Albums,
+    Artists,
+    Playlists,
+    Downloads,
+}
+
+impl LibraryCategory {
+    pub(crate) fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Albums,
+            2 => Self::Artists,
+            3 => Self::Playlists,
+            4 => Self::Downloads,
+            _ => Self::Songs,
+        }
+    }
+}
+
+/// A session-facing local album, artist, or playlist projection. It is built
+/// from Store v1 data and never persisted independently.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LibraryCollection {
+    pub kind: String,
+    pub key: String,
+    pub title: String,
+    pub subtitle: String,
+    pub tracks: Vec<Track>,
+    pub track_count: usize,
+    pub representative: Track,
+    pub last_played: u64,
+}
+
+pub(crate) fn normalize_music_text(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+pub(crate) fn shuffle_tracks(mut tracks: Vec<Track>) -> Vec<Track> {
+    use std::hash::{Hash, Hasher};
+    let seed = now_ms();
+    tracks.sort_by(|left, right| {
+        let score = |track: &Track| {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            seed.hash(&mut hash);
+            track.path.hash(&mut hash);
+            hash.finish()
+        };
+        score(left).cmp(&score(right)).then_with(|| left.path.cmp(&right.path))
+    });
+    tracks
+}
+
+/// Session-only controls for the Library route. Selected keys are canonical
+/// track identities, so sorting and filtering never change which rows are
+/// selected.
+#[derive(Debug, Default)]
+pub(crate) struct LibraryViewState {
+    pub query: String,
+    pub filter: LibraryFilter,
+    pub sort: LibrarySort,
+    pub category: LibraryCategory,
+    pub selected: BTreeSet<String>,
+}
+
+impl LibraryViewState {
+    pub(crate) fn apply(
+        &self,
+        store: &Store,
+        tracks: &[Track],
+        mut available_locally: impl FnMut(&Track) -> bool,
+    ) -> Vec<Track> {
+        let query = self.query.trim().to_lowercase();
+        let mut result: Vec<_> = tracks
+            .iter()
+            .filter(|track| {
+                let local = !key_is_remote(&track.path);
+                let available = available_locally(track);
+                let downloaded = available
+                    || store.downloads.contains_key(&track.path)
+                    || store.downloads.contains_key(&store.identity_key(track));
+                let matches_filter = match self.filter {
+                    LibraryFilter::All => true,
+                    LibraryFilter::Local => local,
+                    LibraryFilter::Downloaded => downloaded,
+                    LibraryFilter::Liked => store.is_liked(track),
+                    LibraryFilter::Missing => local && !available,
+                    LibraryFilter::Excluded => store.is_library_excluded(track),
+                };
+                if !matches_filter
+                    || (self.category == LibraryCategory::Downloads && !downloaded)
+                {
+                    return false;
+                }
+                query.is_empty()
+                    || track.title.to_lowercase().contains(&query)
+                    || track.artist.to_lowercase().contains(&query)
+                    || track.album.to_lowercase().contains(&query)
+                    || track.path.to_lowercase().contains(&query)
+            })
+            .cloned()
+            .collect();
+        result.sort_by(|left, right| {
+            let text_cmp = |a: &str, b: &str| a.to_lowercase().cmp(&b.to_lowercase());
+            match self.sort {
+                LibrarySort::Artist => text_cmp(&left.artist, &right.artist)
+                    .then_with(|| text_cmp(&left.title, &right.title)),
+                LibrarySort::Title => text_cmp(&left.title, &right.title)
+                    .then_with(|| text_cmp(&left.artist, &right.artist)),
+                LibrarySort::Album => text_cmp(&left.album, &right.album)
+                    .then_with(|| text_cmp(&left.title, &right.title)),
+                LibrarySort::Duration => left
+                    .duration_secs
+                    .total_cmp(&right.duration_secs)
+                    .then_with(|| text_cmp(&left.title, &right.title)),
+                LibrarySort::Source => text_cmp(&left.path, &right.path)
+                    .then_with(|| text_cmp(&left.title, &right.title)),
+                LibrarySort::RecentlyPlayed => {
+                    let played_at = |track: &Track| {
+                        let identity = store.identity_key(track);
+                        store
+                            .history
+                            .iter()
+                            .filter(|entry| {
+                                store.identity_key(&entry.track) == identity
+                                    || same_track_identity(&entry.track, track)
+                            })
+                            .map(|entry| entry.played_at)
+                            .max()
+                            .unwrap_or_default()
+                    };
+                    played_at(right)
+                        .cmp(&played_at(left))
+                        .then_with(|| text_cmp(&left.artist, &right.artist))
+                        .then_with(|| text_cmp(&left.title, &right.title))
+                }
+            }
+        });
+        result
+    }
+
+    pub(crate) fn collections(
+        &self,
+        store: &Store,
+        tracks: &[Track],
+        mut available_locally: impl FnMut(&Track) -> bool,
+    ) -> Vec<LibraryCollection> {
+        let query = self.query.trim().to_lowercase();
+        let mut groups: Vec<LibraryCollection> = match self.category {
+            LibraryCategory::Albums => {
+                let mut grouped: BTreeMap<(String, String), Vec<Track>> = BTreeMap::new();
+                for track in tracks {
+                    let album = track.album.trim();
+                    let artist = track.artist.trim();
+                    if album.is_empty() || artist.is_empty() || artist.eq_ignore_ascii_case("unknown artist") {
+                        continue;
+                    }
+                    grouped
+                        .entry((normalize_music_text(artist), normalize_music_text(album)))
+                        .or_default()
+                        .push(track.clone());
+                }
+                grouped
+                    .into_iter()
+                    .map(|((artist_key, album_key), mut members)| {
+                        members.sort_by(|left, right| {
+                            normalize_music_text(&left.title)
+                                .cmp(&normalize_music_text(&right.title))
+                                .then_with(|| left.path.cmp(&right.path))
+                        });
+                        make_library_collection(
+                            store,
+                            "album",
+                            format!("album:{artist_key}\u{1f}{album_key}"),
+                            members[0].album.trim().to_string(),
+                            members[0].artist.trim().to_string(),
+                            members,
+                        )
+                    })
+                    .collect()
+            }
+            LibraryCategory::Artists => {
+                let mut grouped: BTreeMap<String, Vec<Track>> = BTreeMap::new();
+                for track in tracks {
+                    let artist = track.artist.trim();
+                    let key = normalize_music_text(artist);
+                    if key.is_empty() || key == "unknown artist" {
+                        continue;
+                    }
+                    grouped.entry(key).or_default().push(track.clone());
+                }
+                grouped
+                    .into_iter()
+                    .map(|(key, members)| {
+                        let title = members[0].artist.trim().to_string();
+                        make_library_collection(
+                            store,
+                            "artist",
+                            format!("artist:{key}"),
+                            title,
+                            String::new(),
+                            members,
+                        )
+                    })
+                    .collect()
+            }
+            LibraryCategory::Playlists => store
+                .playlists
+                .iter()
+                .map(|playlist| {
+                    let members = store.playlist_tracks(&playlist.id);
+                    let representative = members
+                        .first()
+                        .cloned()
+                        .or_else(|| {
+                            playlist.tracks.first().map(|key| Track {
+                                path: key.clone(),
+                                ..Default::default()
+                            })
+                        })
+                        .unwrap_or_default();
+                    make_library_collection(
+                        store,
+                        "playlist",
+                        playlist.id.clone(),
+                        playlist.name.clone(),
+                        String::new(),
+                        members,
+                    )
+                    .with_representative(representative)
+                    .with_track_count(playlist.tracks.len())
+                })
+                .collect(),
+            LibraryCategory::Songs | LibraryCategory::Downloads => Vec::new(),
+        };
+
+        groups.retain(|group| {
+            if !query.is_empty()
+                && !group.title.to_lowercase().contains(&query)
+                && !group.subtitle.to_lowercase().contains(&query)
+                && !group.tracks.iter().any(|track| {
+                    track.title.to_lowercase().contains(&query)
+                        || track.artist.to_lowercase().contains(&query)
+                        || track.album.to_lowercase().contains(&query)
+                })
+            {
+                return false;
+            }
+            if self.filter == LibraryFilter::All {
+                return true;
+            }
+            !group.tracks.is_empty()
+                && group.tracks.iter().any(|track| match self.filter {
+                    LibraryFilter::All => true,
+                    LibraryFilter::Local => !key_is_remote(&track.path),
+                    LibraryFilter::Downloaded => {
+                        available_locally(track)
+                            || store.downloads.contains_key(&track.path)
+                            || store.downloads.contains_key(&store.identity_key(track))
+                    }
+                    LibraryFilter::Liked => store.is_liked(track),
+                    LibraryFilter::Missing => !key_is_remote(&track.path) && !available_locally(track),
+                    LibraryFilter::Excluded => store.is_library_excluded(track),
+                })
+        });
+
+        groups.sort_by(|left, right| match self.sort {
+            LibrarySort::RecentlyPlayed => right
+                .last_played
+                .cmp(&left.last_played)
+                .then_with(|| normalize_music_text(&left.title).cmp(&normalize_music_text(&right.title))),
+            LibrarySort::Duration => {
+                let left_duration: f64 = left.tracks.iter().map(|track| track.duration_secs).sum();
+                let right_duration: f64 = right.tracks.iter().map(|track| track.duration_secs).sum();
+                left_duration.total_cmp(&right_duration)
+                    .then_with(|| normalize_music_text(&left.title).cmp(&normalize_music_text(&right.title)))
+            }
+            LibrarySort::Source => left
+                .representative
+                .path
+                .cmp(&right.representative.path)
+                .then_with(|| normalize_music_text(&left.title).cmp(&normalize_music_text(&right.title))),
+            LibrarySort::Artist if self.category == LibraryCategory::Albums => normalize_music_text(&left.subtitle)
+                .cmp(&normalize_music_text(&right.subtitle))
+                .then_with(|| normalize_music_text(&left.title).cmp(&normalize_music_text(&right.title))),
+            _ => normalize_music_text(&left.title).cmp(&normalize_music_text(&right.title))
+                .then_with(|| normalize_music_text(&left.subtitle).cmp(&normalize_music_text(&right.subtitle))),
+        });
+        groups
+    }
+}
+
+impl LibraryCollection {
+    fn with_representative(mut self, representative: Track) -> Self {
+        self.representative = representative;
+        self
+    }
+
+    fn with_track_count(mut self, track_count: usize) -> Self {
+        self.track_count = track_count;
+        self
+    }
+}
+
+fn make_library_collection(
+    store: &Store,
+    kind: &str,
+    key: String,
+    title: String,
+    subtitle: String,
+    tracks: Vec<Track>,
+) -> LibraryCollection {
+    let last_played = tracks
+        .iter()
+        .flat_map(|track| {
+            store
+                .history
+                .iter()
+                .filter(move |entry| same_track_identity(&entry.track, track))
+                .map(|entry| entry.played_at)
+        })
+        .max()
+        .unwrap_or_default();
+    LibraryCollection {
+        kind: kind.into(),
+        key,
+        title,
+        subtitle,
+        representative: tracks.first().cloned().unwrap_or_default(),
+        track_count: tracks.len(),
+        tracks,
+        last_played,
+    }
+}
 #[derive(Debug, Default)]
 pub struct Queue {
     pub tracks: Vec<Track>,
@@ -1045,6 +1562,53 @@ impl Queue {
         self.tracks = tracks;
         self.index = Some(index);
         self.tracks.get(index).cloned()
+    }
+    pub fn append(&mut self, tracks: impl IntoIterator<Item = Track>) {
+        self.tracks.extend(tracks);
+    }
+    pub fn insert_next(&mut self, tracks: impl IntoIterator<Item = Track>) {
+        let items: Vec<_> = tracks.into_iter().collect();
+        if items.is_empty() {
+            return;
+        }
+        let insertion = self.index.map_or(0, |current| current.saturating_add(1).min(self.tracks.len()));
+        self.tracks.splice(insertion..insertion, items);
+    }
+    pub fn remove(&mut self, index: usize) -> Option<Track> {
+        if index >= self.tracks.len() || Some(index) == self.index {
+            return None;
+        }
+        let removed = self.tracks.remove(index);
+        if let Some(current) = self.index.as_mut() {
+            if index < *current {
+                *current -= 1;
+            }
+        }
+        Some(removed)
+    }
+    pub fn move_item(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.tracks.len() || to >= self.tracks.len() || from == to {
+            return false;
+        }
+        let track = self.tracks.remove(from);
+        self.tracks.insert(to, track);
+        if let Some(current) = self.index.as_mut() {
+            *current = if *current == from {
+                to
+            } else if from < *current && to >= *current {
+                *current - 1
+            } else if from > *current && to <= *current {
+                *current + 1
+            } else {
+                *current
+            };
+        }
+        true
+    }
+    pub fn clear(&mut self) {
+        self.tracks.clear();
+        self.index = None;
+        self.step = 0;
     }
     pub fn advance(&mut self, backwards: bool, automatic: bool) -> Option<Track> {
         let n = self.tracks.len();
@@ -1135,6 +1699,150 @@ mod tests {
             .collect();
         assert_eq!(titles, ["second", "first", "second"]);
         assert!(store.playlist_tracks("missing").is_empty());
+    }
+
+    #[test]
+    fn playlist_resolves_canonical_identity_to_local_track() {
+        let local = Track {
+            path: "C:/Music/song.flac".into(),
+            video_id: Some("abcdefghijk".into()),
+            title: "Same title".into(),
+            ..Default::default()
+        };
+        let store = Store {
+            tracks: vec![local.clone()],
+            playlists: vec![Playlist {
+                id: "p".into(),
+                tracks: vec!["yt://abcdefghijk".into()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(store.playlist_tracks("p"), [local]);
+    }
+
+    #[test]
+    fn library_view_filters_and_sorts_without_collapsing_distinct_files() {
+        let tracks = vec![
+            Track { path: "a-present.mp3".into(), title: "Same".into(), artist: "Zulu".into(), album: "Beta".into(), duration_secs: 240.0, ..Default::default() },
+            Track { path: "b-missing.mp3".into(), title: "Same".into(), artist: "Alpha".into(), album: "Alpha".into(), duration_secs: 120.0, ..Default::default() },
+            Track { path: "yt://abcdefghijk".into(), title: "Remote".into(), artist: "Zulu".into(), album: "Gamma".into(), duration_secs: 180.0, video_id: Some("abcdefghijk".into()), ..Default::default() },
+        ];
+        let mut store = Store { tracks: tracks.clone(), ..Default::default() };
+        let view = LibraryViewState { sort: LibrarySort::Artist, ..Default::default() };
+        let sorted = view.apply(&store, &tracks, |track| track.path.contains("present"));
+        assert_eq!(sorted.iter().map(|track| track.path.as_str()).collect::<Vec<_>>(), ["b-missing.mp3", "yt://abcdefghijk", "a-present.mp3"]);
+
+        let by_title = LibraryViewState { sort: LibrarySort::Title, ..Default::default() }
+            .apply(&store, &tracks, |_| true);
+        assert_eq!(by_title.iter().map(|track| track.path.as_str()).collect::<Vec<_>>(), ["yt://abcdefghijk", "b-missing.mp3", "a-present.mp3"]);
+        let by_album = LibraryViewState { sort: LibrarySort::Album, ..Default::default() }
+            .apply(&store, &tracks, |_| true);
+        assert_eq!(by_album.iter().map(|track| track.path.as_str()).collect::<Vec<_>>(), ["b-missing.mp3", "a-present.mp3", "yt://abcdefghijk"]);
+        let by_duration = LibraryViewState { sort: LibrarySort::Duration, ..Default::default() }
+            .apply(&store, &tracks, |_| true);
+        assert_eq!(by_duration.iter().map(|track| track.path.as_str()).collect::<Vec<_>>(), ["b-missing.mp3", "yt://abcdefghijk", "a-present.mp3"]);
+        let by_source = LibraryViewState { sort: LibrarySort::Source, ..Default::default() }
+            .apply(&store, &tracks, |_| true);
+        assert_eq!(by_source.iter().map(|track| track.path.as_str()).collect::<Vec<_>>(), ["a-present.mp3", "b-missing.mp3", "yt://abcdefghijk"]);
+        let matching_query = LibraryViewState { query: "same".into(), ..Default::default() }
+            .apply(&store, &tracks, |_| true);
+        assert_eq!(matching_query.iter().map(|track| track.path.as_str()).collect::<Vec<_>>(), ["b-missing.mp3", "a-present.mp3"]);
+
+        let missing = LibraryViewState { filter: LibraryFilter::Missing, ..Default::default() }
+            .apply(&store, &tracks, |track| track.path.contains("present"));
+        assert_eq!(missing.iter().map(|track| track.path.as_str()).collect::<Vec<_>>(), ["b-missing.mp3"]);
+        let local = LibraryViewState { filter: LibraryFilter::Local, ..Default::default() }
+            .apply(&store, &tracks, |_| true);
+        assert_eq!(local.len(), 2);
+        store.likes.insert("yt://abcdefghijk".into());
+        let liked = LibraryViewState { filter: LibraryFilter::Liked, ..Default::default() }
+            .apply(&store, &tracks, |_| true);
+        assert_eq!(liked.iter().map(|track| track.path.as_str()).collect::<Vec<_>>(), ["yt://abcdefghijk"]);
+        store.downloads.insert("yt://abcdefghijk".into(), "C:/download/remote.m4a".into());
+        let downloaded = LibraryViewState { filter: LibraryFilter::Downloaded, ..Default::default() }
+            .apply(&store, &tracks, |_| false);
+        assert_eq!(downloaded.iter().map(|track| track.path.as_str()).collect::<Vec<_>>(), ["yt://abcdefghijk"]);
+
+        store.set_library_excluded(&tracks[0], true);
+        let excluded = store.excluded_library_tracks();
+        assert_eq!(excluded.iter().map(|track| track.path.as_str()).collect::<Vec<_>>(), ["a-present.mp3"]);
+        assert_eq!(store.library_tracks().len(), 2);
+        assert!(LibraryViewState::default().apply(&store, &[], |_| false).is_empty());
+    }
+
+    #[test]
+    fn library_collections_normalize_metadata_and_keep_ambiguous_tracks_in_songs() {
+        let tracks = vec![
+            Track { path: "one.flac".into(), title: "One".into(), artist: "The Artist".into(), album: "Blue Room".into(), duration_secs: 120.0, ..Default::default() },
+            Track { path: "two.flac".into(), title: "Two".into(), artist: " the   ARTIST ".into(), album: " blue room ".into(), duration_secs: 180.0, ..Default::default() },
+            Track { path: "three.flac".into(), title: "Three".into(), artist: "Other Artist".into(), album: "Blue Room".into(), duration_secs: 200.0, ..Default::default() },
+            Track { path: "untagged.flac".into(), title: "Unknown".into(), artist: "".into(), album: "".into(), ..Default::default() },
+        ];
+        let store = Store { tracks: tracks.clone(), ..Default::default() };
+        let albums = LibraryViewState { category: LibraryCategory::Albums, ..Default::default() }
+            .collections(&store, &tracks, |_| false);
+        assert_eq!(albums.len(), 2, "same album title by different artists stays separate");
+        assert!(albums.iter().any(|album| album.tracks.len() == 2));
+        assert!(albums.iter().any(|album| album.tracks.len() == 1));
+        assert!(albums.iter().all(|album| album.kind == "album"));
+
+        let artists = LibraryViewState { category: LibraryCategory::Artists, ..Default::default() }
+            .collections(&store, &tracks, |_| false);
+        assert_eq!(artists.len(), 2);
+        assert!(artists.iter().any(|artist| artist.tracks.len() == 2));
+        assert!(LibraryViewState { category: LibraryCategory::Albums, ..Default::default() }
+            .collections(&store, &tracks, |_| false)
+            .iter()
+            .all(|album| !album.tracks.iter().any(|track| track.path == "untagged.flac")));
+    }
+
+    #[test]
+    fn recently_played_sort_and_download_category_use_existing_store_data() {
+        let tracks = vec![
+            Track { path: "older.mp3".into(), title: "Older".into(), artist: "A".into(), ..Default::default() },
+            Track { path: "newer.mp3".into(), title: "Newer".into(), artist: "B".into(), ..Default::default() },
+        ];
+        let store = Store {
+            tracks: tracks.clone(),
+            history: vec![
+                History { track: tracks[0].clone(), played_at: 10, ..Default::default() },
+                History { track: tracks[1].clone(), played_at: 20, ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let recently_played = LibraryViewState { sort: LibrarySort::RecentlyPlayed, ..Default::default() }
+            .apply(&store, &tracks, |_| true);
+        assert_eq!(recently_played[0].path, "newer.mp3");
+
+        let downloads = LibraryViewState { category: LibraryCategory::Downloads, ..Default::default() }
+            .apply(&store, &tracks, |track| track.path == "older.mp3");
+        assert_eq!(downloads.iter().map(|track| track.path.as_str()).collect::<Vec<_>>(), ["older.mp3"]);
+        assert!(LibraryViewState { category: LibraryCategory::Downloads, ..Default::default() }
+            .apply(&store, &[], |_| true)
+            .is_empty());
+    }
+
+    #[test]
+    fn relinking_updates_saved_references_without_touching_the_file() {
+        let old = Track { path: "C:/gone/old.mp3".into(), title: "Old title".into(), ..Default::default() };
+        let replacement = Track { path: "D:/Music/new.mp3".into(), title: "New title".into(), ..Default::default() };
+        let mut store = Store {
+            tracks: vec![old.clone()],
+            likes: [old.path.clone()].into_iter().collect(),
+            playlists: vec![Playlist { id: "p".into(), tracks: vec![old.path.clone(), old.path.clone()], ..Default::default() }],
+            history: vec![History { track: old.clone(), ..Default::default() }],
+            downloads: [("yt://abcdefghijk".into(), old.path.clone())].into_iter().collect(),
+            ..Default::default()
+        };
+        assert!(store.relink_local_path(&old.path, replacement.clone()));
+        assert_eq!(store.tracks[0].path, replacement.path);
+        assert!(store.likes.contains("yt://abcdefghijk"));
+        assert_eq!(store.playlists[0].tracks, ["yt://abcdefghijk", "yt://abcdefghijk"]);
+        assert_eq!(store.history[0].track.path, replacement.path);
+        assert_eq!(store.downloads["yt://abcdefghijk"], replacement.path);
+        assert!(store.is_liked(&replacement));
+        assert_eq!(store.playlist_tracks("p"), [replacement.clone(), replacement]);
     }
     #[test]
     fn source_roots_and_dedup() {
@@ -1280,6 +1988,52 @@ mod tests {
         q.repeat = "all".into();
         assert!(q.advance(false, true).is_some());
         assert_eq!(q.index, Some(0));
+    }
+
+    #[test]
+    fn queue_insert_remove_and_reorder_keep_the_current_track_selected() {
+        let track = |path: &str| Track { path: path.into(), ..Default::default() };
+        let mut queue = Queue::default();
+        queue.append([track("a"), track("b")]);
+        assert_eq!(queue.index, None);
+        queue.insert_next([track("c")]);
+        assert_eq!(queue.tracks.iter().map(|item| item.path.as_str()).collect::<Vec<_>>(), ["c", "a", "b"]);
+        assert_eq!(queue.select(queue.tracks.clone(), 1).unwrap().path, "a");
+        assert!(queue.remove(1).is_none());
+        assert_eq!(queue.remove(0).unwrap().path, "c");
+        assert_eq!(queue.index, Some(0));
+        assert!(queue.move_item(1, 0));
+        assert_eq!(queue.index, Some(1));
+        assert_eq!(queue.tracks[1].path, "a");
+        queue.clear();
+        assert!(queue.tracks.is_empty());
+        assert_eq!(queue.index, None);
+    }
+
+    #[test]
+    fn playlist_rename_and_reorder_preserve_repeated_entries() {
+        let mut store = Store {
+            playlists: vec![Playlist {
+                id: "p".into(),
+                name: "Old name".into(),
+                tracks: ["a", "b", "a"].map(str::to_string).to_vec(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(store.rename_playlist("p", "  New name  "));
+        assert_eq!(store.playlists[0].name, "New name");
+        assert!(!store.rename_playlist("p", "  "));
+        assert!(store.move_playlist_track("p", 2, 0));
+        assert_eq!(store.playlists[0].tracks, ["a", "a", "b"]);
+        assert!(!store.move_playlist_track("p", 3, 0));
+    }
+
+    #[test]
+    fn store_v1_without_ephemeral_library_fields_still_loads() {
+        let store: Store = serde_json::from_str(r#"{"version":1,"tracks":[],"likes":[],"playlists":[]}"#).unwrap();
+        assert_eq!(store.version, 1);
+        assert!(store.library_excluded.is_empty());
     }
 
     #[test]

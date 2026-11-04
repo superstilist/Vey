@@ -1,9 +1,9 @@
 //! Isolated Home/import/account-choice fixture. No real state or network.
 use playervf::{
-    services::{Settings, Store},
+    services::{Settings, Store, Track},
     I18n, MainWindow, PlaylistRow, TrackRow,
 };
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     cell::{Cell, RefCell},
     path::PathBuf,
@@ -23,6 +23,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Choose a new output directory".into());
     }
     std::fs::create_dir_all(&out)?;
+    if std::env::args().any(|a| a == "--live") {
+        let catalog = tokio::runtime::Runtime::new()?
+            .block_on(playervf::native::ytm_home_catalog(Some("onokami".into())))?;
+        std::fs::write(
+            out.join("catalog.json"),
+            serde_json::to_vec_pretty(&catalog)?,
+        )?;
+        for section in catalog.sections {
+            println!("{}: {} items", section.kind, section.items.len());
+        }
+        return Ok(());
+    }
     let mobile = std::env::args().any(|a| a == "--mobile");
     let w = MainWindow::new()?;
     w.set_mobile(mobile);
@@ -44,6 +56,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     255,
                 );
             }
+            image::save_buffer(
+                out.join(format!("cover-{i}.png")),
+                pixels.as_bytes(),
+                80,
+                80,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
             TrackRow {
                 title: format!("Song {} · Home collection", i + 1).into(),
                 artist: "Vey fixture".into(),
@@ -72,7 +92,83 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .collect(),
     ));
-    let store = Rc::new(RefCell::new(Store::default()));
+    let mut fixture = Store::default();
+    fixture.home_catalog.updated_at = playervf::services::now_ms();
+    fixture.tracks = w
+        .get_home_page_tracks()
+        .iter()
+        .enumerate()
+        .map(|(i, row)| Track {
+            path: row.path.to_string(),
+            title: row.title.to_string(),
+            artist: row.artist.to_string(),
+            duration_secs: 222.0,
+            thumbnail_url: format!("https://fixtures.vey.test/cover-{i}.png"),
+            ..Default::default()
+        })
+        .collect();
+    fixture.recommendations.tracks = fixture.tracks.iter().rev().take(8).cloned().collect();
+    for (n, kind) in ["video", "album", "playlist", "artist"]
+        .into_iter()
+        .enumerate()
+    {
+        fixture
+            .home_catalog
+            .sections
+            .push(playervf::discovery::Section {
+                key: kind.into(),
+                kind: kind.into(),
+                title: ["Музичні відео для вас", "Альбоми", "Плейлісти", "Виконавці"][n].into(),
+                items: fixture
+                    .tracks
+                    .iter()
+                    .take(8)
+                    .enumerate()
+                    .map(|(i, track)| {
+                        let mut item = playervf::discovery::Item::song(track);
+                        item.kind = kind.into();
+                        item.key = format!("{kind}-{i}");
+                        item.title = format!(
+                            "{} {}",
+                            ["Live session", "After hours", "Weekend mix", "Artist"][n],
+                            i + 1
+                        );
+                        item.subtitle = "Vey · Independent music".into();
+                        item.browse_id = format!(
+                            "{}fixture{i}",
+                            if kind == "album" {
+                                "MPRE"
+                            } else if kind == "artist" {
+                                "UC"
+                            } else {
+                                "VL"
+                            }
+                        );
+                        if kind == "video" {
+                            // The same track can occur on both Listen again and Video.
+                            item.key = track.path.clone();
+                            item.video_id = format!("fixture{i:04}");
+                        }
+                        item
+                    })
+                    .collect(),
+                ..Default::default()
+            });
+    }
+    std::fs::write(out.join("store.json"), serde_json::to_vec_pretty(&fixture)?)?;
+    let weak = w.as_weak();
+    w.on_request_discovery_art(move |json| {
+        if let (Some(w), Ok(track)) = (weak.upgrade(), serde_json::from_str::<Track>(&json)) {
+            if let Some(row) = w
+                .get_home_page_tracks()
+                .iter()
+                .find(|row| row.path == track.path)
+            {
+                playervf::discovery::update_art(&w, &track.path, &row.art);
+            }
+        }
+    });
+    let store = Rc::new(RefCell::new(fixture));
     let get = {
         let s = store.clone();
         Rc::new(move || s.borrow().clone())
@@ -84,9 +180,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let ui = weak.upgrade().unwrap();
             ui.set_home_layout(next.settings.home_layout as i32);
             ui.set_home_rotate(next.settings.home_rotate);
+            ui.set_home_revision(ui.get_home_revision() + 1);
             *s.borrow_mut() = next;
         })
     };
+    playervf::discovery::install(&w, get.clone(), apply.clone());
     playervf::home::install(&w, get, apply);
     w.set_music_supported(true);
     w.set_music_link("https://music.youtube.com/playlist?list=PL1234567890".into());
@@ -107,7 +205,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     8 => "playlist-import".into(),
                     9 => "connections-vey".into(),
                     10 => "connections-youtube".into(),
-                    _ => "connections-spotify".into(),
+                    _ => "connections-ytm".into(),
                 };
                 let frame = w.window().take_snapshot().unwrap();
                 image::save_buffer(

@@ -201,10 +201,19 @@ export component SongRow inherits Rectangle {
     in property <bool> current;
     in property <bool> downloaded;
     in property <bool> downloading;
+    in property <int> download-progress: -1;
     in property <bool> liked;
+    in property <bool> selectable;
+    in property <bool> selected;
+    in property <bool> missing;
     in property <bool> mobile;
     in property <bool> actions: true;
     in property <bool> removable;
+    in property <bool> queue-actions;
+    in property <bool> reorderable;
+    in property <bool> queue-removable;
+    in property <bool> relinkable;
+    in property <bool> overflow-actions;
     in property <bool> filled;
     in property <bool> album-column;
     in property <int> tone;
@@ -213,6 +222,14 @@ export component SongRow inherits Rectangle {
     callback download-clicked();
     callback remove-clicked();
     callback mark-clicked();
+    callback selection-clicked();
+    callback queue-clicked();
+    callback play-next-clicked();
+    callback move-up-clicked();
+    callback move-down-clicked();
+    callback queue-remove-clicked();
+    callback relink-clicked();
+    callback more-clicked();
     height: root.mobile ? 60px : 72px;
     border-radius: 14px;
     background: root.current ? Tokens.primary-container.with-alpha(0.5) : (row-touch.has-hover || row-touch.pressed) ? Tokens.neutral-150 : root.filled ? Tokens.neutral-100 : transparent;
@@ -220,20 +237,39 @@ export component SongRow inherits Rectangle {
     row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
     HorizontalLayout {
         padding: root.mobile ? 8px : 10px; spacing: root.mobile ? 10px : 14px;
+        if root.selectable: Rectangle {
+            width: 24px; height: 24px; border-radius: 12px;
+            background: root.selected ? Tokens.brand-500 : transparent;
+            border-width: root.selected ? 0px : 1px; border-color: Tokens.ink-300;
+            if root.selected: Image { source: @image-url("../assets/icons/Check.svg"); width: 14px; height: 14px; x: 5px; y: 5px; colorize: Tokens.brand-ink; }
+            TouchArea { mouse-cursor: pointer; clicked => { root.selection-clicked(); } }
+            accessible-role: button;
+            accessible-label: root.selected ? I18n.tr("Зняти вибір") : I18n.tr("Вибрати композицію");
+            accessible-action-default => { root.selection-clicked(); }
+        }
         Artwork { art: root.art; downloaded: root.downloaded; tone: root.tone; width: root.mobile ? 44px : 52px; height: self.width; border-radius: 12px; mark-clicked => { root.mark-clicked(); } }
         VerticalLayout {
             spacing: 4px; alignment: center; horizontal-stretch: 1;
             Text { text: root.title; color: root.current ? Tokens.brand-300 : Tokens.ink-100; font-size: 14px; font-weight: 600; overflow: elide; }
-            Text { text: root.artist + (!root.mobile && !root.album-column && root.album != "" ? (root.artist != "" ? " · " : "") + root.album : ""); color: Tokens.ink-300; font-size: 12px; overflow: elide; }
+            Text { text: root.missing ? I18n.tr("Файл недоступний · повторно прив’яжіть його") : root.artist + (!root.mobile && !root.album-column && root.album != "" ? (root.artist != "" ? " · " : "") + root.album : ""); color: Tokens.ink-300; font-size: 12px; overflow: elide; }
         }
         if root.album-column: Text { text: root.album; width: 180px; color: Tokens.ink-300; font-size: 12px; vertical-alignment: center; overflow: elide; }
         if !root.mobile: Text { text: root.duration; color: Tokens.ink-300; width: 42px; font-size: 12px; vertical-alignment: center; horizontal-alignment: right; }
         if root.actions: Action { comfortable: root.mobile; icon: @image-url("../assets/icons/Heart.svg"); label: I18n.tr("Подобається"); selected: root.liked; clicked => { root.like-clicked(); } }
-        if root.actions && !root.mobile: Rectangle {
-            width: 36px; height: 36px;
-            if !root.downloaded: Action { icon: root.downloading ? @image-url("../assets/icons/MoreHorizontal.svg") : @image-url("../assets/icons/Download.svg"); label: root.downloading ? I18n.tr("Завантаження файлу…") : I18n.tr("Завантажити"); clicked => { root.download-clicked(); } }
+        if root.actions && !root.mobile && !root.downloaded: Action {
+            icon: root.downloading ? @image-url("../assets/icons/X.svg") : @image-url("../assets/icons/Download.svg");
+            text: root.downloading && root.download-progress >= 0 ? root.download-progress + "%" : "";
+            label: root.downloading ? (root.download-progress >= 0 ? root.download-progress + "% · " + I18n.tr("Скасувати") : I18n.tr("Скасувати завантаження")) : I18n.tr("Завантажити");
+            clicked => { root.download-clicked(); }
         }
+        if root.queue-actions: Action { comfortable: root.mobile; icon: @image-url("../assets/icons/ListMusic.svg"); label: I18n.tr("Додати до черги"); clicked => { root.queue-clicked(); } }
+        if root.queue-actions: Action { comfortable: root.mobile; icon: @image-url("../assets/icons/SkipForward.svg"); label: I18n.tr("Відтворити наступним"); clicked => { root.play-next-clicked(); } }
+        if root.relinkable: Action { comfortable: root.mobile; icon: @image-url("../assets/icons/LocalFile.svg"); label: I18n.tr("Знайти файл"); clicked => { root.relink-clicked(); } }
+        if root.overflow-actions: Action { comfortable: root.mobile; icon: @image-url("../assets/icons/Ellipsis.svg"); label: I18n.tr("Дії з композицією"); clicked => { root.more-clicked(); } }
         if root.removable: Action { icon: @image-url("../assets/icons/X.svg"); label: I18n.tr("Видалити зі списку"); clicked => { root.remove-clicked(); } }
+        if root.reorderable: Action { comfortable: root.mobile; icon: @image-url("../assets/icons/ChevronUp.svg"); label: I18n.tr("Перемістити вище"); clicked => { root.move-up-clicked(); } }
+        if root.reorderable: Action { comfortable: root.mobile; icon: @image-url("../assets/icons/ChevronDown.svg"); label: I18n.tr("Перемістити нижче"); clicked => { root.move-down-clicked(); } }
+        if root.queue-removable: Action { comfortable: root.mobile; icon: @image-url("../assets/icons/X.svg"); label: I18n.tr("Прибрати з черги"); clicked => { root.queue-remove-clicked(); } }
     }
     accessible-role: button;
     accessible-label: root.title + " · " + root.artist;

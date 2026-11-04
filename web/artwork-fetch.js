@@ -22,16 +22,36 @@ async function cachedArtwork(url, maxBytes) {
 }
 
 async function rememberArtwork(url, bytes) {
-  if (!globalThis.caches || !globalThis.createImageBitmap || bytes.length > ART_CACHE_ITEM_BYTES) return;
+  if (!globalThis.caches || bytes.length > ART_CACHE_ITEM_BYTES) return;
   try {
     const blob = new Blob([bytes]);
-    const image = await createImageBitmap(blob);
-    image.close();
     const cache = await caches.open(ART_CACHE);
     await cache.put(url, new Response(blob, { headers: { 'X-Vey-Cached-At': String(Date.now()) } }));
     const keys = await cache.keys();
     await Promise.all(keys.slice(0, Math.max(0, keys.length - ART_CACHE_LIMIT)).map(key => cache.delete(key)));
   } catch (_) { /* Cache failures must never block artwork display. */ }
+}
+
+// Decode through the browser's asynchronous image pipeline and hand Slint a
+// bounded RGBA buffer. This avoids running the full image decoder in WASM on
+// the UI thread for every cover during Home startup.
+export async function decodeArtwork(bytes, maxEdge = 768) {
+  const bitmap = await createImageBitmap(new Blob([bytes]));
+  try {
+    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = typeof OffscreenCanvas !== 'undefined'
+      ? new OffscreenCanvas(width, height)
+      : Object.assign(document.createElement('canvas'), { width, height });
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) throw new Error('Artwork canvas is unavailable');
+    context.drawImage(bitmap, 0, 0, width, height);
+    const { data } = context.getImageData(0, 0, width, height);
+    return { width, height, data };
+  } finally {
+    bitmap.close();
+  }
 }
 
 // Bound network work even when a server omits Content-Length or stalls.

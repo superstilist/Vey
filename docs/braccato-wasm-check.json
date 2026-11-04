@@ -19,15 +19,15 @@
   "before": {
     "revision": "1e6b6954b1c18136274681a9bf4985efb2332b01",
     "status": "rendering",
-    "currentTime": 0.5049430048018694,
-    "syncType": "richsync",
+    "currentTime": 0.0976530011817813,
+    "syncType": "synced",
     "lineCount": 3,
     "layout": "scroll",
     "letters": 70,
-    "animations": 73,
+    "animations": 54,
     "themeCompiles": 1,
-    "builds": 2,
-    "ticks": 5,
+    "builds": 1,
+    "ticks": 4,
     "tickOptionsUpdates": 1,
     "scrollTop": 0,
     "visible": true,
@@ -46,15 +46,15 @@
     "mode": "lyrics"
   },
   "desktopBounds": {
-    "x": 776,
-    "y": 210,
-    "width": 598,
-    "height": 524
+    "x": 868.953125,
+    "y": 204,
+    "width": 511.03125,
+    "height": 564
   },
   "mobileBounds": {
     "x": 24,
-    "y": 298,
+    "y": 150,
     "width": 342,
-    "height": 484
+    "height": 496
   }
 }

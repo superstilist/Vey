@@ -45,6 +45,7 @@ async fn search(Query(q): Query<HashMap<String, String>>) -> Result<Json<Vec<Tra
         .map_err(error)
 }
 async fn browse(Query(q): Query<HashMap<String, String>>) -> Result<Json<Vec<Track>>, ApiError> {
+    if let Some(id)=q.get("id") {return native::ytm_collection_tracks(id.clone()).await.map(Json).map_err(error);}
     let rows = if q.contains_key("radio") {
         native::ytm_recommendations(q.get("v").cloned(), None, Some(40)).await
     } else {
@@ -67,10 +68,13 @@ async fn browse(Query(q): Query<HashMap<String, String>>) -> Result<Json<Vec<Tra
             .collect(),
     ))
 }
+async fn home_catalog(Query(q): Query<HashMap<String, String>>) -> Result<Json<crate::discovery::Catalog>, ApiError> {
+    native::ytm_home_catalog(q.get("q").cloned()).await.map(Json).map_err(error)
+}
 async fn import_playlist(
     Json(link): Json<String>,
 ) -> Result<Json<crate::library_import::ImportedPlaylist>, ApiError> {
-    native::ytm_import_playlist(link)
+    native::import_public_playlist(link)
         .await
         .map(Json)
         .map_err(error)
@@ -134,6 +138,7 @@ pub fn run() -> Result<(), String> {
         let app = Router::new()
             .route("/api/search", get(search))
             .route("/api/browse", get(browse))
+            .route("/api/home", get(home_catalog))
             .route("/api/playlists/import", post(import_playlist))
             .route("/api/audio/{id}", get(audio))
             .route("/api/video", post(video))

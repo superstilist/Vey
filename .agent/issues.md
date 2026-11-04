@@ -1,6 +1,7 @@
 # Bugs, limitations and unknowns
 
-Reviewed 2026-10-20. No live reproductions in this documentation task.
+Reviewed 2026-10-27 against the working tree (0.1.27). No live reproductions in
+this documentation/cleanup pass; nothing here was re-run.
 Labels: **source-confirmed** = present in inspected implementation;
 **reported** = historical repository evidence; **unverified** = missing runtime
 evidence; **documentation** = inconsistent descriptions. Suggested priorities in
@@ -9,9 +10,9 @@ evidence; **documentation** = inconsistent descriptions. Suggested priorities in
 | ID | Type/status | Problem and impact | Evidence / entry points |
 | --- | --- | --- | --- |
 | I-01 | Reported tracks recovered 2026-10-21 | Android media URLs rejected ranges beyond 1 MiB. Public visionOS resolution now cached both reported tracks completely and decoded their full durations. Native load cancellation and range/cache validation also implemented. Audible listening and broader catalog/device acceptance remain separate. | `docs/PLAYBACK-RECOVERY.md`; `src/native.rs`, `src/app.rs`, `src/server.rs` audio handler |
-| I-02 | Implemented adapters; platform acceptance pending | Muted video replaces the art slot through browser, WebView2, Android and FFmpeg adapters. Live streams and native target playback still require separate runtime evidence. | `src/video.rs`, `src/video_linux.rs`; `docs/PLAYER-REFINEMENT.md` |
-| I-03 | Partially implemented; device acceptance pending | Since 0.1.5, device scanning requests audio permission and reads MediaStore; Android add-source starts device discovery. Document picker/save stubs still limit explicit selection and import/export; manual paths remain available. | `src/android.rs`, `src/native.rs`, `src/dialogs.rs`; `docs/ANDROID-FIXES.md` |
-| I-04 | Android host implemented; device acceptance pending | Android now has a native WebView challenge bridge sharing Windows JWT exchange/renewal/parsing. Device acquisition remains unverified; Linux still has no challenge host. | `src/challenge.rs`, `src/android.rs`, `android/java/app/vey/VeyBridge.java` |
+| I-02 | Implemented adapters; platform acceptance pending | Muted video uses browser video, Android TextureView or desktop FFmpeg frames. FFmpeg must be installed for desktop clips; live streams and device playback need separate runtime evidence. | `src/video.rs`, `src/video_linux.rs` |
+| I-03 | Partially implemented; device acceptance pending | Since 0.1.5, device scanning requests audio permission and reads MediaStore (`is_music != 0` since 2026-11-02); Android add-source starts device discovery. Document picker/save stubs still limit explicit selection and import/export; manual paths remain available. | `src/android.rs`, `src/native.rs`, `src/dialogs.rs`; `docs/ANDROID-FIXES.md` |
+| I-04 | External-browser verification; device acceptance pending | User-initiated lyric authentication uses a system browser and one-use loopback callback. Silent renewal is unavailable; Android device and live provider verification remain unverified. | `src/challenge.rs`, `src/lyrics_service.rs` |
 | I-05 | Source-confirmed browser gap | Selected local files lack real tag/artwork extraction; title is filename, artist unknown, album/artwork empty. | `web/bridge.js` file picker; `docs/PARITY.md` |
 | I-06 | Browser session limitation | Local object URLs do not survive reload; files need reselection even when likes/playlists persist. | `web/bridge.js`; `README.md` |
 | I-07 | Reported feature backlog | Public detail pages, continuation UX, download progress/cancellation, original shortcuts/context menus and exhaustive settings parity unfinished. | `docs/PARITY.md`; audit callbacks in `src/app.rs` and `src/web.rs` before implementation |
@@ -20,11 +21,60 @@ evidence; **documentation** = inconsistent descriptions. Suggested priorities in
 | I-10 | Unverified Android runtime | APK signing/alignment/manifest and compile/link checks do not prove startup, audio, storage, browser intents, lifecycle or phone usability. | `docs/ANDROID-BUILD.md`; no device acceptance recorded |
 | I-11 | Unverified Linux runtime | Prior local WSL failed because its disk was missing; local runtime and current CI execution are not established. | `docs/PARITY.md`, `.github/workflows/rust.yml` |
 | I-12 | Documented accessibility limitation | Browser Slint canvas shell lacks screen-reader support; DOM lyric/editor accessibility does not cover the shell. | `README.md` |
-| I-13 | Documentation drift | README still describes plain underlined tabs while current tonal notes describe filled pills; older theme/fallback and parity palette descriptions also predate current UI. | `README.md`, `docs/MATERIAL-STYLE.md`, `src/braccato/README.md`, `docs/PARITY.md` |
+| I-18 | Observed Windows software-renderer fixture failure, 2026-10-29 | `navigation_transition` failed its static stage-corner pixel assertion before the first route change under `SLINT_BACKEND=winit-software`; the GPU fixture passed. Software clipping conformance remains open. | `examples/navigation_transition.rs::check_corners`; `docs/PERFORMANCE.md` |
 
 ## Already addressed: retain regression coverage
 
 These are historical fixes, not newly discovered open bugs:
+
+- 2026-11-02 mobile playlist rows, library count and YouTube Music file tagging:
+  mobile playlist pages now render their `ListView` (`ui/main.slint`); Android
+  MediaStore excludes non-music audio via `is_music != 0` (`src/android.rs`);
+  `Store::library_tracks()` keeps local files plus liked/playlisted remote songs
+  while hiding search history and remote duplicates of local files; downloads and
+  tag sync persist `ytmusic:<id>` in the file comment and migrate saved keys to
+  `yt://<id>` (`src/media_library.rs`, `src/native.rs`, `src/local_sync.rs`,
+  `src/services.rs`, `src/account.rs`, `src/app.rs`, `src/web.rs`). Untracked
+  local files without a YouTube Music identity still cannot sync across devices
+  without private audio upload; Android device acceptance remains separate.
+
+- 2026-10-29 sharp glyph artifacts: the prior halo comparison missed damage
+  inside letters. Actual `LyricInk` captures reproduce the old GPU failure;
+  stable solid/mask composition passes 128 Latin/Cyrillic/accent samples at
+  1x/1.25x with zero wrong glyph cores. Full-view glow/effect/quality checks
+  pass; synthetic cues and Windows fixture scope are in `docs/NATIVE-BRACCATO.md`.
+
+- 2026-10-29 filled lead glow/edge sampling: the supplied phrase crop was
+  reproduced with synthetic timings. Native lead-prefix glow now persists to
+  line end; feather clips share a full-tile sampling origin. GPU/software/1.25x
+  pixel and timing regressions pass. This fixed halo lifetime/sampling only;
+  the separate sharp-letter repair above handles ink. `docs/NATIVE-BRACCATO.md`
+  records the scope.
+
+- 2026-10-28 native audio/lyric clock handoff (0.1.29): reproduced the reported
+  Smooth Criminal line 2→3 snap using cached cues and the native polling cadence.
+  Stale worker positions rewound presentation time and were mistaken for seeks.
+  Timestamped audio positions, monotone clock slew and confirmed seek serials
+  replace that cancellation path. GPU/software and silent native-audio replay
+  pass; see `docs/NATIVE-BRACCATO.md`. This does not establish all-song/device
+  acceptance.
+
+- 2026-10-27 documentation pass (I-13 to I-17): `README.md` "Latest
+  release" now matches `Cargo.toml` 0.1.27 and separates the published 0.1.16
+  artifacts; tab styling and the native/browser lyric split were corrected.
+  `docs/PARITY.md` marks the HTTP 403 as historical before 2026-10-21 and links
+  `docs/PLAYBACK-RECOVERY.md`. The corrupted
+  `docs/UI-REFINEMENT-PLAN.md` sentence was rewritten from
+  `refinement-test.mjs`. All 31 widget scripts now have `npm` entries. Only the
+  text was checked; no fixture or build was re-run.
+
+- 2026-10-27 native line retargeting: every cue restarted the scroll from zero
+  velocity, so a settled camera spent its first ~60 ms barely moving and a
+  mid-move retarget braked at the cue boundary. `src/native_lyric_camera.rs`
+  now retains position and forward velocity and launches front-loaded from rest;
+  `examples/native_line_flow.rs` samples the real window. Keep the
+  `VEY_LEGACY_LYRIC_SCROLL=1` A/B switch until the behaviour is accepted on the
+  other platforms.
 
 - 2026-10-25 native autoscroll: real wheel/drag input replaced the Flickable's
   initial content-y binding, so enabling follow did not restore its position.
@@ -94,4 +144,9 @@ There is no complete fresh bug audit here and no external issue tracker was
 queried. Reports are fixtures unless they explicitly record real hardware/live
 services. A missing test is an unknown, not proof of a defect. Reproduce before
 closing a historical issue; record date, environment, exact check and outcome.
-Do not add Google account/session features to resolve an intentional exclusion.
+The 2026-10-30 user correction requests normal Google account-chooser v3 login.
+YouTube uses a dedicated browser profile and read-only in-page requests; ordinary
+profiles and exported cookies remain excluded. Scope: docs/MUSIC-ACCOUNTS.md.
+The 2026-10-27 cleanup deleted `target/`, so every recorded fixture report under
+`target/native-lyrics-check/` is gone; the committed JSON in `docs/` and the
+tables in `docs/NATIVE-BRACCATO.md` remain the only copies.

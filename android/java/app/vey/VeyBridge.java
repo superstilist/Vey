@@ -1,7 +1,6 @@
 package app.vey;
 
 import android.app.Activity;
-import android.app.Dialog;
 import android.graphics.SurfaceTexture;
 import android.media.MediaPlayer;
 import android.media.MediaMetadata;
@@ -13,11 +12,6 @@ import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
-import android.webkit.JavascriptInterface;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import org.json.JSONObject;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -26,10 +20,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public final class VeyBridge {
     private static final ConcurrentLinkedQueue<String> messages = new ConcurrentLinkedQueue<>();
     private static final ConcurrentLinkedQueue<String> mediaMessages = new ConcurrentLinkedQueue<>();
-    private static WebView auth;
-    private static Dialog dialog;
-    private static java.lang.ref.WeakReference<View> authReturnFocus = new java.lang.ref.WeakReference<>(null);
-    private static volatile int authSession;
     private static TextureView texture;
     private static MediaPlayer player;
     private static Surface surface;
@@ -43,14 +33,11 @@ public final class VeyBridge {
     public static String mediaPoll() { String value=mediaMessages.poll(); return value==null ? "" : value; }
     public static void call(Activity activity, String method, String payload) {
         try {
-            if (method.equals("challenge")) challenge(activity,new JSONObject(payload));
-            else if (method.equals("cancelChallenge")) closeAuth();
-            else if (method.equals("video")) video(activity,new JSONObject(payload));
+            if (method.equals("video")) video(activity,new JSONObject(payload));
             else if (method.equals("media")) media(activity,new JSONObject(payload));
-            else if (method.equals("shutdown")) { closeAuth(); closeVideo(); if(mediaSession!=null){mediaSession.setActive(false);mediaSession.release();mediaSession=null;} }
+            else if (method.equals("shutdown")) { closeVideo(); if(mediaSession!=null){mediaSession.setActive(false);mediaSession.release();mediaSession=null;} }
         } catch (Exception e) {
-            if (method.equals("challenge")) messages.offer("{\"type\":\"turnstile-error\",\"error\":\"android-host\"}");
-            else { failed=true; if(texture!=null)texture.setVisibility(View.INVISIBLE); }
+            failed=true; if(texture!=null)texture.setVisibility(View.INVISIBLE);
         }
     }
     private static void media(Activity activity, JSONObject data) {
@@ -79,64 +66,6 @@ public final class VeyBridge {
             .setState(playing?PlaybackState.STATE_PLAYING:(active?PlaybackState.STATE_PAUSED:PlaybackState.STATE_STOPPED),position,1f)
             .build());
         mediaSession.setActive(active);
-    }
-    private static boolean allowed(Uri uri) {
-        return "https".equals(uri.getScheme()) && ("lyrics.api.dacubeking.com".equals(uri.getHost()) || "challenges.cloudflare.com".equals(uri.getHost()));
-    }
-    private static void challenge(Activity activity,JSONObject request) throws Exception {
-        closeAuth(); messages.clear();
-        final int session=authSession;
-        authReturnFocus=new java.lang.ref.WeakReference<>(activity.getCurrentFocus());
-        auth=new WebView(activity);
-        WebSettings settings=auth.getSettings();
-        settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
-        settings.setAllowFileAccess(false); settings.setAllowContentAccess(false);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        auth.setWebViewClient(new WebViewClient(){
-            @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){return !allowed(request.getUrl());}
-        });
-        auth.addJavascriptInterface(new Object(){
-            @JavascriptInterface public void postMessage(String raw) {
-                if(session!=authSession)return;
-                if(raw==null||raw.length()>17000)return;
-                try {
-                    JSONObject value=new JSONObject(raw);
-                    String type=value.optString("type");
-                    if(type.equals("turnstile-token")) {
-                        String token=value.optString("token").trim();
-                        if(token.isEmpty()||token.length()>=16384||token.contains("\n")||token.contains("\r"))return;
-                        messages.offer(raw); activity.runOnUiThread(()->closeAuth());
-                    } else if(type.equals("turnstile-error")||type.equals("turnstile-expired")||type.equals("turnstile-timeout"))messages.offer(raw);
-                } catch(Exception ignored) {}
-            }
-        },"VeyAuth");
-        if(request.optBoolean("silent")) {
-            float density=activity.getResources().getDisplayMetrics().density;
-            FrameLayout.LayoutParams params=new FrameLayout.LayoutParams((int)(480*density),(int)(360*density));
-            auth.setTranslationX(-10000); auth.setAlpha(0.01f);
-            auth.setFocusable(false); auth.setFocusableInTouchMode(false);
-            auth.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
-            auth.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
-            ((ViewGroup)activity.findViewById(android.R.id.content)).addView(auth,params);
-        } else {
-            dialog=new Dialog(activity); dialog.setContentView(auth);
-            dialog.setOnCancelListener(d->{messages.offer("{\"type\":\"turnstile-error\",\"error\":\"cancelled\"}");closeAuth();});
-            dialog.show(); dialog.getWindow().setLayout((int)(activity.getResources().getDisplayMetrics().widthPixels*0.9),Math.min((int)(420*activity.getResources().getDisplayMetrics().density),(int)(activity.getResources().getDisplayMetrics().heightPixels*0.8)));
-        }
-        String bootstrap="<script>window.ipc={postMessage:function(s){VeyAuth.postMessage(s)}};</script>";
-        auth.loadDataWithBaseURL("https://lyrics.api.dacubeking.com/",bootstrap+request.getString("html"),"text/html","UTF-8",null);
-    }
-    private static void closeAuth() {
-        final boolean restore=auth!=null&&auth.hasFocus();
-        final View previous=authReturnFocus.get();
-        authReturnFocus.clear();
-        authSession++;
-        if(dialog!=null){dialog.dismiss();dialog=null;}
-        if(auth!=null){if(auth.getParent() instanceof ViewGroup)((ViewGroup)auth.getParent()).removeView(auth);auth.removeJavascriptInterface("VeyAuth");auth.stopLoading();auth.destroy();auth=null;}
-        if(restore&&previous!=null)previous.post(()->{
-            View current=previous.getRootView().findFocus();
-            if(previous.isAttachedToWindow()&&previous.hasWindowFocus()&&(current==null||current==previous||current==previous.getRootView()))previous.requestFocus();
-        });
     }
     private static void closeVideo() {
         prepared=false;

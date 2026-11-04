@@ -1,9 +1,15 @@
 import { Tokens } from "tokens.slint";
+import { I18n } from "i18n.slint";
 // Actual composition diagrams, using the same six arrangements as Home.
 export component HomePreview inherits Rectangle {
     in property <int> variant;
     in property <bool> selected;
+    private property <string> layout-name: root.variant == 0 ? I18n.tr("Для вас") : root.variant == 1 ? I18n.tr("Компактний") : root.variant == 2 ? I18n.tr("Швидкий вибір") : root.variant == 3 ? I18n.tr("Відкривайте") : root.variant == 4 ? I18n.tr("Плейлісти") : I18n.tr("Виконавці");
     callback clicked();
+    min-width: 0px;
+    max-width: 100000px;
+    preferred-width: 180px;
+    horizontal-stretch: 1;
     height: 106px;
     border-radius: 12px;
     background: touch.has-hover || root.selected ? Tokens.neutral-150 : transparent;
@@ -11,19 +17,19 @@ export component HomePreview inherits Rectangle {
     border-color: Tokens.brand-300;
     VerticalLayout {
         padding: 10px; spacing: 5px;
-        if root.variant == 0 || root.variant == 3: Rectangle { height: root.variant == 3 ? 30px : 18px; border-radius: 4px; background: Tokens.brand-300.with-alpha(0.35); }
-        if root.variant != 2: HorizontalLayout {
-            spacing: 4px;
-            for i in [0,1,2,3]: Rectangle { height: root.variant == 1 ? 32px : 17px; border-radius: root.variant == 5 ? 12px : 4px; background: Tokens.brand-300.with-alpha(0.18 + i * 0.05); }
+        Rectangle { height: 4px; width: 48px; border-radius: 2px; background: Tokens.brand-300.with-alpha(0.35); }
+        if root.variant != 2: Rectangle {
+            height: 30px;
+            for i in [0,1,2,3]: Rectangle { x: i * (self.width + 4px); width: max(4px, min(root.variant == 1 ? 20px : root.variant == 3 ? 46px : 28px, (parent.width - 12px) / 4)); height: root.variant == 3 ? self.width * 9 / 16 : self.width; border-radius: root.variant == 5 ? self.width / 2 : 4px; background: Tokens.brand-300.with-alpha(0.18 + i * 0.05); }
         }
-        if root.variant != 1 && root.variant != 3: VerticalLayout {
+        VerticalLayout {
             spacing: 3px;
-            for i in [0,1]: Rectangle { height: 5px; border-radius: 2px; background: Tokens.ink-300.with-alpha(0.3); }
+            for i in [0,1]: Rectangle { height: root.variant == 2 ? 10px : 4px; border-radius: 2px; background: Tokens.ink-300.with-alpha(0.3); }
         }
-        Text { text: root.variant == 0 ? "Editorial" : root.variant == 1 ? "Gallery" : root.variant == 2 ? "Compact" : root.variant == 3 ? "Spotlight" : root.variant == 4 ? "Library" : "Discovery"; color: root.selected ? Tokens.brand-300 : Tokens.ink-100; font-size: 12px; vertical-alignment: bottom; vertical-stretch: 1; }
+        Text { text: root.layout-name; color: root.selected ? Tokens.brand-300 : Tokens.ink-100; font-size: 12px; overflow: elide; vertical-alignment: bottom; vertical-stretch: 1; }
     }
     touch := TouchArea { mouse-cursor: pointer; clicked => {root.clicked();} }
     accessible-role: button;
-    accessible-label: "Home layout " + (root.variant + 1);
+    accessible-label: I18n.tr("Макет головної") + ": " + root.layout-name;
     accessible-action-default => {root.clicked();}
 }

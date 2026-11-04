@@ -11,8 +11,8 @@
   "bundledModules": 98,
   "assets": {
     "widget.js": {
-      "bytes": 487590,
-      "sha256": "c7c559e52a3bdbaa77eb4daaca24b8ea5747a290b8b6f669839470ae3d58c711"
+      "bytes": 493386,
+      "sha256": "1cde0a4f2ed8533257a3687138db882e6adc4b987efe49ecd6df1dc291faa42c"
     },
     "widget.css": {
       "bytes": 675441,

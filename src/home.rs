@@ -371,7 +371,7 @@ pub fn install(w: &MainWindow, get: Rc<dyn Fn() -> Store>, apply: Rc<dyn Fn(Stor
             let Some(ui)=weak.upgrade() else{return;};
             if command=="select" {ui.set_music_status("".into());return;}
             if command=="cancel" {generation.set(generation.get()+1);ui.set_music_busy(false);ui.set_music_status("Скасовано".into());return;}
-            if command!="import" {ui.set_music_status("Підключення YouTube Music і Spotify доступне в настільній Vey. Публічний плейліст можна імпортувати тут за посиланням.".into());return;}
+            if command!="import" {ui.set_music_status("Підключення приватної бібліотеки YouTube Music доступне в настільній Vey. Публічні плейлісти YouTube Music і Spotify можна імпортувати за посиланням.".into());return;}
             if ui.get_music_busy(){return;}
             let link=ui.get_music_link().to_string();
             if let Err(error)=crate::library_import::playlist_link(&link){ui.set_music_status(error.into());return;}
@@ -388,8 +388,9 @@ pub fn install(w: &MainWindow, get: Rc<dyn Fn() -> Store>, apply: Rc<dyn Fn(Stor
                 if epoch.get()!=revision{return;}
                 let Some(ui)=weak.upgrade() else{return;};ui.set_music_busy(false);
                 match result {
-                    Ok(playlist)=>{
+                    Ok(mut playlist)=>{
                         let mut store=get();
+                        crate::library_import::reuse_legacy_spotify_identity(&store,&mut playlist);
                         let key=format!("vey:import:{}",playlist.id);
                         let storage=web_sys::window().and_then(|w|w.local_storage().ok().flatten());
                         let baseline=storage.as_ref().and_then(|s|s.get_item(&key).ok().flatten());

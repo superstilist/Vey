@@ -1,5 +1,7 @@
 import { I18n } from "i18n.slint";
 import { HomePreview } from "home-preview.slint";
+import { HomeFeed, HomeShelfRow, HomeItemRow } from "home-feed.slint";
+export { HomeShelfRow, HomeItemRow } from "home-feed.slint";
 import { Motion } from "motion.slint";
 import "../assets/fonts/Roboto.ttf";
 import "../assets/fonts/NotoSansJP.ttf";
@@ -23,26 +25,39 @@ import { PlayerTheme, PlayerThemeStyle } from "player-theme.slint";
 export { PlayerTheme, PlayerThemeStyle } from "player-theme.slint";
 export { CoverBadges } from "controls.slint";
 import { StageNavigator } from "stage-navigator.slint";
-import { NavigationStreaks } from "navigation-streaks.slint";
 import { TouchStyle, CoverBadges, Action, SongRow, NavItem, Artwork, Transport, SeekBar, TonalSlider, MobileNavItem, SettingsRow, SwitchRow, SectionLabel, PlaylistChoice } from "controls.slint";
 
-export struct TrackRow { title: string, artist: string, album: string, duration: string, path: string, art: image, liked: bool, downloaded: bool, downloading: bool }
+export struct TrackRow { title: string, artist: string, album: string, duration: string, path: string, art: image, liked: bool, downloaded: bool, downloading: bool, download-progress: int, selected: bool, missing: bool }
 export struct PlaylistRow { id: string, name: string, detail: string, art: image }
+export struct LibraryCollectionRow { kind: string, key: string, title: string, subtitle: string, count: string, art: image }
 
 
 export component MainWindow inherits Window {
+    in-out property <[HomeShelfRow]> home-shelves;
+    in-out property <[string]> home-filters;
+    in-out property <bool> home-catalog-loading;
+    in-out property <bool> home-catalog-failed;
+    in-out property <int> home-revision;
+    in-out property <string> catalog-title;
+    in-out property <string> catalog-kind;
+    in-out property <string> catalog-subtitle;
+    in-out property <image> catalog-art;
+    in-out property <int> catalog-track-count;
+    callback sync-home();
+    callback request-home-catalog();
+    callback open-home-item(string, string);
+    callback play-home-shelf(string);
+    callback request-discovery-art(string);
+    callback play-discovery-items(string, bool);
+    callback open-discovery-collection(string, string);
     in-out property <int> home-layout;
     in-out property <bool> home-rotate;
     callback home-choose(int);
     in-out property <bool> music-supported;
-    in-out property <int> music-provider;
     in-out property <int> connection-provider;
-    in-out property <string> music-client-id;
-    in-out property <string> music-client-secret;
     in-out property <string> music-link;
     in-out property <string> music-status;
     in-out property <string> youtube-account;
-    in-out property <string> spotify-account;
     in-out property <bool> music-busy;
     in-out property <bool> music-auto-sync;
     callback music-command(string);
@@ -141,16 +156,23 @@ export component MainWindow inherits Window {
     in-out property <[TrackRow]> settings-page-tracks;
     in-out property <bool> pages-seeded: false;
     private property <int> warm-page: 1;
+    private property <bool> warm-started: false;
     out property <bool> player-on-stage: root.mobile ? root.mobile-sheet : abs(1 - root.camera-x) < 1 && abs(-1 - root.camera-y) < 1;
     function stage-navigate(column: int, row: int) {
         let route = row < 0 ? (column < 0 ? "search" : column > 0 ? "lyrics" : "settings") : row > 0 ? (column < 0 ? "playlist" : column > 0 ? "library" : "liked") : (column < 0 ? "queue" : column > 0 ? "explore" : "home");
         if route == "playlist" && root.playlists.length > 2 { root.open-playlist(root.playlists[2].id); }
         else { root.navigate(route); }
     }
-    // Warm one viewport at a time, yielding to input and camera movement.
+    // Let the first viewport settle before painting cached offscreen pages.
+    Timer {
+        interval: 3000ms;
+        running: !root.warm-started;
+        triggered => { root.warm-started = true; }
+    }
+    // Then warm one viewport at a time, yielding to input and camera movement.
     Timer {
         interval: 120ms;
-        running: root.warm-page < 9 && root.page-phase == 1 && !root.colors-changing;
+        running: root.warm-started && root.warm-page < 9 && root.page-phase == 1 && !root.colors-changing;
         triggered => { root.warm-page += 1; }
     }
     pure function page-column(view: string) -> int {
@@ -284,6 +306,7 @@ export component MainWindow inherits Window {
     in-out property <bool> current-disliked;
     in-out property <bool> current-downloaded;
     in-out property <bool> current-downloading;
+    in-out property <int> current-download-progress: -1;
     in-out property <bool> current-local;
     in-out property <bool> native-file-tools;
     in-out property <float> position;
@@ -297,9 +320,23 @@ export component MainWindow inherits Window {
     in-out property <string> status;
     in-out property <[TrackRow]> tracks;
     in-out property <[TrackRow]> queue-tracks;
+    in-out property <int> queue-current-index: -1;
+    in-out property <string> library-query;
+    in-out property <int> library-filter-index;
+    in-out property <int> library-sort-index;
+    in-out property <int> library-category-index;
+    in-out property <[LibraryCollectionRow]> library-collections;
+    in-out property <int> library-action-index: -1;
+    in-out property <bool> library-action-missing;
+    in-out property <int> library-selected-count;
+    in-out property <bool> library-selection-all-liked;
+    in-out property <bool> library-scanning;
+    in-out property <string> library-source-status;
+    in-out property <int> library-total-count;
     in-out property <[PlaylistRow]> playlists;
     in-out property <[PlaylistRow]> playlist-destinations;
     in-out property <bool> adding-to-new-playlist: false;
+    in-out property <bool> bulk-adding-to-new-playlist: false;
     in-out property <[string]> sources;
     in-out property <string> playlist-title: I18n.tr("Список відтворення");
     in-out property <string> playlist-detail;
@@ -514,6 +551,7 @@ export component MainWindow inherits Window {
     callback search(string);
     callback search-edited(string);
     callback select-track(int);
+    callback select-queue-track(int);
     callback play-toggle();
     callback previous-track();
     callback next-track();
@@ -532,7 +570,20 @@ export component MainWindow inherits Window {
     callback play-home-recommendations();
     callback add-source(string);
     callback remove-source(int);
+    callback library-view-changed();
+    callback open-library-collection(string, string);
+    callback library-collection-action(string);
+    callback library-track-action(int, string);
+    callback toggle-library-selection(int);
+    callback library-bulk-action(string);
+    callback add-selected-to-playlist(string);
+    callback queue-track(int, bool);
+    callback move-list-item(int, int);
+    callback remove-queue-item(int);
+    callback clear-queue();
+    callback relink-track(int);
     callback create-playlist(string);
+    callback rename-playlist(string);
     callback open-playlist(string);
     callback play-playlist(string);
     callback add-to-playlist(string);
@@ -572,8 +623,9 @@ export component MainWindow inherits Window {
             root.lyric-preview-pending = false;
         }
         if root.dialog != "auth" { root.auth-token = ""; }
-        if root.dialog != "connections" { root.music-client-secret = ""; }
-        if root.dialog != "create" && root.dialog != "add" { root.adding-to-new-playlist = false; }
+        if root.dialog != "create" && root.dialog != "add" && root.dialog != "bulk-add" { root.adding-to-new-playlist = false; }
+        if root.dialog != "create" { root.bulk-adding-to-new-playlist = false; }
+        if root.dialog != "track-actions" && root.dialog != "add" && root.dialog != "create" { root.library-action-index = -1; }
     }
     callback clear-history();
 
@@ -614,6 +666,7 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                 }
             }
+            if !root.mobile && root.displayed-view == "home": Rectangle { width: max(0px, content.x + clamp(content.width * 0.065, 28px, 96px) - (root.sidebar-collapsed ? 198px : 272px)); }
             Rectangle {
                 horizontal-stretch: 1;
                 max-width: root.mobile ? root.width : 560px;
@@ -776,7 +829,7 @@ export component MainWindow inherits Window {
         y: root.safe-top * 1px + (root.immersive || root.expanded-active ? 8px : root.compact-height ? 52px : 64px);
         width: root.width - self.x - 8px - root.safe-right * 1px;
         height: root.immersive ? root.height - 16px - (root.safe-top + root.safe-bottom) * 1px : root.expanded-active ? root.height - root.bottom-reserve - 8px - (root.safe-top + root.safe-bottom) * 1px : root.page-viewport-height;
-        border-radius: root.navigation-capture ? 0px : root.stage-radius * 1px;
+        border-radius: root.navigation-capture || root.displayed-view == "home" ? 0px : root.stage-radius * 1px;
         clip: true;
         background: root.navigation-capture ? transparent : Tokens.neutral-0;
 
@@ -804,6 +857,7 @@ export component MainWindow inherits Window {
             opacity: root.navigation-capture && root.navigation-capture-target ? 1 : self.warming ? 0.003922 : 1 - root.navigation-blend;
             clip: true;
             width: 100%; height: root.mobile ? root.page-viewport-height : content.height;
+            background: self.route == "home" ? Tokens.neutral-0.with-alpha(0.96) : transparent;
             cache-rendering-hint: true;
             if page-layer.route == "settings": Rectangle {
                 x: (parent.width - min(parent.width - (root.mobile ? 32px : 80px), 840px)) / 2;
@@ -814,10 +868,34 @@ export component MainWindow inherits Window {
                     Text { text: root.settings-name(root.settings-section); color: Tokens.ink-100; font-size: root.mobile ? 24px : 30px; font-weight: 700; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
                 }
             }
-            ScrollView {
+            if page-layer.route == "home": home-scroll := ScrollView {
+                width: 100%; height: 100%; content-width: self.width;
+                private property <length> margin: root.mobile ? 16px : clamp(self.width * 0.065, 28px, 96px);
+                content-height: max(self.height, home-feed.height + (root.mobile ? 44px : 68px));
+                horizontal-scrollbar-policy: always-off;
+                home-feed := HomeFeed {
+                    x: home-scroll.margin; y: root.mobile ? 18px : 28px;
+                    width: home-scroll.width - home-scroll.margin * 2;
+                    shelves: root.home-shelves; filters: root.home-filters; mobile: root.mobile; layout: root.home-layout; current-key: root.current-track-key;
+                    loading: root.home-catalog-loading; failed: root.home-catalog-failed;
+                    profile-name: root.account-signed-in ? root.account-name : ""; profile-art: root.account-avatar;
+                    open-item(shelf, key) => { root.open-home-item(shelf, key); }
+                    play-shelf(key) => { root.play-home-shelf(key); }
+                    refresh => { root.request-home-catalog(); root.request-home-recommendations(); }
+                }
+            }
+            if page-layer.route != "home": ScrollView {
             private property <string> page: page-layer.route;
             private property <string> settings-location: root.settings-section;
+            private property <int> library-category: root.library-category-index;
+            private property <int> library-filter: root.library-filter-index;
+            private property <int> library-sort: root.library-sort-index;
+            private property <string> library-search: root.library-query;
             changed settings-location => { if self.page == "settings" { self.content-y = 0px; } }
+            changed library-category => { if self.page == "library" { self.content-y = 0px; } }
+            changed library-filter => { if self.page == "library" { self.content-y = 0px; } }
+            changed library-sort => { if self.page == "library" { self.content-y = 0px; } }
+            changed library-search => { if self.page == "library" { self.content-y = 0px; } }
             changed page => { self.content-y = 0px; }
             y: page-layer.route == "settings" ? (root.compact-height ? 56px : root.mobile ? 72px : 84px) : 0px;
             width: 100%; height: parent.height - self.y;
@@ -1045,20 +1123,23 @@ export component MainWindow inherits Window {
                     }
                     Text {
                         text: page-layer.route == "home" ? I18n.tr("Послухати ще раз") :
-                              page-layer.route == "explore" ? I18n.tr("Відкривайте нову музику") :
+                              page-layer.route == "explore" ? (root.catalog-title != "" ? root.catalog-title : I18n.tr("Відкривайте нову музику")) :
                               page-layer.route == "library" ? I18n.tr("Бібліотека") :
                               page-layer.route == "liked" ? I18n.tr("Музика, яка сподобалась") :
                               page-layer.route == "settings" ? root.settings-name(root.settings-section) :
                               page-layer.route == "playlist" ? root.playlist-title :
                               page-layer.route == "queue" ? I18n.tr("Черга відтворення") : I18n.tr("Результати пошуку");
                         color: Tokens.ink-100;
-                        font-size: root.mobile ? (page-layer.route == "search" ? 22px : 24px) : page-layer.route == "home" ? 24px : 30px;
+                        font-size: root.mobile ? (page-layer.route == "search" ? 22px : root.width < 360px ? 20px : 24px) : page-layer.route == "home" ? 24px : 30px;
                         font-weight: 700;
                         horizontal-stretch: 1;
                         vertical-alignment: center;
                         overflow: elide;
                     }
-                    if page-layer.route == "explore": Action {
+                    if page-layer.route == "explore" && root.catalog-title != "": Action {
+                        icon: @image-url("../assets/icons/ChevronLeft.svg"); label: root.catalog-kind != "" ? I18n.tr("Бібліотека") : I18n.tr("Головна"); clicked => { root.navigate(root.catalog-kind != "" ? "library" : "home"); }
+                    }
+                    if page-layer.route == "explore" && root.catalog-title == "": Action {
                         text: I18n.tr("Оновити");
                         icon: @image-url("../assets/icons/RefreshCw.svg");
                         outlined: true;
@@ -1087,12 +1168,46 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                if root.status != "": Rectangle {
+                if root.status != "" && !(page-layer.route == "library" && root.status == root.library-source-status): Rectangle {
                     height: page-layer.route == "home" ? (root.mobile ? 32px : 24px) : root.mobile ? 64px : 36px; border-radius: 10px;
                     background: page-layer.route == "home" ? transparent : Tokens.primary-container; border-width: 0px; border-color: #ffffff18;
                     HorizontalLayout {
                         padding-left: page-layer.route == "home" ? 0px : 14px; padding-right: 14px;
                         Text { text: I18n.tr(root.status); color: page-layer.route == "home" ? Tokens.ink-300 : Tokens.brand-300; font-size: 12px; font-weight: 600; vertical-alignment: center; wrap: word-wrap; overflow: elide; }
+                    }
+                }
+
+                if page-layer.route == "explore" && root.catalog-kind != "": Rectangle {
+                    height: root.mobile ? 142px : 190px;
+                    border-radius: 20px;
+                    background: Tokens.neutral-100;
+                    border-width: 0px;
+                    border-color: #ffffff14;
+                    HorizontalLayout {
+                        padding: root.mobile ? 12px : 20px;
+                        spacing: root.mobile ? 14px : 22px;
+                        Rectangle {
+                            width: root.mobile ? 96px : 148px;
+                            height: self.width;
+                            border-radius: root.catalog-kind == "artist" ? self.width / 2 : 16px;
+                            clip: true;
+                            background: Tokens.neutral-150;
+                            Image { source: root.catalog-art; width: 100%; height: 100%; image-fit: cover; }
+                        }
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: root.mobile ? 6px : 10px;
+                            Text { text: root.catalog-kind == "album" ? I18n.tr("Альбом") : I18n.tr("Виконавець"); color: Tokens.brand-300; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; }
+                            Text { text: root.catalog-title; color: Tokens.ink-100; font-size: root.mobile ? 20px : 30px; font-weight: 700; overflow: elide; }
+                            Text { text: (root.catalog-subtitle != "" ? root.catalog-subtitle + " · " : "") + root.catalog-track-count + " " + I18n.tr("композицій"); color: Tokens.ink-300; font-size: 13px; overflow: elide; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Action { text: I18n.tr("Відтворити все"); icon: @image-url("../assets/icons/Play.svg"); comfortable: true; primary: true; enabled: root.catalog-track-count > 0; clicked => { root.library-collection-action("play"); } }
+                                Action { text: root.mobile ? "" : I18n.tr("Перемішати"); icon: @image-url("../assets/icons/Shuffle.svg"); comfortable: true; outlined: true; enabled: root.catalog-track-count > 0; clicked => { root.library-collection-action("shuffle"); } }
+                                Action { text: root.mobile ? "" : I18n.tr("До черги"); label: I18n.tr("Додати добірку до черги"); icon: @image-url("../assets/icons/ListMusic.svg"); comfortable: true; outlined: true; enabled: root.catalog-track-count > 0; clicked => { root.library-collection-action("queue"); } }
+                            }
+                        }
                     }
                 }
 
@@ -1566,6 +1681,10 @@ export component MainWindow inherits Window {
                                     Action { icon: @image-url("../assets/icons/X.svg"); label: I18n.tr("Видалити джерело"); comfortable: true; clicked => { root.remove-source(index); } }
                                 }
                             }
+                            if root.library-scanning || root.library-source-status != "": HorizontalLayout {
+                                padding-left: 12px; padding-right: 12px; padding-top: 8px; padding-bottom: 8px;
+                                Text { text: root.library-scanning ? I18n.tr("Сканування музики…") : root.library-source-status; color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
+                            }
                             if root.android-platform: HorizontalLayout {
                                 padding-left: 12px; padding-right: 12px; padding-top: 8px;
                                 Text { text: I18n.tr("Сканування знаходить музику на пристрої та карті пам’яті. Дозвольте доступ до музики й аудіо в запиті Android."); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap; }
@@ -1680,7 +1799,7 @@ export component MainWindow inherits Window {
 
                 if page-layer.route != "settings": VerticalLayout {
                     spacing: 18px;
-                    if ((page-layer.route == "home" && root.home-layout != 2 && root.home-layout != 4) || page-layer.route == "explore") && page-layer.page-tracks.length > 0: ScrollView {
+                    if ((page-layer.route == "home" && root.home-layout != 2 && root.home-layout != 4) || (page-layer.route == "explore" && root.catalog-title == "")) && page-layer.page-tracks.length > 0: ScrollView {
                         horizontal-scrollbar-policy: always-off;
                         vertical-scrollbar-policy: always-off;
                         mouse-drag-pan-enabled: true;
@@ -1730,7 +1849,8 @@ export component MainWindow inherits Window {
                             horizontal-stretch: 1;
                         }
                         Action { text: I18n.tr("Відтворити все"); icon: @image-url("../assets/icons/Play.svg"); outlined: true; clicked => { root.select-track(0); } }
-                        if page-layer.route == "playlist": Action { text: I18n.tr("Видалити список"); outlined: true; clicked => { root.delete-playlist(); } }
+                        if page-layer.route == "queue" && page-layer.page-tracks.length > 0: Action { text: I18n.tr("Очистити чергу"); icon: @image-url("../assets/icons/X.svg"); outlined: true; clicked => { root.clear-queue(); } }
+                        if page-layer.route == "playlist": Action { text: I18n.tr("Видалити список"); outlined: true; clicked => { root.dialog = "confirm-delete-playlist"; } }
                     }
 
                     if page-layer.route == "playlist" && root.mobile: HorizontalLayout {
@@ -1744,18 +1864,119 @@ export component MainWindow inherits Window {
                             HorizontalLayout { spacing: 10px;
                                 Action { text: I18n.tr("Відтворити"); icon: @image-url("../assets/icons/Play.svg"); comfortable: true; clicked => { if page-layer.page-tracks.length > 0 { root.select-track(0); } } }
                                 Action { text: root.playlist-public ? I18n.tr("Опубліковано у профілі") : I18n.tr("Показати у профілі"); outlined: true; clicked => { root.set-playlist-public(!root.playlist-public); } }
-                                Action { text: I18n.tr("Видалити"); outlined: true; clicked => { root.delete-playlist(); } }
+                                Action { text: I18n.tr("Видалити"); outlined: true; clicked => { root.dialog = "confirm-delete-playlist"; } }
                             }
                         }
                     }
 
-                    if page-layer.page-tracks.length == 0 && (page-layer.route != "playlist" || root.mobile): Rectangle {
+                    if page-layer.route == "library": VerticalLayout {
+                        spacing: 8px;
+                        ScrollView {
+                            height: 40px;
+                            content-height: self.height;
+                            content-width: max(self.width, library-category-row.preferred-width);
+                            library-category-row := HorizontalLayout {
+                                height: parent.height;
+                                spacing: 8px;
+                                Action { text: I18n.tr("Пісні"); chip: true; selected: root.library-category-index == 0; clicked => { root.library-category-index = 0; root.library-view-changed(); } }
+                                Action { text: I18n.tr("Альбоми"); chip: true; selected: root.library-category-index == 1; clicked => { root.library-category-index = 1; root.library-view-changed(); } }
+                                Action { text: I18n.tr("Виконавці"); chip: true; selected: root.library-category-index == 2; clicked => { root.library-category-index = 2; root.library-view-changed(); } }
+                                Action { text: I18n.tr("Плейлісти"); chip: true; selected: root.library-category-index == 3; clicked => { root.library-category-index = 3; root.library-view-changed(); } }
+                                Action { text: I18n.tr("Завантаження"); chip: true; selected: root.library-category-index == 4; clicked => { root.library-category-index = 4; root.library-view-changed(); } }
+                            }
+                        }
+                        if root.library-scanning || root.library-source-status != "": HorizontalLayout {
+                            height: 30px;
+                            spacing: 8px;
+                            Image { source: @image-url("../assets/icons/FolderPlus.svg"); width: 16px; height: 16px; colorize: Tokens.ink-300; }
+                            Text {
+                                text: root.library-scanning ? I18n.tr("Сканування музики…") : root.library-source-status;
+                                color: Tokens.ink-300; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide;
+                            }
+                            Action { icon: @image-url("../assets/icons/Settings.svg"); label: I18n.tr("Джерела музики"); comfortable: true; clicked => { root.open-settings("library"); } }
+                        }
+                        if !root.mobile: HorizontalLayout {
+                            spacing: 10px;
+                            LineEdit { horizontal-stretch: 1; height: 42px; text <=> root.library-query; placeholder-text: I18n.tr("Знайти у бібліотеці"); edited => { root.library-view-changed(); } }
+                            ComboBox { width: 148px; model: [I18n.tr("Усі композиції"), I18n.tr("Локальні файли"), I18n.tr("Завантажені"), I18n.tr("Сподобались"), I18n.tr("Відсутні файли"), I18n.tr("Приховані")]; current-index <=> root.library-filter-index; selected(value) => { root.library-view-changed(); } }
+                            ComboBox { width: 160px; model: [I18n.tr("За виконавцем"), I18n.tr("За назвою"), I18n.tr("За альбомом"), I18n.tr("За тривалістю"), I18n.tr("За джерелом"), I18n.tr("Нещодавно прослухане")]; current-index <=> root.library-sort-index; selected(value) => { root.library-view-changed(); } }
+                        }
+                        if root.mobile: VerticalLayout {
+                            spacing: 8px;
+                            LineEdit { height: 42px; text <=> root.library-query; placeholder-text: I18n.tr("Знайти у бібліотеці"); edited => { root.library-view-changed(); } }
+                            HorizontalLayout { spacing: 8px;
+                                ComboBox { horizontal-stretch: 1; height: 42px; model: [I18n.tr("Усі композиції"), I18n.tr("Локальні файли"), I18n.tr("Завантажені"), I18n.tr("Сподобались"), I18n.tr("Відсутні файли"), I18n.tr("Приховані")]; current-index <=> root.library-filter-index; selected(value) => { root.library-view-changed(); } }
+                                ComboBox { horizontal-stretch: 1; height: 42px; model: [I18n.tr("За виконавцем"), I18n.tr("За назвою"), I18n.tr("За альбомом"), I18n.tr("За тривалістю"), I18n.tr("За джерелом"), I18n.tr("Нещодавно прослухане")]; current-index <=> root.library-sort-index; selected(value) => { root.library-view-changed(); } }
+                            }
+                        }
+                        HorizontalLayout { height: 40px; spacing: 8px;
+                            Text { text: root.library-category-index == 0 || root.library-category-index == 4 ? (root.library-selected-count > 0 ? root.library-selected-count + " " + I18n.tr("вибрано") + (root.mobile ? "" : " · " + root.library-total-count + " " + I18n.tr("у бібліотеці")) : root.library-total-count + I18n.tr(" композицій у бібліотеці")) : root.library-collections.length + " " + I18n.tr("добірок"); color: Tokens.ink-300; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; }
+                            if (root.library-category-index == 0 || root.library-category-index == 4) && page-layer.page-tracks.length > 0: Action { text: root.mobile ? "" : I18n.tr("Вибрати все"); icon: @image-url("../assets/icons/Check.svg"); label: I18n.tr("Вибрати все"); comfortable: root.mobile; outlined: !root.mobile; clicked => { root.library-bulk-action("select-all"); } }
+                            if root.library-selected-count > 0: Action { text: root.mobile ? "" : I18n.tr("Очистити вибір"); icon: @image-url("../assets/icons/X.svg"); label: I18n.tr("Очистити вибір"); comfortable: root.mobile; outlined: !root.mobile; clicked => { root.library-bulk-action("clear-selection"); } }
+                        }
+                        if root.library-selected-count > 0 && !root.mobile && (root.library-category-index == 0 || root.library-category-index == 4): HorizontalLayout { spacing: 8px;
+                            Action { text: I18n.tr("Відтворити"); icon: @image-url("../assets/icons/Play.svg"); comfortable: true; clicked => { root.library-bulk-action("play"); } }
+                            Action { text: I18n.tr("До черги"); icon: @image-url("../assets/icons/ListMusic.svg"); comfortable: true; clicked => { root.library-bulk-action("queue"); } }
+                            Action { text: I18n.tr("Наступними"); icon: @image-url("../assets/icons/SkipForward.svg"); comfortable: true; clicked => { root.library-bulk-action("next"); } }
+                            Action { text: I18n.tr("До плейлиста"); icon: @image-url("../assets/icons/Plus.svg"); comfortable: true; clicked => { root.library-bulk-action("playlist"); } }
+                            Action { text: root.library-selection-all-liked ? I18n.tr("Прибрати вподобання") : I18n.tr("Вподобати"); icon: @image-url("../assets/icons/Heart.svg"); comfortable: true; clicked => { root.library-bulk-action("like"); } }
+                            Action { text: root.library-filter-index == 5 ? I18n.tr("Повернути") : I18n.tr("Прибрати з бібліотеки"); icon: root.library-filter-index == 5 ? @image-url("../assets/icons/RefreshCw.svg") : @image-url("../assets/icons/X.svg"); comfortable: true; clicked => { root.library-bulk-action(root.library-filter-index == 5 ? "restore" : "remove"); } }
+                        }
+                        if root.library-selected-count > 0 && root.mobile && (root.library-category-index == 0 || root.library-category-index == 4): VerticalLayout { spacing: 6px;
+                            HorizontalLayout { spacing: 6px;
+                                Action { icon: @image-url("../assets/icons/Play.svg"); label: I18n.tr("Відтворити вибране"); comfortable: true; clicked => { root.library-bulk-action("play"); } }
+                                Action { icon: @image-url("../assets/icons/ListMusic.svg"); label: I18n.tr("Додати до черги"); comfortable: true; clicked => { root.library-bulk-action("queue"); } }
+                                Action { icon: @image-url("../assets/icons/SkipForward.svg"); label: I18n.tr("Відтворити наступними"); comfortable: true; clicked => { root.library-bulk-action("next"); } }
+                                Action { icon: @image-url("../assets/icons/Plus.svg"); label: I18n.tr("Додати до плейлиста"); comfortable: true; clicked => { root.library-bulk-action("playlist"); } }
+                            }
+                            HorizontalLayout { spacing: 6px;
+                                Action { icon: @image-url("../assets/icons/Heart.svg"); label: root.library-selection-all-liked ? I18n.tr("Прибрати вподобання") : I18n.tr("Вподобати"); comfortable: true; clicked => { root.library-bulk-action("like"); } }
+                                Action { icon: root.library-filter-index == 5 ? @image-url("../assets/icons/RefreshCw.svg") : @image-url("../assets/icons/X.svg"); label: root.library-filter-index == 5 ? I18n.tr("Повернути до бібліотеки") : I18n.tr("Прибрати з бібліотеки"); comfortable: true; clicked => { root.library-bulk-action(root.library-filter-index == 5 ? "restore" : "remove"); } }
+                            }
+                        }
+                        if root.library-filter-index == 4 && page-layer.page-tracks.length > 0 && (root.library-category-index == 0 || root.library-category-index == 4): Action { text: I18n.tr("Знайти відсутній файл"); icon: @image-url("../assets/icons/LocalFile.svg"); outlined: true; clicked => { root.relink-track(0); } }
+                    }
+
+                    if page-layer.route == "library" && (root.library-category-index == 1 || root.library-category-index == 2 || root.library-category-index == 3): ListView {
+                        min-height: root.library-collections.length > 0 ? 180px : 0px;
+                        for collection[index] in root.library-collections: Rectangle {
+                            height: root.mobile ? 76px : 88px;
+                            border-radius: 14px;
+                            background: library-collection-touch.has-hover || library-collection-touch.pressed ? Tokens.neutral-150 : transparent;
+                            HorizontalLayout {
+                                padding: root.mobile ? 8px : 12px;
+                                spacing: 12px;
+                                Rectangle {
+                                    width: root.mobile ? 54px : 64px;
+                                    height: self.width;
+                                    border-radius: collection.kind == "artist" ? self.width / 2 : 12px;
+                                    clip: true;
+                                    background: Tokens.neutral-150;
+                                    Image { source: collection.art; width: 100%; height: 100%; image-fit: cover; }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    spacing: 4px;
+                                    Text { text: collection.title; color: Tokens.ink-100; font-size: 14px; font-weight: 700; overflow: elide; }
+                                    Text { text: collection.subtitle + (collection.subtitle != "" ? " · " : "") + collection.count + " " + I18n.tr("композицій"); color: Tokens.ink-300; font-size: 12px; overflow: elide; }
+                                }
+                                Image { source: @image-url("../assets/icons/ChevronRight.svg"); width: 18px; height: 18px; colorize: Tokens.ink-300; }
+                            }
+                            library-collection-touch := TouchArea { mouse-cursor: pointer; clicked => { root.open-library-collection(collection.kind, collection.key); } }
+                            accessible-role: button;
+                            accessible-label: collection.title + " · " + collection.count;
+                            accessible-action-default => { root.open-library-collection(collection.kind, collection.key); }
+                        }
+                    }
+
+                    if page-layer.page-tracks.length == 0 && (page-layer.route != "playlist" || root.mobile) && !(page-layer.route == "library" && (root.library-category-index == 1 || root.library-category-index == 2 || root.library-category-index == 3) && root.library-collections.length > 0) && !(page-layer.route == "explore" && root.catalog-title != "" && root.status != ""): Rectangle {
                         height: 220px; border-radius: 0px; background: transparent; border-width: 0px; border-color: transparent;
                         VerticalLayout {
                             alignment: center; spacing: 12px; padding: 24px;
-                            Text { text: page-layer.route == "search" ? I18n.tr("Нічого не знайдено") : page-layer.route == "playlist" ? I18n.tr("У списку ще немає композицій") : I18n.tr("Тут з’явиться ваша музика"); color: Tokens.ink-100; font-size: 20px; font-weight: 700; horizontal-alignment: center; }
-                            Text { text: page-layer.route == "playlist" ? I18n.tr("Додавайте пісні через меню композиції") : I18n.tr("Додайте файли або скористайтеся пошуком музики"); color: Tokens.ink-300; horizontal-alignment: center; wrap: word-wrap; }
-                            if page-layer.route != "playlist": HorizontalLayout { alignment: center;
+                            Text { text: page-layer.route == "explore" && root.catalog-title != "" ? I18n.tr("У добірці немає доступних композицій") : page-layer.route == "search" || (page-layer.route == "library" && root.library-query != "") ? I18n.tr("Нічого не знайдено") : page-layer.route == "playlist" ? I18n.tr("У списку ще немає композицій") : page-layer.route == "library" && root.library-category-index == 1 ? I18n.tr("Альбомів поки немає") : page-layer.route == "library" && root.library-category-index == 2 ? I18n.tr("Виконавців поки немає") : page-layer.route == "library" && root.library-category-index == 3 ? I18n.tr("У вас ще немає списків відтворення") : page-layer.route == "library" && root.library-category-index == 4 ? I18n.tr("Немає завантажених композицій") : I18n.tr("Тут з’явиться ваша музика"); color: Tokens.ink-100; font-size: 20px; font-weight: 700; horizontal-alignment: center; }
+                            Text { text: page-layer.route == "playlist" ? I18n.tr("Додавайте пісні через меню композиції") : (page-layer.route == "library" && root.library-query != "") ? I18n.tr("Спробуйте змінити пошуковий запит") : I18n.tr("Додайте файли або скористайтеся пошуком музики"); color: Tokens.ink-300; horizontal-alignment: center; wrap: word-wrap; }
+                            if page-layer.route != "playlist" && !(page-layer.route == "explore" && root.catalog-title != ""): HorizontalLayout { alignment: center;
                                 Action { text: page-layer.route == "explore" || page-layer.route == "search" || page-layer.route == "liked" ? I18n.tr("Пошук музики") : I18n.tr("Додати файли"); icon: @image-url("../assets/icons/Plus.svg"); comfortable: true; primary: true; clicked => { if page-layer.route == "explore" { root.refresh-explore(); } else if page-layer.route == "search" || page-layer.route == "liked" { root.navigate("search"); } else { root.add-source("file"); } } }
                             }
                         }
@@ -1783,13 +2004,28 @@ export component MainWindow inherits Window {
                         min-height: root.mobile && page-layer.page-tracks.length > 0 ? (page-layer.route == "home" ? 320px : 120px) : 0px;
                         for track[index] in page-layer.page-tracks: SongRow {
                             title: track.title; artist: track.artist; album: track.album; duration: track.duration;
-                            art: track.art; downloaded: track.downloaded; downloading: track.downloading; liked: track.liked;
-                            tone: index; mobile: root.mobile; album-column: !root.mobile && root.width >= 1120px; current: track.path == root.current-track-key;
+                            art: track.art; downloaded: track.downloaded; downloading: track.downloading; liked: track.liked; selected: track.selected; missing: track.missing;
+                            tone: index; mobile: root.mobile; album-column: !root.mobile && root.width >= 1120px; current: page-layer.route == "queue" ? index == root.queue-current-index : track.path == root.current-track-key;
                             removable: page-layer.route == "playlist";
+                            selectable: page-layer.route == "library";
+                            queue-actions: page-layer.route != "queue" && page-layer.route != "playlist" && page-layer.route != "library";
+                            reorderable: page-layer.route == "queue" || page-layer.route == "playlist";
+                            queue-removable: page-layer.route == "queue" && index != root.queue-current-index;
+                            relinkable: false;
+                            actions: page-layer.route != "library";
+                            overflow-actions: page-layer.route == "library";
                             activated => { root.select-track(index); }
+                            selection-clicked => { root.toggle-library-selection(index); }
                             like-clicked => { root.toggle-like(index); }
                             download-clicked => { root.download(index); }
                             remove-clicked => { root.remove-from-playlist(index); }
+                            queue-clicked => { root.queue-track(index, false); }
+                            play-next-clicked => { root.queue-track(index, true); }
+                            move-up-clicked => { root.move-list-item(index, -1); }
+                            move-down-clicked => { root.move-list-item(index, 1); }
+                            queue-remove-clicked => { root.remove-queue-item(index); }
+                            relink-clicked => { root.relink-track(index); }
+                            more-clicked => { root.library-action-index = index; root.library-action-missing = track.missing; root.dialog = "track-actions"; }
                             mark-clicked => { root.status = I18n.tr("Доступно локально"); }
                         }
                     }
@@ -1816,7 +2052,7 @@ export component MainWindow inherits Window {
                                     accessible-role: button; accessible-label: I18n.tr("Відтворити плейлист");
                                 }
                                 Action { text: root.playlist-public ? I18n.tr("Опубліковано") : I18n.tr("Опублікувати"); outlined: true; clicked => { root.set-playlist-public(!root.playlist-public); } }
-                                Action { icon: @image-url("../assets/icons/X.svg"); label: I18n.tr("Видалити плейлист"); outlined: true; clicked => { root.delete-playlist(); } }
+                                Action { icon: @image-url("../assets/icons/X.svg"); label: I18n.tr("Видалити плейлист"); outlined: true; clicked => { root.dialog = "confirm-delete-playlist"; } }
                             }
                         }
                         VerticalLayout {
@@ -1829,12 +2065,15 @@ export component MainWindow inherits Window {
                                 vertical-stretch: 1; min-height: 0px;
                                 for track[index] in page-layer.page-tracks: SongRow {
                                     title: track.title; artist: track.artist; album: track.album; duration: track.duration; art: track.art;
-                                    downloaded: track.downloaded; downloading: track.downloading; liked: track.liked;
+                                    downloaded: track.downloaded; downloading: track.downloading; liked: track.liked; selected: track.selected; missing: track.missing;
                                     tone: index; mobile: false; album-column: root.width >= 1280px; current: track.path == root.current-track-key; removable: true;
+                                    reorderable: true;
                                     activated => { root.select-track(index); }
                                     like-clicked => { root.toggle-like(index); }
                                     download-clicked => { root.download(index); }
                                     remove-clicked => { root.remove-from-playlist(index); }
+                                    move-up-clicked => { root.move-list-item(index, -1); }
+                                    move-down-clicked => { root.move-list-item(index, 1); }
                                     mark-clicked => { root.status = I18n.tr("Доступно локально"); }
                                 }
                             }
@@ -2160,23 +2399,22 @@ export component MainWindow inherits Window {
                     padding: root.mobile ? 0px : 12px;
                     spacing: root.mobile ? 8px : 14px;
 
-                    // Pill Tab Switcher (ТЕКСТ ПІСНІ / ДАЛІ В ЧЕРЗІ / ПОВ’ЯЗАНІ) + Provider Badge
-                    if root.mobile || (!root.immersive && !root.expanded-active): HorizontalLayout {
+                    // Keep the Lyrics / Queue destination visible in every player mode.
+                    HorizontalLayout {
                         height: 42px;
                         spacing: 12px;
                         Rectangle {
                             horizontal-stretch: 1;
-                            border-radius: root.mobile ? 21px : 0px;
-                            background: root.mobile ? Tokens.neutral-100 : transparent;
+                            border-radius: 21px;
+                            background: Tokens.neutral-100;
                             border-width: 0px;
                             border-color: #ffffff16;
                             HorizontalLayout {
-                                padding: root.mobile ? 4px : 0px; spacing: root.mobile ? 4px : 0px;
+                                padding: 4px; spacing: 4px;
                                 Rectangle {
                                     horizontal-stretch: 1;
                                     border-radius: 17px;
-                                    background: root.mobile && root.player-tab == "lyrics" ? Tokens.primary-container : transparent;
-                                    if !root.mobile && root.player-tab == "lyrics": Rectangle { x: 0px; y: parent.height - 1px; width: 100%; height: 1px; background: Tokens.ink-100; }
+                                    background: root.player-tab == "lyrics" ? Tokens.primary-container : transparent;
                                     Text {
                                         text: root.mobile ? I18n.tr("СЛОВА") : I18n.tr("ТЕКСТ ПІСНІ");
                                         color: root.player-tab == "lyrics" ? Tokens.ink-100 : Tokens.ink-300;
@@ -2191,10 +2429,9 @@ export component MainWindow inherits Window {
                                 Rectangle {
                                     horizontal-stretch: 1;
                                     border-radius: 17px;
-                                    background: root.mobile && root.player-tab == "queue" ? Tokens.primary-container : transparent;
-                                    if !root.mobile && root.player-tab == "queue": Rectangle { x: 0px; y: parent.height - 1px; width: 100%; height: 1px; background: Tokens.ink-100; }
+                                    background: root.player-tab == "queue" ? Tokens.primary-container : transparent;
                                     Text {
-                                        text: root.mobile ? I18n.tr("ЧЕРГА") : I18n.tr("ДАЛІ В ЧЕРЗІ");
+                                        text: (root.mobile ? I18n.tr("ЧЕРГА") : I18n.tr("ДАЛІ В ЧЕРЗІ")) + " · " + root.queue-tracks.length;
                                         color: root.player-tab == "queue" ? Tokens.ink-100 : Tokens.ink-300;
                                         font-size: 12px; font-weight: 700; letter-spacing: 0px;
                                         width: 100%; height: 100%;
@@ -2230,11 +2467,13 @@ export component MainWindow inherits Window {
                         border-width: 0px;
                         border-color: #ffffff14;
                         ListView {
-                            for track[index] in root.tracks: SongRow {
+                            for track[index] in root.queue-tracks: SongRow {
                                 title: track.title; artist: track.artist; album: track.album; duration: track.duration;
                                 art: track.art; tone: index;
                                 current: track.path == root.current-track-key; mobile: root.mobile; actions: false;
-                                activated => { root.select-track(index); }
+                                queue-removable: track.path != root.current-track-key;
+                                activated => { root.select-queue-track(index); }
+                                queue-remove-clicked => { root.remove-queue-item(index); }
                                 mark-clicked => { root.status = I18n.tr("Доступно локально"); }
                             }
                         }
@@ -2470,13 +2709,6 @@ export component MainWindow inherits Window {
                 y: (root.camera-end-y - root.camera-y) * content.height;
             }
         }
-        if root.navigation-pulse > 0.001: NavigationStreaks {
-            width: 100%; height: 100%;
-            direction-x: root.camera-end-x - root.camera-start-x;
-            direction-y: root.camera-end-y - root.camera-start-y;
-            progress: root.navigation-progress; strength: root.navigation-pulse;
-        }
-
         // Independent overlay: opening tools never changes player geometry.
         tools-panel := Rectangle {
             visible: (root.player-tools || root.tools-progress > 0.001) && root.displayed-view == "lyrics" && root.dialog == "";
@@ -2541,7 +2773,7 @@ export component MainWindow inherits Window {
                 }
                 if root.current-video-id != "": HorizontalLayout {
                     spacing: 8px;
-                    Action { text: root.current-downloaded ? I18n.tr("Завантажено") : root.current-downloading ? I18n.tr("Завантаження файлу…") : I18n.tr("Завантажити"); outlined: true; clicked => { root.download(-1); } }
+                    Action { text: root.current-downloaded ? I18n.tr("Завантажено") : root.current-downloading ? (root.current-download-progress >= 0 ? root.current-download-progress + "% · " + I18n.tr("Скасувати") : I18n.tr("Скасувати завантаження")) : I18n.tr("Завантажити"); outlined: true; clicked => { root.download(-1); } }
                     Rectangle { horizontal-stretch: 1; }
                 }
                 if root.native-file-tools && root.current-track-key != "": HorizontalLayout {
@@ -2556,13 +2788,13 @@ export component MainWindow inherits Window {
 
     // Mobile playback and page selection share one safe-area-aware dock.
     Rectangle {
-        x: (!root.mobile && root.displayed-view == "lyrics" ? 0px : 8px) + root.safe-left * 1px;
+        x: (!root.mobile && (!PlayerTheme.enabled || root.displayed-view == "lyrics") ? 0px : 8px) + root.safe-left * 1px;
         y: root.height - (!root.mobile && root.displayed-view == "lyrics" ? root.bottom-dock-height : root.bottom-reserve) - root.safe-bottom * 1px;
-        width: root.width - (!root.mobile && root.displayed-view == "lyrics" ? 0px : 16px) - (root.safe-left + root.safe-right) * 1px;
+        width: root.width - (!root.mobile && (!PlayerTheme.enabled || root.displayed-view == "lyrics") ? 0px : 16px) - (root.safe-left + root.safe-right) * 1px;
         height: root.bottom-dock-height;
         visible: !root.immersive;
-        background: !root.mobile && root.displayed-view == "lyrics" ? Tokens.neutral-0 : Tokens.neutral-100;
-        border-radius: !root.mobile && root.displayed-view == "lyrics" ? 0px : PlayerTheme.enabled ? PlayerTheme.corner * 1px : 24px;
+        background: !root.mobile && (!PlayerTheme.enabled || root.displayed-view == "lyrics") ? Tokens.neutral-0 : Tokens.neutral-100;
+        border-radius: !root.mobile && (!PlayerTheme.enabled || root.displayed-view == "lyrics") ? 0px : PlayerTheme.enabled ? PlayerTheme.corner * 1px : 24px;
         clip: true;
         if root.mobile: TouchArea {
             x: 0px; y: 3px; width: 100%; height: 53px;
@@ -2571,7 +2803,7 @@ export component MainWindow inherits Window {
         }
         // Interactive Top Progress Track
         Rectangle {
-            x: !root.mobile && root.displayed-view == "lyrics" ? 0px : 24px; y: 0px;
+            x: !root.mobile && (!PlayerTheme.enabled || root.displayed-view == "lyrics") ? 0px : 24px; y: 0px;
             height: prog-touch.has-hover ? 5px : 3px;
             width: parent.width - self.x * 2;
             border-radius: 3px;
@@ -2697,7 +2929,7 @@ export component MainWindow inherits Window {
         }
         if root.dialog != "lyric-style": Rectangle {
             width: min(root.width - (root.safe-left + root.safe-right) * 1px - 32px, 520px);
-            height: min(root.dialog-bottom - root.safe-top * 1px - 32px, root.dialog == "connections" ? 720px : root.dialog == "music-import" ? 430px : root.dialog == "home-layout" ? 600px : root.dialog == "lyric-style" ? 720px : root.dialog == "paste" || root.dialog == "add" ? 440px : root.dialog == "match" ? 360px : 210px);
+            height: min(root.dialog-bottom - root.safe-top * 1px - 32px, root.dialog == "connections" ? 720px : root.dialog == "music-import" ? 430px : root.dialog == "home-layout" ? 600px : root.dialog == "lyric-style" ? 720px : root.dialog == "paste" || root.dialog == "add" || root.dialog == "bulk-add" ? 440px : root.dialog == "match" ? 360px : root.dialog == "track-actions" ? 460px : 250px);
             x: root.safe-left * 1px + (root.width - (root.safe-left + root.safe-right) * 1px - self.width) / 2;
             y: root.safe-top * 1px + (root.dialog-bottom - root.safe-top * 1px - self.height) / 2;
             background: Tokens.neutral-100;
@@ -2715,6 +2947,11 @@ export component MainWindow inherits Window {
                 Text {
                     text: root.dialog == "connections" ? I18n.tr("Підключені акаунти") : root.dialog == "home-layout" ? I18n.tr("Макет головної") : root.dialog == "music-import" ? I18n.tr("Імпорт плейліста") : root.dialog == "lyric-style" ? I18n.tr("Вигляд слів") : root.dialog == "auth" ? I18n.tr("Доступ до слів пісень") : root.dialog == "paste" ? I18n.tr("Вставити слова пісні") :
                           root.dialog == "add" ? I18n.tr("Додати до списку") :
+                          root.dialog == "bulk-add" ? I18n.tr("Додати вибране до плейлиста") :
+                          root.dialog == "rename-playlist" ? I18n.tr("Перейменувати плейлист") :
+                          root.dialog == "confirm-delete-playlist" ? I18n.tr("Видалити плейлист?") :
+                          root.dialog == "confirm-library-remove" ? I18n.tr("Прибрати з бібліотеки?") :
+                          root.dialog == "track-actions" ? I18n.tr("Дії з композицією") :
                           root.dialog == "source" ? I18n.tr("Шлях до папки або файлу") :
                           root.dialog == "match" ? I18n.tr("Перевірте збіг YouTube Music") : I18n.tr("Новий список відтворення");
                     color: Tokens.ink-100;
@@ -2735,9 +2972,9 @@ export component MainWindow inherits Window {
                 if root.dialog == "music-import": VerticalLayout {
                     alignment: start;
                     spacing: 14px;
-                    Text {text: I18n.tr("Вставте посилання на публічний плейліст YouTube Music. Вхід не потрібен."); color: Tokens.ink-200; wrap: word-wrap;}
+                    Text {text: I18n.tr("Вставте публічне посилання на плейліст YouTube Music або Spotify. Вхід не потрібен."); color: Tokens.ink-200; wrap: word-wrap;}
                     LineEdit {text <=> root.music-link; placeholder-text: I18n.tr("Посилання YouTube Music або Spotify"); enabled: !root.music-busy; accepted => {root.music-command("import");}}
-                    Text {text: I18n.tr("Для приватних плейлістів і Spotify спочатку підключіть відповідний акаунт."); color: Tokens.ink-300; wrap: word-wrap; font-size: 12px;}
+                    Text {text: I18n.tr("Spotify композиції буде зіставлено з YouTube Music. Приватні плейлісти імпортувати не можна."); color: Tokens.ink-300; wrap: word-wrap; font-size: 12px;}
                     Action {text: I18n.tr("Імпортувати"); primary: true; comfortable: true; enabled: !root.music-busy && root.music-link != ""; clicked => {root.music-command("import");}}
                     if root.music-busy: Action {text: I18n.tr("Скасувати імпорт"); comfortable: true; clicked => {root.music-command("cancel");}}
                     if root.music-status != "": Text {text: I18n.tr(root.music-status); color: Tokens.ink-200; wrap: word-wrap; font-size: 13px;}
@@ -2746,9 +2983,9 @@ export component MainWindow inherits Window {
                 if root.dialog == "connections": VerticalLayout {
                     alignment: start;
                     spacing: 12px;
-                    Text {text: I18n.tr("Виберіть, який акаунт підключити. YouTube Music та Vey працюють незалежно; можна підключити обидва."); color: Tokens.ink-200; wrap: word-wrap;}
-                    ComboBox {model: ["Vey", "YouTube Music", "Spotify"]; current-index <=> root.connection-provider; enabled: !root.music-busy; selected(value) => {root.music-provider = max(0, root.connection-provider - 1); root.music-client-id = ""; root.music-client-secret = ""; root.music-command("select");}}
-                    Text {text: "Vey · " + (root.account-signed-in ? root.account-email : I18n.tr("Не підключено")) + "\nYouTube Music · " + (root.youtube-account == "" ? I18n.tr("Не підключено") : root.youtube-account) + "\nSpotify · " + (root.spotify-account == "" ? I18n.tr("Не підключено") : root.spotify-account); color: Tokens.ink-100; wrap: word-wrap;}
+                    Text {text: I18n.tr("Підключіть акаунт Vey для синхронізації бібліотеки або YouTube Music для імпорту приватних плейлістів."); color: Tokens.ink-200; wrap: word-wrap;}
+                    ComboBox {model: ["Vey", "YouTube Music"]; current-index <=> root.connection-provider; enabled: !root.music-busy; selected(value) => {root.music-command("select");}}
+                    Text {text: "Vey · " + (root.account-signed-in ? root.account-email : I18n.tr("Не підключено")) + "\nYouTube Music · " + (root.youtube-account == "" ? I18n.tr("Не підключено") : root.youtube-account); color: Tokens.ink-100; wrap: word-wrap;}
                     if root.connection-provider == 0: VerticalLayout {
                         alignment: start;
                         spacing: 12px;
@@ -2759,13 +2996,11 @@ export component MainWindow inherits Window {
                     if root.connection-provider != 0: VerticalLayout {
                         alignment: start;
                         spacing: 12px;
-                        if !root.music-supported: Text {text: I18n.tr("Підключіть сервіси у настільній Vey. На цьому пристрої плейлісти доступні через акаунт Vey."); color: Tokens.ink-200; wrap: word-wrap;}
+                        if !root.music-supported: Text {text: I18n.tr("Підключення приватної бібліотеки YouTube Music доступне в настільній Vey. Публічні плейлісти імпортуються без входу."); color: Tokens.ink-200; wrap: word-wrap;}
                         if root.music-supported: VerticalLayout {
                             spacing: 12px;
-                            if root.connection-provider == 2: LineEdit {text <=> root.music-client-id; placeholder-text: "Spotify OAuth Client ID"; enabled: !root.music-busy;}
-                            Text {text: root.connection-provider == 1 ? I18n.tr("Підключення приватних плейлістів використовує окремий профіль Vey.") : I18n.tr("Вкажіть Client ID власного зареєстрованого застосунку та підтвердьте доступ у браузері."); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap;}
-                            if root.connection-provider == 1: Text {text: I18n.tr("Типовий браузер відкриває його поточний профіль, але не підключає Vey до приватних списків."); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap;}
-                            if root.connection-provider == 1: Action {text: I18n.tr("Відкрити в типовому браузері"); comfortable: true; clicked => {root.music-command("youtube-browser-login");}}
+                            Text {text: I18n.tr("Підключення приватних плейлістів використовує окремий профіль Vey."); color: Tokens.ink-300; font-size: 12px; wrap: word-wrap;}
+                            Action {text: I18n.tr("Відкрити в типовому браузері"); comfortable: true; clicked => {root.music-command("youtube-browser-login");}}
                             HorizontalLayout {
                                 Action {text: I18n.tr("Підключити"); primary: true; comfortable: true; enabled: !root.music-busy; clicked => {root.music-command("connect");}}
                                 Action {text: I18n.tr("Відключити"); comfortable: true; enabled: !root.music-busy; clicked => {root.music-command("disconnect");}}
@@ -2778,11 +3013,13 @@ export component MainWindow inherits Window {
                     if root.music-status != "" && root.connection-provider != 0: Text {text: I18n.tr(root.music-status); color: Tokens.ink-200; wrap: word-wrap; font-size: 13px;}
                     Action {text: I18n.tr("Імпорт плейліста"); comfortable: true; clicked => {root.dialog = "music-import";}}
                 }
-                if root.dialog == "create" || root.dialog == "source": LineEdit {
+                if root.dialog == "create" || root.dialog == "source" || root.dialog == "rename-playlist": LineEdit {
                     text <=> root.new-name;
                     placeholder-text: root.dialog == "source" ? I18n.tr("Вкажіть повний шлях") : I18n.tr("Назва списку відтворення");
                     accepted => {
-                        if root.dialog == "source" { root.add-path(root.source-kind, root.new-name); } else { root.create-playlist(root.new-name); }
+                        if root.dialog == "source" { root.add-path(root.source-kind, root.new-name); }
+                        else if root.dialog == "rename-playlist" { root.rename-playlist(root.new-name); }
+                        else { root.create-playlist(root.new-name); }
                         root.new-name = "";
                         root.dialog = "";
                     }
@@ -2819,7 +3056,20 @@ export component MainWindow inherits Window {
                     LineEdit { text <=> root.match-album; }
                     Text { text: I18n.tr("Перед зміною буде створено резервну копію тегів"); color: Tokens.ink-300; wrap: word-wrap; }
                 }
-                if root.dialog == "add": Text { text: root.current-title; color: Tokens.ink-300; font-size: 13px; overflow: elide; }
+                if root.dialog == "add": Text { text: root.library-action-index >= 0 && root.library-action-index < root.tracks.length ? root.tracks[root.library-action-index].title : root.current-title; color: Tokens.ink-300; font-size: 13px; overflow: elide; }
+                if root.dialog == "track-actions": VerticalLayout {
+                    spacing: 6px;
+                    Action { text: I18n.tr("Перемкнути вподобання"); icon: @image-url("../assets/icons/Heart.svg"); comfortable: true; wide: true; clicked => { root.library-track-action(root.library-action-index, "like"); root.dialog = ""; } }
+                    Action { text: I18n.tr("Додати до черги"); icon: @image-url("../assets/icons/ListMusic.svg"); comfortable: true; wide: true; clicked => { root.library-track-action(root.library-action-index, "queue"); root.dialog = ""; } }
+                    Action { text: I18n.tr("Відтворити наступним"); icon: @image-url("../assets/icons/SkipForward.svg"); comfortable: true; wide: true; clicked => { root.library-track-action(root.library-action-index, "next"); root.dialog = ""; } }
+                    Action { text: I18n.tr("Додати до плейлиста"); icon: @image-url("../assets/icons/Plus.svg"); comfortable: true; wide: true; clicked => { root.dialog = "add"; } }
+                    Action { text: I18n.tr("Завантажити"); icon: @image-url("../assets/icons/Download.svg"); comfortable: true; wide: true; clicked => { root.library-track-action(root.library-action-index, "download"); root.dialog = ""; } }
+                    if root.library-action-missing: Action { text: I18n.tr("Знайти відсутній файл"); icon: @image-url("../assets/icons/LocalFile.svg"); comfortable: true; wide: true; clicked => { root.library-track-action(root.library-action-index, "relink"); root.dialog = ""; } }
+                    Action { text: I18n.tr("Прибрати з бібліотеки"); icon: @image-url("../assets/icons/X.svg"); comfortable: true; wide: true; clicked => { root.library-track-action(root.library-action-index, "remove"); } }
+                }
+                if root.dialog == "bulk-add": Text { text: root.library-selected-count + I18n.tr(" вибраних композицій"); color: Tokens.ink-300; font-size: 13px; overflow: elide; }
+                if root.dialog == "confirm-delete-playlist": Text { text: I18n.tr("Плейлист буде видалено з Vey. Файли композицій не зміняться."); color: Tokens.ink-200; wrap: word-wrap; vertical-stretch: 1; }
+                if root.dialog == "confirm-library-remove": Text { text: root.library-selected-count + I18n.tr(" композицій буде приховано в Vey. Оригінальні файли залишаться на пристрої; їх можна повернути через фільтр «Приховані»."); color: Tokens.ink-200; wrap: word-wrap; vertical-stretch: 1; }
                 if root.dialog == "add" && root.playlist-destinations.length == 0: Text {
                     text: I18n.tr("У вас ще немає списків відтворення"); color: Tokens.ink-200; wrap: word-wrap; vertical-stretch: 1;
                 }
@@ -2834,15 +3084,29 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
+                if root.dialog == "bulk-add" && root.playlist-destinations.length == 0: Text { text: I18n.tr("Створіть перший плейлист, щоб додати до нього вибрані композиції."); color: Tokens.ink-200; wrap: word-wrap; vertical-stretch: 1; }
+                if root.dialog == "bulk-add" && root.playlist-destinations.length > 0: ListView {
+                    min-height: 72px; vertical-stretch: 1;
+                    for p in root.playlist-destinations: Rectangle {
+                        height: 72px;
+                        PlaylistChoice { width: 100%; height: 64px; name: p.name; detail: p.detail; clicked => { root.add-selected-to-playlist(p.id); } }
+                    }
+                }
                 if root.dialog == "add": Action {
                     text: I18n.tr("Створити список"); icon: @image-url("../assets/icons/Plus.svg"); comfortable: true; wide: true; outlined: true;
                     clicked => { root.adding-to-new-playlist = true; root.new-name = ""; root.dialog = "create"; }
+                }
+                if root.dialog == "bulk-add": Action {
+                    text: I18n.tr("Створити плейлист"); icon: @image-url("../assets/icons/Plus.svg"); comfortable: true; wide: true; outlined: true;
+                    clicked => { root.bulk-adding-to-new-playlist = true; root.adding-to-new-playlist = false; root.new-name = ""; root.dialog = "create"; }
                 }
                 HorizontalLayout {
                     spacing: 10px;
                     Rectangle { horizontal-stretch: 1; }
                     Action { comfortable: root.mobile; text: root.dialog == "home-layout" || root.dialog == "music-import" || root.dialog == "connections" ? I18n.tr("Закрити") : I18n.tr("Скасувати"); outlined: true; clicked => { root.dialog = ""; } }
-                    if root.dialog != "add" && root.dialog != "lyric-style" && root.dialog != "home-layout" && root.dialog != "music-import" && root.dialog != "connections": Action {
+                    if root.dialog == "confirm-delete-playlist": Action { text: I18n.tr("Видалити"); comfortable: root.mobile; primary: true; clicked => { root.delete-playlist(); root.dialog = ""; } }
+                    if root.dialog == "confirm-library-remove": Action { text: I18n.tr("Прибрати"); comfortable: root.mobile; primary: true; clicked => { root.library-bulk-action("confirm-remove"); root.dialog = ""; } }
+                    if root.dialog != "add" && root.dialog != "bulk-add" && root.dialog != "confirm-delete-playlist" && root.dialog != "confirm-library-remove" && root.dialog != "track-actions" && root.dialog != "lyric-style" && root.dialog != "home-layout" && root.dialog != "music-import" && root.dialog != "connections": Action {
                         text: I18n.tr("Зберегти");
                         comfortable: root.mobile;
                         primary: true;
@@ -2850,6 +3114,7 @@ export component MainWindow inherits Window {
                             if root.dialog == "auth" { root.submit-auth(root.auth-token); root.auth-token = ""; }
                             else if root.dialog == "match" { root.apply-tags(root.match-title, root.match-artist, root.match-album); }
                             else if root.dialog == "source" { root.add-path(root.source-kind, root.new-name); root.new-name = ""; }
+                            else if root.dialog == "rename-playlist" { root.rename-playlist(root.new-name); root.new-name = ""; }
                             else if root.dialog == "paste" { root.import-lyrics(root.lyrics-paste); }
                             else { root.create-playlist(root.new-name); root.new-name = ""; }
                             root.dialog = "";

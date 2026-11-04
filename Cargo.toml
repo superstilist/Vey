@@ -1,6 +1,6 @@
 [package]
 name = "vey"
-version = "0.1.46"
+version = "0.1.48"
 edition = "2021"
 build = "build.rs"
 
@@ -42,7 +42,7 @@ braccato-slint = { path = "third-party/braccato-rust/crates/slint" }
 ttf-parser = "0.25"
 harfrust = "0.12"
 yt-rust = { path = "third-party/yt-rust", default-features = false, features = ["youtube-music"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies", "stream"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
 opus-pure = "0.2.1"
 rodio = { version = "0.21", default-features = false, features = ["playback", "symphonia-all"] }
@@ -90,5 +90,3 @@ name = "android.permission.READ_EXTERNAL_STORAGE"
 max_sdk_version = 32
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"
-wry = "0.55.1"
-tao = "0.35.3"

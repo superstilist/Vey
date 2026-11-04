@@ -11,7 +11,12 @@ reserved slot for the current track. A view refresh replaces queued offscreen
 work; in-flight results still update retained models. Local artwork is decoded
 once, with corrupt candidates skipped. Browser artwork uses the same limits,
 prioritizes the selected song, bounds response bytes and aborts stalled fetches.
-Browser image decoding still runs on the UI thread.
+Browser covers are fetched into a bounded seven-day CacheStorage cache. The
+browser decodes images asynchronously with `createImageBitmap`, scales them to
+768px and returns bounded RGBA pixels to Slint; startup no longer runs the full
+WASM image decoder synchronously for each Home cover. Offscreen page warming
+starts after a three-second startup grace period and still yields during travel
+and palette changes.
 
 Complete, size-checked YouTube audio cache entries have a local metadata index,
 so later opens avoid resolving a stream over the network. Missing or invalid
@@ -60,6 +65,16 @@ Retargets restart their completion deadline. Settings content commits on input;
 there is no fade-out wait or input shield. Feedback is 70ms, secondary panels
 100ms and the retained mobile player sheet 140ms. Lyric cue/fill/follow timing
 and authored artwork palette durations are unchanged.
+
+The 14 animated vector streak paths were removed from page travel. Follow-up
+Windows GPU release profile, 2026-11-03, same 300-track / 1100×760 / 9-route
+workload: p95 event-loop interval was 21.75ms before and 21.33ms after;
+maximum was 69.18ms and 69.44ms. Route settling ranged 162–195ms. This fixture
+does not show a measurable event-loop improvement from removing the paths, so
+the change is a lower-complexity visual path rather than proof that the reported
+freeze is resolved. Native artwork concurrency is also reduced to two
+background decodes plus the reserved current track; the route fixture does not
+load covers and cannot quantify that separate improvement.
 
 Normal navigation uses live cached page surfaces instead of screenshot page
 blur. This removes two full-window readbacks per journey, native blur-worker

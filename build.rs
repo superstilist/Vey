@@ -4,6 +4,7 @@ fn main() {
         android_bridge();
     }
     println!("cargo:rerun-if-changed=ui/main.slint");
+    println!("cargo:rerun-if-changed=ui/home-feed.slint");
     println!("cargo:rerun-if-changed=ui/home-preview.slint");
     println!("cargo:rerun-if-changed=ui/controls.slint");
     println!("cargo:rerun-if-changed=ui/tokens.slint");

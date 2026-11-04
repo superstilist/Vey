@@ -1,8 +1,11 @@
 mod account;
 pub mod library_import;
 pub mod home;
+pub mod discovery;
 #[cfg(not(target_arch = "wasm32"))]
 mod music_accounts;
+#[cfg(not(target_arch = "wasm32"))]
+mod spotify_import;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod youtube_browser;
 pub mod search_index;
@@ -67,8 +70,6 @@ pub mod track_model;
 pub mod video;
 #[cfg(target_arch = "wasm32")]
 mod web;
-#[cfg(target_os = "windows")]
-mod windows_webview;
 slint::include_modules!();
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run() -> Result<(), slint::PlatformError> {

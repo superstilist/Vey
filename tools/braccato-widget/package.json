@@ -17,6 +17,7 @@
     "test:material": "node material-test.mjs",
     "test:phone": "node phone-test.mjs",
     "test:search": "node search-input-test.mjs",
+    "test:home": "node home-feed-test.mjs",
     "test:library-import": "node library-import-test.mjs",
     "test:youtube-browser": "node youtube-browser-test.mjs",
     "test:player-performance": "node player-performance-test.mjs",

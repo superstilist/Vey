@@ -14,12 +14,20 @@ use wasm_bindgen_futures::{spawn_local, JsFuture};
 extern "C" {
     #[wasm_bindgen(js_name=pickFiles)]
     fn pick_files() -> js_sys::Promise;
+    #[wasm_bindgen(js_name=pickSingleFile)]
+    fn pick_single_file() -> js_sys::Promise;
     #[wasm_bindgen(js_name=readJsonFile)]
     fn read_json() -> js_sys::Promise;
     #[wasm_bindgen(js_name=downloadJson)]
     fn download_json(text: &str);
     #[wasm_bindgen(js_name=fileUrl)]
     fn file_url(path: &str) -> String;
+    #[wasm_bindgen(js_name=unlinkFile)]
+    fn unlink_file(path: &str);
+    #[wasm_bindgen(js_name=cancelDownload)]
+    fn cancel_download(id: &str);
+    #[wasm_bindgen(js_name=downloadTrack)]
+    fn download_track(id: &str, filename: &str, on_progress: &js_sys::Function) -> js_sys::Promise;
     fn challenge() -> js_sys::Promise;
     #[wasm_bindgen(js_name=viewportInsets)]
     fn viewport_insets() -> String;
@@ -36,13 +44,20 @@ extern "C" {
 extern "C" {
     #[wasm_bindgen(js_name=fetchArtwork)]
     fn fetch_artwork(url: &str, max_bytes: u32) -> js_sys::Promise;
+    #[wasm_bindgen(js_name=decodeArtwork)]
+    fn decode_artwork(bytes: &js_sys::Uint8Array, max_edge: u32) -> js_sys::Promise;
 }
 struct WebApp {
     store: Store,
     page_results: HashMap<String, Vec<Track>>,
     library: Vec<Track>,
+    library_view: LibraryViewState,
     visible: Vec<Track>,
     queue: Queue,
+    download_pending: HashSet<String>,
+    download_progress: HashMap<String, i32>,
+    download_ids: HashMap<String, String>,
+    download_callbacks: HashMap<String, Closure<dyn FnMut(f64)>>,
     current: Option<Track>,
     playlist: String,
     audio: web_sys::HtmlAudioElement,
@@ -128,7 +143,24 @@ fn refresh_playlist_rows(w: &MainWindow, a: &WebApp) {
     }).collect()));
     w.set_playlist_destinations(w.get_playlists());
 }
+fn refresh_queue_view(w: &MainWindow, a: &WebApp) {
+    w.set_queue_tracks(model(a.queue.tracks.iter().map(|track| TrackRow {
+        title: track.title.clone().into(),
+        artist: track.artist.clone().into(),
+        album: track.album.clone().into(),
+        path: track.path.clone().into(),
+        duration: format_time(track.duration_secs).into(),
+        art: a.artwork.get(&track.path).cloned().unwrap_or_default(),
+        liked: a.store.is_liked(track),
+        downloaded: !file_url(&track.path).is_empty()
+            || a.store.downloads.contains_key(&track.path)
+            || a.store.downloads.contains_key(&a.store.identity_key(track)),
+        ..Default::default()
+    }).collect()));
+    w.set_queue_current_index(a.queue.index.map_or(-1, |index| index as i32));
+}
 fn refresh(w: &MainWindow, a: &mut WebApp) {
+    w.set_home_revision(w.get_home_revision().wrapping_add(1));
     refresh_playlist_rows(w, a);
     a.visible = match w.get_active_view().as_str() {
         "home" => {
@@ -138,7 +170,28 @@ fn refresh(w: &MainWindow, a: &mut WebApp) {
                 a.store.history.iter().map(|h| h.track.clone()).collect()
             }
         }
-        "library" => a.library.clone(),
+        "library" => {
+            if matches!(a.library_view.category, LibraryCategory::Albums | LibraryCategory::Artists | LibraryCategory::Playlists) {
+                Vec::new()
+            } else {
+                let source = if a.library_view.filter == LibraryFilter::Excluded {
+                    a.store.excluded_library_tracks()
+                } else {
+                    a.library.clone()
+                };
+                let local_urls: HashSet<String> = source
+                    .iter()
+                    .filter(|track| !crate::services::key_is_remote(&track.path))
+                    .filter(|track| !file_url(&track.path).is_empty())
+                    .map(|track| track.path.clone())
+                    .collect();
+                a.library_view.apply(&a.store, &source, |track| {
+                    local_urls.contains(&track.path)
+                        || a.store.downloads.contains_key(&track.path)
+                        || a.store.downloads.contains_key(&a.store.identity_key(track))
+                })
+            }
+        }
         "liked" => a
             .store
             .library_tracks()
@@ -149,6 +202,42 @@ fn refresh(w: &MainWindow, a: &mut WebApp) {
         "playlist" => a.store.playlist_tracks(&a.playlist),
         _ => a.visible.clone(),
     };
+    let library_count = if a.library_view.filter == LibraryFilter::Excluded {
+        a.store.excluded_library_tracks().len()
+    } else {
+        a.library.len()
+    };
+    w.set_library_category_index(match a.library_view.category {
+        LibraryCategory::Songs => 0,
+        LibraryCategory::Albums => 1,
+        LibraryCategory::Artists => 2,
+        LibraryCategory::Playlists => 3,
+        LibraryCategory::Downloads => 4,
+    });
+    w.set_library_total_count(library_count as i32);
+    w.set_library_selected_count(a.library_view.selected.len() as i32);
+    w.set_library_scanning(false);
+    refresh_queue_view(w, a);
+    let selected_tracks: Vec<_> = a.library.iter().filter(|track| a.library_view.selected.contains(&a.store.identity_key(track))).collect();
+    w.set_library_selection_all_liked(!selected_tracks.is_empty() && selected_tracks.iter().all(|track| a.store.is_liked(track)));
+    let collection_source = if a.library_view.filter == LibraryFilter::Excluded {
+        a.store.excluded_library_tracks()
+    } else {
+        a.library.clone()
+    };
+    let collections = a.library_view.collections(&a.store, &collection_source, |track| {
+        !file_url(&track.path).is_empty()
+            || a.store.downloads.contains_key(&track.path)
+            || a.store.downloads.contains_key(&a.store.identity_key(track))
+    });
+    w.set_library_collections(model(collections.iter().map(|collection| LibraryCollectionRow {
+        kind: collection.kind.clone().into(),
+        key: collection.key.clone().into(),
+        title: collection.title.clone().into(),
+        subtitle: if collection.kind == "playlist" { String::new() } else { collection.subtitle.clone() }.into(),
+        count: collection.track_count.to_string().into(),
+        art: a.artwork.get(&collection.representative.path).cloned().unwrap_or_default(),
+    }).collect()));
     if matches!(w.get_active_view().as_str(), "search" | "explore") {
         a.page_results
             .insert(w.get_active_view().to_string(), a.visible.clone());
@@ -165,7 +254,13 @@ fn refresh(w: &MainWindow, a: &mut WebApp) {
                 duration: format_time(t.duration_secs).into(),
                 art: a.artwork.get(&t.path).cloned().unwrap_or_default(),
                 liked: a.store.is_liked(t),
-                downloaded: !file_url(&t.path).is_empty(),
+                downloading: a.download_pending.contains(&t.path),
+                download_progress: a.download_progress.get(&t.path).copied().unwrap_or(-1),
+                downloaded: !file_url(&t.path).is_empty()
+                    || a.store.downloads.contains_key(&t.path)
+                    || a.store.downloads.contains_key(&a.store.identity_key(t)),
+                selected: a.library_view.selected.contains(&a.store.identity_key(t)),
+                missing: !crate::services::key_is_remote(&t.path) && file_url(&t.path).is_empty(),
                 ..Default::default()
             })
             .collect(),
@@ -193,12 +288,28 @@ fn refresh(w: &MainWindow, a: &mut WebApp) {
         w.set_current_disliked(a.store.is_disliked(t));
         let available = !file_url(&t.path).is_empty();
         w.set_current_downloaded(available);
+        w.set_current_downloading(a.download_pending.contains(&t.path));
+        w.set_current_download_progress(a.download_progress.get(&t.path).copied().unwrap_or(-1));
         w.set_current_local(available);
     }
 }
 fn format_time(s: f64) -> String {
     let s = if s.is_finite() { s.max(0.) as u64 } else { 0 };
     format!("{}:{:02}", s / 60, s % 60)
+}
+fn selected(a: &WebApp, index: i32) -> Option<Track> {
+    if index < 0 {
+        a.current.clone()
+    } else {
+        a.visible.get(index as usize).cloned()
+    }
+}
+fn selected_library_tracks(a: &WebApp) -> Vec<Track> {
+    let tracks = a.library.iter().cloned().chain(a.store.excluded_library_tracks());
+    deduplicate_tracks(tracks)
+        .into_iter()
+        .filter(|track| a.library_view.selected.contains(&a.store.identity_key(track)))
+        .collect()
 }
 fn apply_artwork(w: &MainWindow, image: slint::Image) {
     w.set_current_art(image);
@@ -219,6 +330,7 @@ fn load_artwork(w: &MainWindow, a: &Rc<RefCell<WebApp>>, track: &Track) {
             apply_artwork(w, image.clone());
         }
         crate::track_model::update_path(w, &path, |row| row.art = image.clone());
+        crate::discovery::update_art(w, &path, &image);
         return;
     }
     if app.artwork_pending.contains(&path)
@@ -257,7 +369,10 @@ fn load_artwork(w: &MainWindow, a: &Rc<RefCell<WebApp>>, track: &Track) {
 }
 
 fn pump_artwork(w: &MainWindow, state: &Rc<RefCell<WebApp>>) {
-    const MAX_IN_FLIGHT: usize = 6;
+    // Match the native loader: two background covers plus one reserved slot
+    // for the selected track. Browser canvas readback and Slint upload are
+    // main-thread work, so a larger burst can hitch startup on modest devices.
+    const MAX_IN_FLIGHT: usize = 2;
     loop {
         let track = {
             let mut app = state.borrow_mut();
@@ -290,19 +405,23 @@ fn pump_artwork(w: &MainWindow, state: &Rc<RefCell<WebApp>>) {
                 let mut decoded = None;
                 for url in &urls {
                     if let Ok(value) = JsFuture::from(fetch_artwork(url, crate::artwork::MAX_BYTES as u32)).await {
-                        let bytes = js_sys::Uint8Array::new(&value).to_vec();
-                        if let Ok(image) = crate::artwork::decode(&bytes) {
-                            decoded = Some(image);
-                            break;
+                        let bytes = js_sys::Uint8Array::new(&value);
+                        let Ok(value) = JsFuture::from(decode_artwork(&bytes, 768)).await else { continue; };
+                        let width = js_sys::Reflect::get(&value, &"width".into()).ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+                        let height = js_sys::Reflect::get(&value, &"height".into()).ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+                        let data = js_sys::Reflect::get(&value, &"data".into()).ok();
+                        if width == 0 || height == 0 || width > 768 || height > 768 { continue; }
+                        if let Some(data) = data {
+                            let pixels = js_sys::Uint8ClampedArray::new(&data).to_vec();
+                            if pixels.len() == width as usize * height as usize * 4 {
+                                decoded = Some((pixels, width, height));
+                                break;
+                            }
                         }
                     }
                 }
-                let image = decoded.ok_or_else(|| "Artwork request failed".to_string())?;
-                let image = slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
-                    image.as_raw(),
-                    image.width(),
-                    image.height(),
-                ));
+                let (pixels, width, height) = decoded.ok_or_else(|| "Artwork request failed".to_string())?;
+                let image = slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(&pixels, width, height));
                 Ok(image)
             }
             .await;
@@ -319,7 +438,20 @@ fn pump_artwork(w: &MainWindow, state: &Rc<RefCell<WebApp>>) {
                 app.artwork_failed.remove(&path);
                 app.artwork.insert(path.clone(), image.clone());
                 crate::track_model::update_path(&w, &path, |row| row.art = image.clone());
+                crate::discovery::update_art(&w, &path, &image);
                 refresh_playlist_rows(&w, &app);
+                refresh_queue_view(&w, &app);
+                if w.get_catalog_kind() != ""
+                    && app.visible.first().is_some_and(|track| track.path == path)
+                    && w.get_active_view() == "explore"
+                {
+                    w.set_catalog_art(image.clone());
+                }
+                if w.get_active_view() == "library"
+                    && matches!(app.library_view.category, LibraryCategory::Albums | LibraryCategory::Artists | LibraryCategory::Playlists)
+                {
+                    refresh(&w, &mut app);
+                }
                 if is_current {
                     apply_artwork(&w, image);
                 }
@@ -554,6 +686,7 @@ fn start(w: &MainWindow, a: &Rc<RefCell<WebApp>>, track: Track) {
     save(&state);
     w.set_status("".into());
     w.set_current_track_key(track.path.clone().into());
+    refresh_queue_view(w, &state);
     w.set_current_video_id(track.video_id.clone().unwrap_or_default().into());
     w.set_current_clip_video_id(track.clip_video_id.clone().unwrap_or_default().into());
     w.set_current_title(track.title.clone().into());
@@ -824,12 +957,18 @@ pub fn run() -> Result<(), JsValue> {
         .and_then(|s| serde_json::from_str::<Store>(&s).ok())
         .unwrap_or_default();
     let saved_recommendations = store.recommendations.tracks.clone();
+    let saved_library = store.library_tracks();
     let a = Rc::new(RefCell::new(WebApp {
-        library: store.tracks.clone(),
+        library: saved_library,
         store,
+        library_view: LibraryViewState::default(),
         page_results: HashMap::new(),
         visible: vec![],
         queue: Queue::default(),
+        download_pending: HashSet::new(),
+        download_progress: HashMap::new(),
+        download_ids: HashMap::new(),
+        download_callbacks: HashMap::new(),
         current: None,
         playlist: String::new(),
         audio: web_sys::HtmlAudioElement::new()?,
@@ -932,6 +1071,20 @@ pub fn run() -> Result<(), JsValue> {
         }
     });
     bind!(on_navigate, |ui, state, view| {
+        if view != "explore" {
+            ui.set_catalog_kind("".into());
+            ui.set_catalog_subtitle("".into());
+            ui.set_catalog_art(slint::Image::default());
+            ui.set_catalog_track_count(0);
+        }
+        if view == "explore" && !ui.get_catalog_title().is_empty() {
+            ui.set_catalog_title("".into());
+            ui.set_catalog_kind("".into());
+            ui.set_catalog_subtitle("".into());
+            ui.set_catalog_art(slint::Image::default());
+            ui.set_catalog_track_count(0);
+            state.borrow_mut().page_results.remove("explore");
+        }
         state.borrow_mut().generation += 1;
         state.borrow_mut().pending_search = None;
         if view == "home" && ui.get_home_rotate() {
@@ -952,7 +1105,101 @@ pub fn run() -> Result<(), JsValue> {
         }
     });
     bind!(on_refresh_explore, |ui, state| {
+        ui.set_catalog_title("".into());
         search(&ui, state, None, false);
+    });
+    bind!(on_request_discovery_art, |ui, state, json| {
+        if let Ok(track) = serde_json::from_str::<Track>(&json) {
+            load_artwork(&ui, state, &track);
+        }
+    });
+    bind!(on_play_discovery_items, |ui, state, json, video| {
+        let Ok(selection) = serde_json::from_str::<crate::discovery::Selection>(&json) else {
+            return;
+        };
+        let track = {
+            let mut app = state.borrow_mut();
+            app.queue.select(selection.tracks, selection.index)
+        };
+        if let Some(track) = track {
+            if video && ui.get_art_mode() != "clip" {
+                ui.invoke_change_art_mode();
+            }
+            start(&ui, state, track);
+            if video {
+                ui.set_active_view("lyrics".into());
+            }
+        }
+    });
+    bind!(on_open_discovery_collection, |ui, state, id, json| {
+        let Ok(context) = serde_json::from_str::<crate::discovery::Item>(&json) else {
+            return;
+        };
+        if id.is_empty() {
+            let mut app = state.borrow_mut();
+            if let Some(tracks) = context.local_collection(&app.store) {
+                app.generation = app.generation.wrapping_add(1);
+                app.visible = tracks;
+                ui.set_catalog_title(context.title.clone().into());
+                ui.set_catalog_kind(context.kind.clone().into());
+                ui.set_catalog_subtitle(if context.kind == "album" { context.artist.clone() } else { String::new() }.into());
+                ui.set_catalog_art(app.visible.first().and_then(|track| app.artwork.get(&track.path)).cloned().unwrap_or_default());
+                ui.set_catalog_track_count(app.visible.len() as i32);
+                ui.set_active_view("explore".into());
+                ui.set_status("".into());
+                refresh(&ui, &mut app);
+            }
+            return;
+        }
+        ui.set_catalog_title(context.title.clone().into());
+        ui.set_active_view("explore".into());
+        let generation = {
+            let mut app = state.borrow_mut();
+            app.generation += 1;
+            app.visible.clear();
+            refresh(&ui, &mut app);
+            app.generation
+        };
+        ui.set_status("Завантаження з YouTube Music…".into());
+        let weak = ui.as_weak();
+        let shared = state.clone();
+        spawn_local(async move {
+            let result = async {
+                let response = reqwest::get(api(&format!(
+                    "/api/browse?id={}",
+                    js_sys::encode_uri_component(&id)
+                )))
+                .await
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?;
+                response
+                    .json::<Vec<Track>>()
+                    .await
+                    .map(|tracks| context.collection_tracks(tracks))
+                    .map_err(|e| e.to_string())
+            }
+            .await;
+            if let Some(ui) = weak.upgrade() {
+                let mut app = shared.borrow_mut();
+                if app.generation != generation {
+                    return;
+                }
+                match result {
+                    Ok(tracks) => {
+                        app.visible = tracks;
+                        let found = app.visible.clone();
+                        app.store.remember_all(found);
+                        save(&app);
+                        refresh(&ui, &mut app);
+                        ui.set_status("".into());
+                    }
+                    Err(_) => {
+                        ui.set_status("Не вдалося завантажити добірки. Спробуйте ще раз.".into())
+                    }
+                }
+            }
+        });
     });
     bind!(on_request_home_recommendations, |ui, state| {
         request_home_recommendations(&ui, state);
@@ -1005,6 +1252,14 @@ pub fn run() -> Result<(), JsValue> {
         if let Some(t) = track {
             start(&ui, state, t);
         }
+    });
+    bind!(on_select_queue_track, |ui, state, index| {
+        let track = {
+            let mut a = state.borrow_mut();
+            let queue = a.queue.tracks.clone();
+            a.queue.select(queue, index.max(0) as usize)
+        };
+        if let Some(track) = track { start(&ui, state, track); }
     });
     bind!(on_play_toggle, |ui, state| {
         let a = state.borrow();
@@ -1168,19 +1423,8 @@ pub fn run() -> Result<(), JsValue> {
                         serde_json::from_str::<Vec<Track>>(&json.as_string().unwrap_or_default())
                     {
                         let mut a = shared.borrow_mut();
-                        a.store.remember_all(tracks.iter().cloned());
-                        let imported: HashSet<_> = tracks.iter().map(|t| t.path.as_str()).collect();
-                        a.library
-                            .retain(|old| !imported.contains(old.path.as_str()));
-                        // Repeated identities keep the last selected metadata.
-                        let mut seen = HashSet::new();
-                        let mut unique: Vec<_> = tracks
-                            .into_iter()
-                            .rev()
-                            .filter(|t| seen.insert(t.path.clone()))
-                            .collect();
-                        unique.reverse();
-                        a.library.extend(unique);
+                        a.store.remember_all(tracks);
+                        a.library = a.store.library_tracks();
                         w.set_active_view("library".into());
                         refresh(&w, &mut a);
                         save(&a);
@@ -1192,18 +1436,259 @@ pub fn run() -> Result<(), JsValue> {
     bind!(on_scan, |ui, state| {
         refresh(&ui, &mut state.borrow_mut());
     });
+    bind!(on_library_view_changed, |ui, state| {
+        let mut a = state.borrow_mut();
+        a.library_view.query = ui.get_library_query().to_string();
+        a.library_view.filter = LibraryFilter::from_index(ui.get_library_filter_index());
+        a.library_view.sort = LibrarySort::from_index(ui.get_library_sort_index());
+        a.library_view.category = LibraryCategory::from_index(ui.get_library_category_index());
+        refresh(&ui, &mut a);
+    });
+    bind!(on_open_library_collection, |ui, state, kind, key| {
+        let mut a = state.borrow_mut();
+        if kind == "playlist" {
+            a.playlist = key.to_string();
+            if let Some(playlist) = a.store.playlists.iter().find(|playlist| playlist.id == key.as_str()) {
+                ui.set_playlist_title(playlist.name.clone().into());
+                ui.set_active_view("playlist".into());
+                refresh(&ui, &mut a);
+            }
+            return;
+        }
+        let source = if a.library_view.filter == LibraryFilter::Excluded {
+            a.store.excluded_library_tracks()
+        } else {
+            a.library.clone()
+        };
+        let Some(collection) = a.library_view.collections(&a.store, &source, |track| {
+            !file_url(&track.path).is_empty()
+                || a.store.downloads.contains_key(&track.path)
+                || a.store.downloads.contains_key(&a.store.identity_key(track))
+        })
+            .into_iter()
+            .find(|collection| collection.kind == kind.as_str() && collection.key == key.as_str())
+        else { return; };
+        a.visible = collection.tracks.clone();
+        ui.set_catalog_title(collection.title.clone().into());
+        ui.set_catalog_kind(collection.kind.clone().into());
+        ui.set_catalog_subtitle(collection.subtitle.clone().into());
+        ui.set_catalog_art(a.artwork.get(&collection.representative.path).cloned().unwrap_or_default());
+        ui.set_catalog_track_count(collection.track_count as i32);
+        ui.set_active_view("explore".into());
+        ui.set_status("".into());
+        refresh(&ui, &mut a);
+    });
+    bind!(on_library_collection_action, |ui, state, action| {
+        let mut a = state.borrow_mut();
+        if a.visible.is_empty() { return; }
+        let mut tracks = a.visible.clone();
+        if action == "queue" {
+            a.queue.append(tracks);
+            refresh(&ui, &mut a);
+            ui.set_status("Добірку додано до черги".into());
+        } else {
+            if action == "shuffle" { tracks = shuffle_tracks(tracks); }
+            a.queue.shuffle = a.store.settings.shuffle;
+            a.queue.repeat = a.store.settings.repeat.clone();
+            let first = a.queue.select(tracks, 0);
+            drop(a);
+            if let Some(track) = first { start(&ui, &state, track); }
+        }
+    });
+    bind!(on_library_track_action, |ui, state, index, action| {
+        let mut a = state.borrow_mut();
+        let Some(track) = a.visible.get(index.max(0) as usize).cloned() else { return; };
+        match action.as_str() {
+            "like" => {
+                a.store.toggle_like_track(&track);
+                save(&a);
+                refresh(&ui, &mut a);
+            }
+            "queue" | "next" => {
+                if action == "next" {
+                    if a.current.is_none() {
+                        a.queue.insert_next([track]);
+                        a.queue.index = Some(0);
+                        let first = a.queue.tracks.first().cloned();
+                        drop(a);
+                        if let Some(first) = first { start(&ui, &state, first); }
+                        return;
+                    }
+                    a.queue.insert_next([track]);
+                } else {
+                    a.queue.append([track]);
+                }
+                refresh(&ui, &mut a);
+                ui.set_status(if action == "next" { "Композицію поставлено наступною" } else { "Композицію додано до черги" }.into());
+            }
+            "add" => ui.set_dialog("add".into()),
+            "download" => { drop(a); ui.invoke_download(index); }
+            "relink" => { drop(a); ui.invoke_relink_track(index); }
+            "remove" => {
+                a.library_view.selected.clear();
+                let key = a.store.identity_key(&track);
+                a.library_view.selected.insert(key);
+                refresh(&ui, &mut a);
+                ui.set_dialog("confirm-library-remove".into());
+            }
+            _ => {}
+        }
+    });
+    bind!(on_toggle_library_selection, |ui, state, index| {
+        let mut a = state.borrow_mut();
+        if let Some(track) = selected(&a, index) {
+            let key = a.store.identity_key(&track);
+            if !a.library_view.selected.remove(&key) { a.library_view.selected.insert(key); }
+            refresh(&ui, &mut a);
+        }
+    });
+    bind!(on_library_bulk_action, |ui, state, action| {
+        let mut a = state.borrow_mut();
+        let selected = selected_library_tracks(&a);
+        if action == "select-all" {
+            let keys: Vec<_> = a.visible.iter().map(|track| a.store.identity_key(track)).collect();
+            a.library_view.selected.extend(keys);
+        } else if action == "clear-selection" {
+            a.library_view.selected.clear();
+        } else if action == "playlist" {
+            ui.set_dialog("bulk-add".into());
+        } else if action == "remove" {
+            ui.set_dialog("confirm-library-remove".into());
+        } else if action == "confirm-remove" || action == "restore" {
+            let excluded = action == "confirm-remove";
+            for track in &selected {
+                if !crate::services::key_is_remote(&track.path) { a.store.set_library_excluded(track, excluded); }
+            }
+            a.library_view.selected.clear();
+            a.library = a.store.library_tracks();
+            save(&a);
+            ui.set_status(if excluded { "Композиції прибрано з Vey. Файли залишилися на пристрої" } else { "Композиції повернуто до бібліотеки" }.into());
+            refresh(&ui, &mut a);
+        } else if action == "like" {
+            let all_liked = !selected.is_empty() && selected.iter().all(|track| a.store.is_liked(track));
+            for track in &selected {
+                if a.store.is_liked(track) != !all_liked { a.store.toggle_like_track(track); }
+            }
+            save(&a);
+            refresh(&ui, &mut a);
+        } else if action == "queue" || action == "next" {
+            let start_next = action == "next" && a.current.is_none() && !selected.is_empty();
+            if action == "next" { a.queue.insert_next(selected); } else { a.queue.append(selected); }
+            let next = if start_next {
+                a.queue.index = Some(0);
+                a.queue.tracks.first().cloned()
+            } else { None };
+            if let Some(track) = next {
+                drop(a);
+                start(&ui, &state, track);
+                return;
+            }
+            refresh(&ui, &mut a);
+            ui.set_status("Композиції додано до черги".into());
+        } else if action == "play" && !selected.is_empty() {
+            a.queue.shuffle = a.store.settings.shuffle;
+            a.queue.repeat = a.store.settings.repeat.clone();
+            let track = a.queue.select(selected, 0);
+            drop(a);
+            if let Some(track) = track { start(&ui, &state, track); }
+            return;
+        }
+    });
+    bind!(on_add_selected_to_playlist, |ui, state, id| {
+        let mut a = state.borrow_mut();
+        let selected = selected_library_tracks(&a);
+        for track in selected { a.store.playlist_add_track(&id, &track); }
+        a.library_view.selected.clear();
+        save(&a);
+        ui.set_dialog("".into());
+        refresh(&ui, &mut a);
+    });
+    bind!(on_queue_track, |ui, state, index, play_next| {
+        let mut a = state.borrow_mut();
+        if let Some(track) = selected(&a, index) {
+            if play_next {
+                if a.current.is_none() {
+                    a.queue.insert_next([track]);
+                    a.queue.index = Some(0);
+                    let first = a.queue.tracks.first().cloned();
+                    drop(a);
+                    if let Some(first) = first { start(&ui, &state, first); }
+                    return;
+                }
+                a.queue.insert_next([track]);
+            } else {
+                a.queue.append([track]);
+            }
+            refresh(&ui, &mut a);
+            ui.set_status(if play_next { "Додано наступною композицією" } else { "Додано до черги" }.into());
+        }
+    });
+    bind!(on_move_list_item, |ui, state, index, delta| {
+        let mut a = state.borrow_mut();
+        let from = index.max(0) as usize;
+        let to = (from as i32 + delta).max(0) as usize;
+        let moved = match ui.get_active_view().as_str() {
+            "queue" => a.queue.move_item(from, to),
+            "playlist" => {
+                let id = a.playlist.clone();
+                let moved = a.store.move_playlist_track(&id, from, to);
+                if moved {
+                    if let Some(playlist) = a.store.playlists.iter().find(|item| item.id == id) {
+                        let keys: Vec<_> = a.queue.tracks.iter().map(|track| a.store.identity_key(track)).collect();
+                        if keys == playlist.tracks { a.queue.move_item(from, to); }
+                    }
+                }
+                moved
+            }
+            _ => false,
+        };
+        if moved { save(&a); refresh(&ui, &mut a); }
+    });
+    bind!(on_remove_queue_item, |ui, state, index| {
+        let mut a = state.borrow_mut();
+        if a.queue.remove(index.max(0) as usize).is_some() { refresh(&ui, &mut a); }
+    });
+    bind!(on_clear_queue, |ui, state| {
+        let mut a = state.borrow_mut();
+        a.queue.clear();
+        refresh(&ui, &mut a);
+        ui.set_status("Чергу очищено. Поточне відтворення триває.".into());
+    });
     bind!(on_create_playlist, |ui, state, name| {
         let mut a = state.borrow_mut();
         if let Some(id) = a.store.create_playlist(&name) {
-            if ui.get_adding_to_new_playlist() {
-                if let Some(track) = a.current.clone() {
+            if ui.get_bulk_adding_to_new_playlist() {
+                let selected = selected_library_tracks(&a);
+                for track in selected { a.store.playlist_add_track(&id, &track); }
+                a.library_view.selected.clear();
+            } else if ui.get_adding_to_new_playlist() {
+                let pending_index = ui.get_library_action_index();
+                let selected_track = if pending_index >= 0 {
+                    a.visible.get(pending_index as usize).cloned()
+                } else {
+                    a.current.clone()
+                };
+                if let Some(track) = selected_track {
                     a.store.remember(track.clone());
                     a.store.playlist_add_track(&id, &track);
                 }
             }
         }
+        ui.set_library_action_index(-1);
         save(&a);
         refresh(&ui, &mut a);
+    });
+    bind!(on_rename_playlist, |ui, state, name| {
+        let mut a = state.borrow_mut();
+        let id = a.playlist.clone();
+        if a.store.rename_playlist(&id, &name) {
+            ui.set_playlist_title(name.trim().into());
+            save(&a);
+            if ui.get_account_signed_in() { ui.invoke_account_command("push".into()); }
+            refresh(&ui, &mut a);
+        } else {
+            ui.set_status("Введіть назву плейлиста".into());
+        }
     });
     bind!(on_open_playlist, |ui, state, id| {
         let mut a = state.borrow_mut();
@@ -1229,20 +1714,30 @@ pub fn run() -> Result<(), JsValue> {
     });
     bind!(on_add_to_playlist, |ui, state, id| {
         let mut a = state.borrow_mut();
-        if let Some(t) = a.current.clone() {
+        let pending_index = ui.get_library_action_index();
+        let selected_track = if pending_index >= 0 {
+            a.visible.get(pending_index as usize).cloned()
+        } else {
+            a.current.clone()
+        };
+        if let Some(t) = selected_track {
             a.store.playlist_add_track(&id, &t);
             save(&a);
             refresh(&ui, &mut a);
         }
+        ui.set_library_action_index(-1);
     });
     bind!(on_remove_from_playlist, |ui, state, index| {
         let mut a = state.borrow_mut();
         let id = a.playlist.clone();
         if let Some(t) = a.visible.get(index.max(0) as usize).cloned() {
+            let identity = a.store.identity_key(&t);
             if let Some(p) = a.store.playlists.iter_mut().find(|p| p.id == id) {
-                let before = p.tracks.len();
-                p.tracks.retain(|t2| t2 != &t.path);
-                if before != p.tracks.len() { p.updated_at = crate::services::now_ms(); }
+                let position = index.max(0) as usize;
+                if p.tracks.get(position).is_some_and(|path| path == &t.path || path == &identity) {
+                    p.tracks.remove(position);
+                    p.updated_at = crate::services::now_ms();
+                }
             }
             save(&a);
             refresh(&ui, &mut a);
@@ -1518,20 +2013,129 @@ pub fn run() -> Result<(), JsValue> {
         ui.set_art_mode(a.store.settings.art_mode.clone().into());
         save(&a);
     });
-    bind!(on_download, |ui, state, index| {
-        let a = state.borrow();
-        let track = if index < 0 {
-            a.current.as_ref()
-        } else {
-            a.visible.get(index as usize)
-        };
-        if let Some(id) = track.and_then(|t| t.video_id.as_deref()) {
-            if let Some(w) = web_sys::window() {
-                let _ = w.open_with_url_and_target(&format!("/api/audio/{id}"), "_blank");
+    bind!(on_relink_track, |ui, state, index| {
+        let old = selected(&state.borrow(), index);
+        let Some(old) = old.filter(|track| !crate::services::key_is_remote(&track.path)) else { return; };
+        let old_path = old.path.clone();
+        let weak = ui.as_weak();
+        let shared = state.clone();
+        spawn_local(async move {
+            let picked = JsFuture::from(pick_single_file()).await;
+            let json = picked.ok().and_then(|value| value.as_string()).unwrap_or_default();
+            if json.is_empty() { return; }
+            let replacement = match serde_json::from_str::<Track>(&json) {
+                Ok(track) => track,
+                Err(error) => {
+                    if let Some(ui) = weak.upgrade() { ui.set_status(format!("Не вдалося прочитати вибраний файл: {error}").into()); }
+                    return;
+                }
+            };
+            if let Some(ui) = weak.upgrade() {
+                let mut app = shared.borrow_mut();
+                let old_key = app.store.identity_key(&old);
+                if app.store.relink_local_path(&old_path, replacement.clone()) {
+                    if old_path != replacement.path { unlink_file(&old_path); }
+                    let new_key = app.store.identity_key(&replacement);
+                    if app.library_view.selected.remove(&old_key) {
+                        app.library_view.selected.insert(new_key);
+                    }
+                    for queued in &mut app.queue.tracks {
+                        if queued.path == old_path { *queued = replacement.clone(); }
+                    }
+                    app.library = app.store.library_tracks();
+                    save(&app);
+                    ui.set_status("Файл повторно прив’язано; збережені списки й уподобання залишилися".into());
+                    refresh(&ui, &mut app);
+                    drop(app);
+                    load_artwork(&ui, &shared, &replacement);
+                } else {
+                    ui.set_status("Не вдалося знайти цей запис у бібліотеці".into());
+                }
             }
-        } else {
-            ui.set_status("Файл уже доступний локально".into());
+        });
+        ui.set_status("Виберіть файл для відновлення композиції".into());
+    });
+    bind!(on_download, |ui, state, index| {
+        let track = selected(&state.borrow(), index);
+        let Some(track) = track else { return; };
+        let path = track.path.clone();
+        let active_download = { state.borrow().download_ids.get(&path).cloned() };
+        if let Some(id) = active_download {
+            cancel_download(&id);
+            let mut app = state.borrow_mut();
+            app.download_pending.remove(&path);
+            app.download_progress.remove(&path);
+            app.download_ids.remove(&path);
+            app.download_callbacks.remove(&path);
+            crate::track_model::update_path(&ui, &path, |row| { row.downloading = false; row.download_progress = -1; });
+            if app.current.as_ref().is_some_and(|current| current.path == path) {
+                ui.set_current_downloading(false);
+                ui.set_current_download_progress(-1);
+            }
+            ui.set_status("Завантаження скасовано".into());
+            return;
         }
+        let Some(id) = track.video_id.clone() else {
+            ui.set_status("Файл уже доступний локально".into());
+            return;
+        };
+        let filename = format!("{} - {}.m4a", track.artist, track.title);
+        let weak = ui.as_weak();
+        let shared = state.clone();
+        let progress_path = path.clone();
+        let progress_weak = ui.as_weak();
+        let progress_state = state.clone();
+        let callback = Closure::<dyn FnMut(f64)>::new(move |value| {
+            let Some(ui) = progress_weak.upgrade() else { return; };
+            let mut app = progress_state.borrow_mut();
+            if !app.download_pending.contains(&progress_path) { return; }
+            let progress = if value >= 0.0 { (value as i32).clamp(0, 100) } else { -1 };
+            if app.download_progress.get(&progress_path).copied().unwrap_or(-1) != progress {
+                app.download_progress.insert(progress_path.clone(), progress);
+                crate::track_model::update_path(&ui, &progress_path, |row| { row.downloading = true; row.download_progress = progress; });
+                if app.current.as_ref().is_some_and(|current| current.path == progress_path) {
+                    ui.set_current_downloading(true);
+                    ui.set_current_download_progress(progress);
+                }
+            }
+        });
+        let promise = download_track(&id, &filename, callback.as_ref().unchecked_ref());
+        {
+            let mut app = state.borrow_mut();
+            app.download_pending.insert(path.clone());
+            app.download_progress.insert(path.clone(), -1);
+            app.download_ids.insert(path.clone(), id);
+            app.download_callbacks.insert(path.clone(), callback);
+        }
+        crate::track_model::update_path(&ui, &path, |row| { row.downloading = true; row.download_progress = -1; });
+        if state.borrow().current.as_ref().is_some_and(|current| current.path == path) {
+            ui.set_current_downloading(true);
+            ui.set_current_download_progress(-1);
+        }
+        ui.set_status("Підготовка завантаження…".into());
+        spawn_local(async move {
+            let result = JsFuture::from(promise).await;
+            if let Some(ui) = weak.upgrade() {
+                let mut app = shared.borrow_mut();
+                let was_pending = app.download_pending.remove(&path);
+                app.download_progress.remove(&path);
+                app.download_ids.remove(&path);
+                app.download_callbacks.remove(&path);
+                crate::track_model::update_path(&ui, &path, |row| { row.downloading = false; row.download_progress = -1; });
+                if app.current.as_ref().is_some_and(|current| current.path == path) {
+                    ui.set_current_downloading(false);
+                    ui.set_current_download_progress(-1);
+                }
+                if was_pending {
+                    if result.is_ok() {
+                        ui.set_status("Файл передано браузеру для збереження".into());
+                    } else {
+                        let error = result.err().and_then(|error| error.as_string()).unwrap_or_else(|| "невідома помилка".into());
+                        ui.set_status(format!("Завантаження не вдалося: {error}").into());
+                    }
+                }
+            }
+        });
     });
 
     bind!(on_add_path, |ui, _state, _kind, _path| {
@@ -1592,6 +2196,30 @@ pub fn run() -> Result<(), JsValue> {
         })
     };
     crate::home::install(&w, account_get.clone(), account_apply.clone());
+    let discovery_get = {
+        let state = a.clone();
+        Rc::new(move || state.borrow().store.clone())
+    };
+    let discovery_apply = {
+        let state = a.clone();
+        let weak = w.as_weak();
+        Rc::new(move |next: Store| {
+            if let Some(ui) = weak.upgrade() {
+                let mut app = state.borrow_mut();
+                app.store.remember_all(
+                    next.home_catalog
+                        .sections
+                        .iter()
+                        .flat_map(|s| s.items.iter())
+                        .filter_map(crate::discovery::Item::track),
+                );
+                app.store.home_catalog = next.home_catalog;
+                save(&app);
+                refresh(&ui, &mut app);
+            }
+        })
+    };
+    crate::discovery::install(&w, discovery_get, discovery_apply);
     let account_timer = crate::account::install(&w, account_get, account_apply);
     std::mem::forget(account_timer);
     let search_timer = slint::Timer::default();

@@ -57,7 +57,7 @@ fn bridge_class(env: &mut JNIEnv, activity: &JObject) -> jni::errors::Result<Glo
     // Concurrent startup polls must use the winning loader and its one message queue.
     Ok(BRIDGE.get().unwrap().clone())
 }
-/// All WebView and video view operations run on Android's Java UI thread.
+/// Platform video and media operations run on Android's Java UI thread.
 pub fn bridge_call(method: &str, payload: &str) -> Result<(), String> {
     let app = app()?;
     let current = app.clone();

@@ -91,6 +91,42 @@ pub struct ImportedPlaylist {
     pub name: String,
     pub tracks: Vec<Track>,
 }
+/// Keep playlists created by the retired account-scoped Spotify importer when
+/// the same source is later imported through the public URL path. Only reuse a
+/// single well-formed legacy ID; ambiguous account histories remain untouched.
+pub fn reuse_legacy_spotify_identity(store: &Store, incoming: &mut ImportedPlaylist) {
+    if !incoming.id.starts_with("spotify-")
+        || store
+            .playlists
+            .iter()
+            .any(|playlist| playlist.id == incoming.id)
+    {
+        return;
+    }
+    let Some((_, source_id)) = incoming.id.rsplit_once('-') else {
+        return;
+    };
+    if source_id.len() != 22 || !source_id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return;
+    }
+    let mut legacy = store.playlists.iter().filter(|playlist| {
+        let Some(rest) = playlist.id.strip_prefix("spotify-") else {
+            return false;
+        };
+        let Some((owner_hash, playlist_id)) = rest.split_once('-') else {
+            return false;
+        };
+        playlist_id == source_id
+            && owner_hash.len() == 8
+            && owner_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+    });
+    let Some(playlist) = legacy.next() else {
+        return;
+    };
+    if legacy.next().is_none() {
+        incoming.id = playlist.id.clone();
+    }
+}
 pub fn local_id(provider: Provider, owner: &str, id: &str) -> String {
     if provider == Provider::Youtube && id != "LM" {
         return format!("youtube-{id}");

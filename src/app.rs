@@ -16,6 +16,7 @@ struct App {
     visible: Vec<Track>,
     page_results: std::collections::HashMap<String, Vec<Track>>,
     library: Vec<Track>,
+    library_view: LibraryViewState,
     local_paths: std::collections::HashSet<String>,
     queue: Queue,
     current: Option<Track>,
@@ -31,6 +32,9 @@ struct App {
     tx: mpsc::Sender<Event>,
     loading: bool,
     scanning: bool,
+    scan_generation: u64,
+    scan_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    source_status: String,
     #[cfg(target_os = "android")]
     permission_wait_started: Option<Instant>,
     search_generation: u64,
@@ -50,6 +54,8 @@ struct App {
     load_generation: Arc<std::sync::atomic::AtomicU64>,
     load_task: Option<tokio::task::JoinHandle<()>>,
     download_pending: std::collections::HashSet<String>,
+    download_progress: std::collections::HashMap<String, i32>,
+    download_tasks: std::collections::HashMap<String, tokio::task::AbortHandle>,
     load_gate: Arc<std::sync::Mutex<()>>,
     last_playing: Option<(Track, String)>,
     pending_tag_path: Option<String>,
@@ -100,13 +106,16 @@ impl ArtworkQueue {
 }
 enum Event {
     Match(String, Result<local_sync::TagSnapshot, String>),
-    Scan(Vec<Track>, String),
+    Scan(u64, Vec<Track>, String),
     #[cfg(target_os = "android")]
-    ScanFailed(String),
+    ScanFailed(u64, String),
     Search(u64, Option<String>, Result<Vec<Track>, String>),
+    Collection(u64, Result<Vec<Track>, String>),
     HomeRecommendations(u64, Result<(Vec<Track>, bool), String>),
     Loaded(u64, String, Result<String, String>),
     Downloaded(Track, Result<Option<String>, String>),
+    DownloadProgress(String, u64, Option<u64>),
+    Relink(String, Result<Track, String>),
     Lyrics(String, u64, Result<Vec<LyricsAlternative>, String>),
     LyricsPreview(String, u64, Vec<LyricsAlternative>),
     Enriched(
@@ -116,7 +125,6 @@ enum Event {
     Art(String, Result<image::RgbaImage, String>),
     Message(String),
     Jwt(Result<ls::JwtCache, String>),
-    AuthReady(Result<ls::JwtCache, String>),
 }
 fn model<T: Clone + 'static>(rows: Vec<T>) -> ModelRc<T> {
     ModelRc::from(Rc::new(VecModel::from(rows)))
@@ -168,6 +176,11 @@ fn art_image(a: &App, t: &Track) -> slint::Image {
         .unwrap_or_default()
 }
 fn row(a: &App, t: &Track, local_paths: &std::collections::HashSet<String>) -> TrackRow {
+    let local_key = normalize_path(&t.path);
+    let local = !crate::services::key_is_remote(&t.path);
+    let downloaded = a.store.downloads.contains_key(&t.path)
+        || local_paths.contains(&local_key)
+        || a.store.downloads.values().any(|path| normalize_path(path) == local_key);
     TrackRow {
         title: t.title.clone().into(),
         artist: t.artist.clone().into(),
@@ -176,9 +189,11 @@ fn row(a: &App, t: &Track, local_paths: &std::collections::HashSet<String>) -> T
         path: t.path.clone().into(),
         art: art_image(a, t),
         liked: a.store.is_liked(t),
-        downloaded: a.store.downloads.contains_key(&t.path)
-            || local_paths.contains(&normalize_path(&t.path)),
+        downloaded,
         downloading: a.download_pending.contains(&t.path),
+        download_progress: a.download_progress.get(&t.path).copied().unwrap_or(-1),
+        selected: a.library_view.selected.contains(&a.store.identity_key(t)),
+        missing: local && !downloaded,
     }
 }
 fn is_downloaded(a: &App, path: &str) -> bool {
@@ -226,10 +241,13 @@ fn refresh_media_rows(w: &MainWindow, a: &App, art_changed: Option<&str>) {
                     let downloaded = a.store.downloads.contains_key(row.path.as_str())
                         || local_paths.contains(&normalize_path(row.path.as_str()));
                     let downloading = a.download_pending.contains(row.path.as_str());
-                    let mut changed =
-                        row.downloaded != downloaded || row.downloading != downloading;
+                    let progress = a.download_progress.get(row.path.as_str()).copied().unwrap_or(-1);
+                    let mut changed = row.downloaded != downloaded
+                        || row.downloading != downloading
+                        || row.download_progress != progress;
                     row.downloaded = downloaded;
                     row.downloading = downloading;
+                    row.download_progress = progress;
                     if let Some(art) = a.art.get(row.path.as_str()) {
                         if row.art != *art {
                             row.art = art.clone();
@@ -246,10 +264,12 @@ fn refresh_media_rows(w: &MainWindow, a: &App, art_changed: Option<&str>) {
     if let Some(track) = &a.current {
         w.set_current_downloaded(is_downloaded(a, &track.path));
         w.set_current_downloading(a.download_pending.contains(&track.path));
+        w.set_current_download_progress(a.download_progress.get(&track.path).copied().unwrap_or(-1));
         w.set_current_local(local_file(a, track).is_some());
     }
 }
 fn refresh(w: &MainWindow, a: &mut App) {
+    w.set_home_revision(w.get_home_revision().wrapping_add(1));
     // Build the local-file reverse lookup once, rather than once per row.
     let mut local_paths = a.local_paths.clone();
     local_paths.extend(a.store.downloads.values().map(|p| normalize_path(p)));
@@ -262,7 +282,18 @@ fn refresh(w: &MainWindow, a: &mut App) {
                 a.store.history.iter().map(|h| h.track.clone()).collect()
             }
         }
-        "library" => a.library.clone(),
+        "library" => {
+            if matches!(a.library_view.category, LibraryCategory::Albums | LibraryCategory::Artists | LibraryCategory::Playlists) {
+                Vec::new()
+            } else {
+                let source = if a.library_view.filter == LibraryFilter::Excluded {
+                    a.store.excluded_library_tracks()
+                } else {
+                    a.library.clone()
+                };
+                a.library_view.apply(&a.store, &source, |track| is_downloaded(a, &track.path))
+            }
+        }
         "liked" => a
             .store
             .library_tracks()
@@ -317,6 +348,50 @@ fn refresh(w: &MainWindow, a: &mut App) {
     if matches!(view.as_str(), "search" | "explore") {
         a.page_results.insert(view.clone(), a.visible.clone());
     }
+    let library_count = if a.library_view.filter == LibraryFilter::Excluded {
+        a.store.excluded_library_tracks().len()
+    } else {
+        a.library.len()
+    };
+    w.set_library_category_index(match a.library_view.category {
+        LibraryCategory::Songs => 0,
+        LibraryCategory::Albums => 1,
+        LibraryCategory::Artists => 2,
+        LibraryCategory::Playlists => 3,
+        LibraryCategory::Downloads => 4,
+    });
+    w.set_library_total_count(library_count as i32);
+    w.set_library_selected_count(a.library_view.selected.len() as i32);
+    w.set_library_scanning(a.scanning);
+    w.set_library_source_status(a.source_status.clone().into());
+    refresh_queue_view(w, a);
+    let selected_tracks: Vec<_> = a
+        .library
+        .iter()
+        .filter(|track| a.library_view.selected.contains(&a.store.identity_key(track)))
+        .collect();
+    w.set_library_selection_all_liked(
+        !selected_tracks.is_empty() && selected_tracks.iter().all(|track| a.store.is_liked(track)),
+    );
+    let collection_source = if a.library_view.filter == LibraryFilter::Excluded {
+        a.store.excluded_library_tracks()
+    } else {
+        a.library.clone()
+    };
+    let collections = a.library_view.collections(&a.store, &collection_source, |track| is_downloaded(a, &track.path));
+    if !a.snapshot {
+        for collection in &collections {
+            load_art(a, &collection.representative);
+        }
+    }
+    w.set_library_collections(model(collections.iter().map(|collection| LibraryCollectionRow {
+        kind: collection.kind.clone().into(),
+        key: collection.key.clone().into(),
+        title: collection.title.clone().into(),
+        subtitle: if collection.kind == "playlist" { String::new() } else { collection.subtitle.clone() }.into(),
+        count: collection.track_count.to_string().into(),
+        art: art_image(a, &collection.representative),
+    }).collect()));
     // Seed all local page objects without navigating or starting network work.
     if !w.get_pages_seeded() {
         let home = if a.store.history.is_empty() {
@@ -369,6 +444,7 @@ fn refresh(w: &MainWindow, a: &mut App) {
         w.set_current_disliked(a.store.is_disliked(t));
         w.set_current_downloaded(is_downloaded(a, &t.path));
         w.set_current_downloading(a.download_pending.contains(&t.path));
+        w.set_current_download_progress(a.download_progress.get(&t.path).copied().unwrap_or(-1));
         w.set_current_local(local_file(a, t).is_some());
         w.set_current_art(art_image(a, t));
         w.set_current_album(t.album.clone().into());
@@ -461,6 +537,14 @@ fn refresh_playlists(w: &MainWindow, a: &App) {
             .collect(),
     ));
 }
+fn refresh_queue_view(w: &MainWindow, a: &App) {
+    let mut local_paths = a.local_paths.clone();
+    local_paths.extend(a.store.downloads.values().map(|path| normalize_path(path)));
+    w.set_queue_tracks(model(
+        a.queue.tracks.iter().map(|track| row(a, track, &local_paths)).collect(),
+    ));
+    w.set_queue_current_index(a.queue.index.map_or(-1, |index| index as i32));
+}
 fn playlist_detail(p: &Playlist) -> String {
     let author = if p.author.trim().is_empty() { "Ви" } else { p.author.trim() };
     let days = crate::services::now_ms().saturating_sub(p.updated_at) / 86_400_000;
@@ -488,7 +572,7 @@ fn scan(a: &Shared, w: &MainWindow) {
             return;
         }
     }
-    let sources = a
+    let sources: Vec<core::LibrarySource> = a
         .store
         .sources
         .iter()
@@ -502,28 +586,62 @@ fn scan(a: &Shared, w: &MainWindow) {
             path: s.path.clone(),
         })
         .collect();
+    let mut source_labels: std::collections::HashMap<String, String> = sources
+        .iter()
+        .map(|source| {
+            let label = std::path::Path::new(&source.path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or(&source.path)
+                .to_owned();
+            (source.id.clone(), label)
+        })
+        .collect();
+    #[cfg(not(target_os = "android"))]
+    source_labels.insert("system-music".into(), "Музична папка".into());
+    a.scan_generation = a.scan_generation.wrapping_add(1);
+    let generation = a.scan_generation;
     let tx = a.tx.clone();
     a.scanning = true;
     w.set_status("Сканування бібліотеки…".into());
+    w.set_library_scanning(true);
+    let cancellation = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    a.scan_cancel = Some(cancellation.clone());
     a.rt.spawn_blocking(move || {
         #[cfg(not(target_os = "android"))]
-        let result = core::scan_library(sources);
+        let result = core::scan_library_cancellable(sources, cancellation.clone());
         #[cfg(target_os = "android")]
-        let result = match core::scan_android_library(sources) {
+        let result = match core::scan_android_library_cancellable(sources, cancellation.clone()) {
             Ok(result) => result,
             Err(error) => {
-                let _ = tx.send(Event::ScanFailed(error));
+                let _ = tx.send(Event::ScanFailed(generation, error));
                 return;
             }
         };
         let status = result
             .source_statuses
             .iter()
-            .filter_map(|s| s.detail.as_deref())
+            .map(|source| {
+                let locale = crate::i18n::current();
+                let label = source_labels
+                    .get(&source.source_id)
+                    .map(String::as_str)
+                    .unwrap_or("Музичне сховище");
+                let label = crate::i18n::translate(locale, label);
+                let state = match source.state {
+                    core::SourceScanState::Ready => "доступне",
+                    core::SourceScanState::Empty => "порожнє",
+                    core::SourceScanState::Unavailable => "недоступне",
+                };
+                let state = crate::i18n::translate(locale, state);
+                let count = crate::i18n::translate(locale, &format!("Треків: {}", source.track_count));
+                format!("{label}: {state} · {count}")
+            })
             .collect::<Vec<_>>()
             .join(" · ");
         let status = if status.is_empty() {
-            format!("Знайдено композицій: {}", result.tracks.len())
+            crate::i18n::translate(crate::i18n::current(), &format!("Знайдено композицій: {}", result.tracks.len()))
         } else {
             status
         };
@@ -540,7 +658,7 @@ fn scan(a: &Shared, w: &MainWindow) {
                 ..Default::default()
             })
             .collect();
-        let _ = tx.send(Event::Scan(tracks, status));
+        let _ = tx.send(Event::Scan(generation, tracks, status));
     });
 }
 fn browse(a: &Shared, w: &MainWindow, query: Option<String>, radio: bool) {
@@ -744,7 +862,9 @@ fn queue_art(a: &mut App, track: &Track, priority: bool) {
     pump_art(a);
 }
 
-const MAX_ART_IN_FLIGHT: usize = 6;
+// Keep cover decoding and Slint texture uploads from arriving in large bursts
+// while pages move. A third slot is still reserved for the selected track.
+const MAX_ART_IN_FLIGHT: usize = 2;
 
 fn can_start_art(pending: usize, current_waiting: bool) -> bool {
     pending < MAX_ART_IN_FLIGHT || (pending == MAX_ART_IN_FLIGHT && current_waiting)
@@ -874,6 +994,7 @@ fn start(a: &Shared, w: &MainWindow, track: Track) {
     w.set_current_downloading(a.download_pending.contains(&track.path));
     w.set_current_local(local_file(&a, &track).is_some());
     w.set_current_track_key(track.path.clone().into());
+    refresh_queue_view(w, &a);
     w.set_current_video_id(track.video_id.clone().unwrap_or_default().into());
     w.set_current_clip_video_id(track.clip_video_id.clone().unwrap_or_default().into());
     w.set_current_title(track.title.clone().into());
@@ -1062,6 +1183,13 @@ fn selected(a: &App, index: i32) -> Option<Track> {
         a.visible.get(index as usize).cloned()
     }
 }
+fn selected_library_tracks(a: &App) -> Vec<Track> {
+    let tracks = a.library.iter().cloned().chain(a.store.excluded_library_tracks());
+    deduplicate_tracks(tracks)
+        .into_iter()
+        .filter(|track| a.library_view.selected.contains(&a.store.identity_key(track)))
+        .collect()
+}
 fn report(w: &MainWindow, result: Result<(), String>) {
     if let Err(e) = result {
         w.set_status(e.into());
@@ -1208,6 +1336,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         visible: vec![],
         page_results: std::collections::HashMap::new(),
         library: vec![],
+        library_view: LibraryViewState::default(),
         local_paths: Default::default(),
         queue: Queue::default(),
         current: None,
@@ -1223,6 +1352,9 @@ pub fn run() -> Result<(), slint::PlatformError> {
         tx,
         loading: false,
         scanning: false,
+        scan_generation: 0,
+        scan_cancel: None,
+        source_status: String::new(),
         #[cfg(target_os = "android")]
         permission_wait_started: None,
         search_generation: 0,
@@ -1242,6 +1374,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
         load_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         load_task: None,
         download_pending: Default::default(),
+        download_progress: Default::default(),
+        download_tasks: Default::default(),
         load_gate: Arc::new(std::sync::Mutex::new(())),
         last_playing: None,
         pending_tag_path: None,
@@ -1308,6 +1442,20 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
     });
     bind!(on_navigate, |ui, state, view| {
+        if view != "explore" {
+            ui.set_catalog_kind("".into());
+            ui.set_catalog_subtitle("".into());
+            ui.set_catalog_art(slint::Image::default());
+            ui.set_catalog_track_count(0);
+        }
+        if view == "explore" && !ui.get_catalog_title().is_empty() {
+            ui.set_catalog_title("".into());
+            ui.set_catalog_kind("".into());
+            ui.set_catalog_subtitle("".into());
+            ui.set_catalog_art(slint::Image::default());
+            ui.set_catalog_track_count(0);
+            state.borrow_mut().page_results.remove("explore");
+        }
         ui.set_status("".into());
         state.borrow_mut().search_generation += 1;
         state.borrow_mut().pending_search = None;
@@ -1332,7 +1480,81 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
     });
     bind!(on_refresh_explore, |ui, state| {
+        ui.set_catalog_title("".into());
         browse(state, &ui, None, false);
+    });
+    bind!(on_request_discovery_art, |ui, state, json| {
+        if let Ok(track) = serde_json::from_str::<Track>(&json) {
+            let mut app = state.borrow_mut();
+            if let Some(art) = art_keys(&app, &track)
+                .iter()
+                .find_map(|key| app.art.get(key).cloned())
+            {
+                crate::discovery::update_art(&ui, &track.path, &art);
+            } else {
+                load_art(&mut app, &track);
+            }
+        }
+    });
+    bind!(on_play_discovery_items, |ui, state, json, video| {
+        let Ok(selection) = serde_json::from_str::<crate::discovery::Selection>(&json) else {
+            return;
+        };
+        let track = {
+            let mut app = state.borrow_mut();
+            app.queue.select(selection.tracks, selection.index)
+        };
+        if let Some(track) = track {
+            if video && ui.get_art_mode() != "clip" {
+                ui.invoke_change_art_mode();
+            }
+            start(state, &ui, track);
+            if video {
+                ui.set_active_view("lyrics".into());
+            }
+        }
+    });
+    bind!(on_open_discovery_collection, |ui, state, id, json| {
+        let Ok(context) = serde_json::from_str::<crate::discovery::Item>(&json) else {
+            return;
+        };
+        if id.is_empty() {
+            let mut app = state.borrow_mut();
+            if let Some(tracks) = context.local_collection(&app.store) {
+                app.search_generation = app.search_generation.wrapping_add(1);
+                if let Some(task) = app.search_task.take() {
+                    task.abort();
+                }
+                app.visible = tracks;
+                ui.set_catalog_title(context.title.clone().into());
+                ui.set_catalog_kind(context.kind.clone().into());
+                ui.set_catalog_subtitle(if context.kind == "album" { context.artist.clone() } else { String::new() }.into());
+                ui.set_catalog_art(app.visible.first().map(|track| art_image(&app, track)).unwrap_or_default());
+                ui.set_catalog_track_count(app.visible.len() as i32);
+                ui.set_active_view("explore".into());
+                ui.set_status("".into());
+                refresh(&ui, &mut app);
+            }
+            return;
+        }
+        ui.set_catalog_title(context.title.clone().into());
+        ui.set_active_view("explore".into());
+        let mut app = state.borrow_mut();
+        app.search_generation = app.search_generation.wrapping_add(1);
+        if let Some(task) = app.search_task.take() {
+            task.abort();
+        }
+        let generation = app.search_generation;
+        let tx = app.tx.clone();
+        app.visible.clear();
+        refresh(&ui, &mut app);
+        ui.set_status("Завантаження з YouTube Music…".into());
+        app.search_task = Some(app.rt.spawn(async move {
+            let result = core::ytm_collection_tracks(id.to_string())
+                .await
+                .map(|tracks| context.collection_tracks(tracks));
+            let _ = tx.send(Event::Collection(generation, result));
+        }));
     });
     bind!(on_request_home_recommendations, |ui, state| {
         load_home_recommendations(state, &ui);
@@ -1386,6 +1608,14 @@ pub fn run() -> Result<(), slint::PlatformError> {
         if let Some(t) = track {
             start(state, &ui, t);
         }
+    });
+    bind!(on_select_queue_track, |ui, state, index| {
+        let track = {
+            let mut a = state.borrow_mut();
+            let queue = a.queue.tracks.clone();
+            a.queue.select(queue, index.max(0) as usize)
+        };
+        if let Some(track) = track { start(&state, &ui, track); }
     });
     bind!(on_play_toggle, |ui, state| {
         let a = state.borrow();
@@ -1548,6 +1778,279 @@ pub fn run() -> Result<(), slint::PlatformError> {
     bind!(on_scan, |ui, state| {
         scan(state, &ui);
     });
+    bind!(on_library_view_changed, |ui, state| {
+        let mut a = state.borrow_mut();
+        a.library_view.query = ui.get_library_query().to_string();
+        a.library_view.filter = LibraryFilter::from_index(ui.get_library_filter_index());
+        a.library_view.sort = LibrarySort::from_index(ui.get_library_sort_index());
+        a.library_view.category = LibraryCategory::from_index(ui.get_library_category_index());
+        refresh(&ui, &mut a);
+    });
+    bind!(on_open_library_collection, |ui, state, kind, key| {
+        let mut a = state.borrow_mut();
+        if kind == "playlist" {
+            a.playlist = key.to_string();
+            if let Some(playlist) = a.store.playlists.iter().find(|playlist| playlist.id == key.as_str()) {
+                ui.set_playlist_title(playlist.name.clone().into());
+                ui.set_active_view("playlist".into());
+                refresh(&ui, &mut a);
+            }
+            return;
+        }
+        let source = if a.library_view.filter == LibraryFilter::Excluded {
+            a.store.excluded_library_tracks()
+        } else {
+            a.library.clone()
+        };
+        let Some(collection) = a.library_view.collections(&a.store, &source, |track| is_downloaded(&a, &track.path))
+            .into_iter()
+            .find(|collection| collection.kind == kind.as_str() && collection.key == key.as_str())
+        else { return; };
+        a.visible = collection.tracks.clone();
+        ui.set_catalog_title(collection.title.clone().into());
+        ui.set_catalog_kind(collection.kind.clone().into());
+        ui.set_catalog_subtitle(collection.subtitle.clone().into());
+        ui.set_catalog_art(art_image(&a, &collection.representative));
+        ui.set_catalog_track_count(collection.track_count as i32);
+        ui.set_active_view("explore".into());
+        ui.set_status("".into());
+        refresh(&ui, &mut a);
+    });
+    bind!(on_library_collection_action, |ui, state, action| {
+        let mut a = state.borrow_mut();
+        if a.visible.is_empty() { return; }
+        let mut tracks = a.visible.clone();
+        if action == "queue" {
+            a.queue.append(tracks);
+            refresh(&ui, &mut a);
+            ui.set_status("Добірку додано до черги".into());
+        } else {
+            if action == "shuffle" { tracks = shuffle_tracks(tracks); }
+            a.queue.shuffle = a.store.settings.shuffle;
+            a.queue.repeat = a.store.settings.repeat.clone();
+            let first = a.queue.select(tracks, 0);
+            drop(a);
+            if let Some(track) = first { start(&state, &ui, track); }
+        }
+    });
+    bind!(on_library_track_action, |ui, state, index, action| {
+        let mut a = state.borrow_mut();
+        let Some(track) = a.visible.get(index.max(0) as usize).cloned() else { return; };
+        match action.as_str() {
+            "like" => {
+                a.store.toggle_like_track(&track);
+                persist(&ui, &a);
+                refresh(&ui, &mut a);
+            }
+            "queue" | "next" => {
+                if action == "next" {
+                    if a.current.is_none() {
+                        a.queue.insert_next([track]);
+                        a.queue.index = Some(0);
+                        let first = a.queue.tracks.first().cloned();
+                        drop(a);
+                        if let Some(first) = first { start(&state, &ui, first); }
+                        return;
+                    }
+                    a.queue.insert_next([track]);
+                } else {
+                    a.queue.append([track]);
+                }
+                refresh(&ui, &mut a);
+                ui.set_status(if action == "next" { "Композицію поставлено наступною" } else { "Композицію додано до черги" }.into());
+            }
+            "add" => ui.set_dialog("add".into()),
+            "download" => {
+                drop(a);
+                ui.invoke_download(index);
+            }
+            "relink" => {
+                drop(a);
+                ui.invoke_relink_track(index);
+            }
+            "remove" => {
+                a.library_view.selected.clear();
+                let key = a.store.identity_key(&track);
+                a.library_view.selected.insert(key);
+                refresh(&ui, &mut a);
+                ui.set_dialog("confirm-library-remove".into());
+            }
+            _ => {}
+        }
+    });
+    bind!(on_toggle_library_selection, |ui, state, index| {
+        let mut a = state.borrow_mut();
+        if let Some(track) = selected(&a, index) {
+            let key = a.store.identity_key(&track);
+            if !a.library_view.selected.remove(&key) {
+                a.library_view.selected.insert(key);
+            }
+            refresh(&ui, &mut a);
+        }
+    });
+    bind!(on_library_bulk_action, |ui, state, action| {
+        let mut a = state.borrow_mut();
+        let selected = selected_library_tracks(&a);
+        if action == "select-all" {
+            let keys: Vec<_> = a.visible.iter().map(|track| a.store.identity_key(track)).collect();
+            a.library_view.selected.extend(keys);
+        } else if action == "clear-selection" {
+            a.library_view.selected.clear();
+        } else if action == "playlist" {
+            ui.set_dialog("bulk-add".into());
+        } else if action == "remove" {
+            ui.set_dialog("confirm-library-remove".into());
+        } else if action == "confirm-remove" || action == "restore" {
+            let excluded = action == "confirm-remove";
+            for track in &selected {
+                if !crate::services::key_is_remote(&track.path) {
+                    a.store.set_library_excluded(track, excluded);
+                }
+            }
+            a.library_view.selected.clear();
+            a.library = a.store.library_tracks();
+            persist(&ui, &a);
+            ui.set_status(if excluded {
+                "Композиції прибрано з Vey. Файли залишилися на пристрої.".into()
+            } else {
+                "Композиції повернуто до бібліотеки".into()
+            });
+            refresh(&ui, &mut a);
+        } else if action == "like" {
+            let all_liked = !selected.is_empty()
+                && selected.iter().all(|track| a.store.is_liked(track));
+            for track in &selected {
+                if a.store.is_liked(track) != !all_liked {
+                    a.store.toggle_like_track(track);
+                }
+            }
+            persist(&ui, &a);
+            refresh(&ui, &mut a);
+        } else if action == "queue" || action == "next" {
+            let start_next = action == "next" && a.current.is_none() && !selected.is_empty();
+            if action == "next" { a.queue.insert_next(selected); } else { a.queue.append(selected); }
+            let next = if start_next {
+                a.queue.index = Some(0);
+                a.queue.tracks.first().cloned()
+            } else { None };
+            if let Some(track) = next {
+                drop(a);
+                start(&state, &ui, track);
+                return;
+            }
+            refresh(&ui, &mut a);
+            ui.set_status("Композиції додано до черги".into());
+        } else if action == "play" && !selected.is_empty() {
+            a.queue.shuffle = a.store.settings.shuffle;
+            a.queue.repeat = a.store.settings.repeat.clone();
+            let track = a.queue.select(selected, 0);
+            drop(a);
+            if let Some(track) = track { start(&state, &ui, track); }
+            return;
+        }
+    });
+    bind!(on_add_selected_to_playlist, |ui, state, id| {
+        let mut a = state.borrow_mut();
+        let selected = selected_library_tracks(&a);
+        for track in selected {
+            a.store.remember(track.clone());
+            a.store.playlist_add_track(&id, &track);
+        }
+        a.library_view.selected.clear();
+        persist(&ui, &a);
+        ui.set_dialog("".into());
+        refresh(&ui, &mut a);
+    });
+    bind!(on_queue_track, |ui, state, index, play_next| {
+        let mut a = state.borrow_mut();
+        if let Some(track) = selected(&a, index) {
+            if play_next {
+                if a.current.is_none() {
+                    a.queue.insert_next([track]);
+                    a.queue.index = Some(0);
+                    let first = a.queue.tracks.first().cloned();
+                    drop(a);
+                    if let Some(first) = first { start(&state, &ui, first); }
+                    return;
+                }
+                a.queue.insert_next([track]);
+            } else {
+                a.queue.append([track]);
+            }
+            refresh(&ui, &mut a);
+            ui.set_status(if play_next { "Додано наступною композицією" } else { "Додано до черги" }.into());
+        }
+    });
+    bind!(on_move_list_item, |ui, state, index, delta| {
+        let mut a = state.borrow_mut();
+        let from = index.max(0) as usize;
+        let to = (from as i32 + delta).max(0) as usize;
+        let moved = match ui.get_active_view().as_str() {
+            "queue" => a.queue.move_item(from, to),
+            "playlist" => {
+                let id = a.playlist.clone();
+                let moved = a.store.move_playlist_track(&id, from, to);
+                if moved {
+                    if let Some(playlist) = a.store.playlists.iter().find(|item| item.id == id) {
+                        let keys: Vec<_> = a.queue.tracks.iter().map(|track| a.store.identity_key(track)).collect();
+                        if keys == playlist.tracks {
+                            a.queue.move_item(from, to);
+                        }
+                    }
+                }
+                moved
+            }
+            _ => false,
+        };
+        if moved {
+            persist(&ui, &a);
+            refresh(&ui, &mut a);
+        }
+    });
+    bind!(on_remove_queue_item, |ui, state, index| {
+        let mut a = state.borrow_mut();
+        if a.queue.remove(index.max(0) as usize).is_some() {
+            refresh(&ui, &mut a);
+        }
+    });
+    bind!(on_clear_queue, |ui, state| {
+        let mut a = state.borrow_mut();
+        a.queue.clear();
+        refresh(&ui, &mut a);
+        ui.set_status("Чергу очищено. Поточне відтворення триває.".into());
+    });
+    #[cfg(not(target_os = "android"))]
+    bind!(on_relink_track, |ui, state, index| {
+        let old = {
+            let a = state.borrow();
+            selected(&a, index)
+        };
+        let Some(old) = old else { return; };
+        let old_path = old.path.clone();
+        let tx = state.borrow().tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let result = (|| -> Result<Track, String> {
+                let path = crate::dialogs::FileDialog::new()
+                    .add_filter("Музика", &["mp3", "flac", "wav", "m4a", "opus", "ogg"])
+                    .pick_file()
+                    .ok_or_else(|| "Файл не вибрано".to_string())?;
+                let scan = core::scan_library(vec![core::LibrarySource {
+                    id: "relink".into(),
+                    kind: core::LibrarySourceKind::File,
+                    path: path.to_string_lossy().into_owned(),
+                }]);
+                let meta = scan.tracks.into_iter().next().ok_or_else(|| "У вибраному файлі не знайдено підтримувану композицію".to_string())?;
+                Ok(Track { path: meta.path, title: meta.title, artist: meta.artist, album: meta.album, duration_secs: meta.duration_secs, video_id: meta.video_id, thumbnail_url: String::new(), ..Default::default() })
+            })();
+            let _ = tx.send(Event::Relink(old_path, result));
+        });
+        ui.set_status("Виберіть файл для відновлення композиції".into());
+    });
+    #[cfg(target_os = "android")]
+    bind!(on_relink_track, |ui, state, _index| {
+        ui.set_status("Оновлюємо доступні файли пристрою…".into());
+        scan(state, &ui);
+    });
     #[cfg(target_os = "android")]
     bind!(on_add_source, |ui, state, _kind| {
         // Shared audio is discovered by MediaStore, not a desktop path picker.
@@ -1598,6 +2101,10 @@ pub fn run() -> Result<(), slint::PlatformError> {
         let mut a = state.borrow_mut();
         if index >= 0 && (index as usize) < a.store.sources.len() {
             a.store.sources.remove(index as usize);
+            if let Some(cancellation) = a.scan_cancel.take() {
+                cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            a.scanning = false;
             persist(&ui, &a);
             drop(a);
             scan(state, &ui);
@@ -1606,14 +2113,42 @@ pub fn run() -> Result<(), slint::PlatformError> {
     bind!(on_create_playlist, |ui, state, name| {
         let mut a = state.borrow_mut();
         if let Some(id) = a.store.create_playlist(&name) {
-            if ui.get_adding_to_new_playlist() {
-                if let Some(track) = a.current.clone() {
+            if ui.get_bulk_adding_to_new_playlist() {
+                let selected = selected_library_tracks(&a);
+                for track in selected {
+                    a.store.remember(track.clone());
+                    a.store.playlist_add_track(&id, &track);
+                }
+                a.library_view.selected.clear();
+            } else if ui.get_adding_to_new_playlist() {
+                let pending_index = ui.get_library_action_index();
+                let selected_track = if pending_index >= 0 {
+                    a.visible.get(pending_index as usize).cloned()
+                } else {
+                    a.current.clone()
+                };
+                if let Some(track) = selected_track {
                     a.store.remember(track.clone());
                     a.store.playlist_add_track(&id, &track);
                 }
             }
             persist(&ui, &a);
             refresh(&ui, &mut a);
+        }
+        ui.set_library_action_index(-1);
+    });
+    bind!(on_rename_playlist, |ui, state, name| {
+        let mut a = state.borrow_mut();
+        let id = a.playlist.clone();
+        if a.store.rename_playlist(&id, &name) {
+            ui.set_playlist_title(name.trim().into());
+            persist(&ui, &a);
+            if ui.get_account_signed_in() {
+                ui.invoke_account_command("push".into());
+            }
+            refresh(&ui, &mut a);
+        } else {
+            ui.set_status("Введіть назву плейлиста".into());
         }
     });
     bind!(on_open_playlist, |ui, state, id| {
@@ -1646,21 +2181,31 @@ pub fn run() -> Result<(), slint::PlatformError> {
     });
     bind!(on_add_to_playlist, |ui, state, id| {
         let mut a = state.borrow_mut();
-        if let Some(t) = a.current.clone() {
+        let pending_index = ui.get_library_action_index();
+        let selected_track = if pending_index >= 0 {
+            a.visible.get(pending_index as usize).cloned()
+        } else {
+            a.current.clone()
+        };
+        if let Some(t) = selected_track {
             a.store.remember(t.clone());
             a.store.playlist_add_track(&id, &t);
             persist(&ui, &a);
             refresh(&ui, &mut a);
         }
+        ui.set_library_action_index(-1);
     });
     bind!(on_remove_from_playlist, |ui, state, index| {
         let mut a = state.borrow_mut();
         let id = a.playlist.clone();
         if let Some(t) = a.visible.get(index.max(0) as usize).cloned() {
+            let identity = a.store.identity_key(&t);
             if let Some(p) = a.store.playlists.iter_mut().find(|p| p.id == id) {
-                let before = p.tracks.len();
-                p.tracks.retain(|path| path != &t.path);
-                if before != p.tracks.len() { p.updated_at = crate::services::now_ms(); }
+                let position = index.max(0) as usize;
+                if p.tracks.get(position).is_some_and(|path| path == &t.path || path == &identity) {
+                    p.tracks.remove(position);
+                    p.updated_at = crate::services::now_ms();
+                }
             }
             persist(&ui, &a);
             refresh(&ui, &mut a);
@@ -1827,6 +2372,15 @@ pub fn run() -> Result<(), slint::PlatformError> {
     bind!(on_download, |ui, state, index| {
         let mut a = state.borrow_mut();
         if let Some(t) = selected(&a, index) {
+            if a.download_pending.remove(&t.path) {
+                if let Some(task) = a.download_tasks.remove(&t.path) {
+                    task.abort();
+                }
+                a.download_progress.remove(&t.path);
+                refresh_media_rows(&ui, &a, None);
+                ui.set_status("Завантаження скасовано".into());
+                return;
+            }
             if a.store
                 .downloads
                 .get(&t.path)
@@ -1844,19 +2398,27 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     return;
                 }
                 let tx = a.tx.clone();
+                let download_key = t.path.clone();
+                a.download_progress.insert(download_key.clone(), -1);
+                let progress_key = download_key.clone();
                 refresh_media_rows(&ui, &a, None);
                 ui.set_status("Завантаження файлу й обкладинки…".into());
-                a.rt.spawn(async move {
-                    let result = core::ytm_download_track_with_cover(
+                let task = a.rt.spawn(async move {
+                    let progress_tx = tx.clone();
+                    let result = core::ytm_download_track_with_cover_progress(
                         id,
                         t.title.clone(),
                         t.artist.clone(),
                         Some(t.album.clone()),
                         Some(t.thumbnail_url.clone()),
+                        move |current, total| {
+                            let _ = progress_tx.send(Event::DownloadProgress(progress_key.clone(), current, total));
+                        },
                     )
                     .await;
                     let _ = tx.send(Event::Downloaded(t, result));
                 });
+                a.download_tasks.insert(download_key, task.abort_handle());
             }
         }
     });
@@ -2211,8 +2773,11 @@ pub fn run() -> Result<(), slint::PlatformError> {
                         }
                         Err(e) => w.set_status(e.into()),
                     },
-                    Event::Scan(tracks, status) => {
+                    Event::Scan(generation, tracks, status) => {
+                        if generation != a.scan_generation { continue; }
                         a.scanning = false;
+                        a.scan_cancel = None;
+                        a.source_status = status.clone();
                         a.store
                             .downloads
                             .retain(|_, path| std::path::Path::new(path).is_file());
@@ -2244,9 +2809,30 @@ pub fn run() -> Result<(), slint::PlatformError> {
                         refresh_media_rows(&w, &a, None);
                     }
                     #[cfg(target_os = "android")]
-                    Event::ScanFailed(error) => {
+                    Event::ScanFailed(generation, error) => {
+                        if generation != a.scan_generation { continue; }
                         a.scanning = false;
+                        a.scan_cancel = None;
+                        a.source_status = error.clone();
+                        w.set_library_scanning(false);
+                        w.set_library_source_status(error.clone().into());
                         w.set_status(error.into());
+                    }
+                    Event::Collection(id, result) => {
+                        if id == a.search_generation {
+                            match result {
+                                Ok(tracks) => {
+                                    a.visible = tracks.clone();
+                                    a.store.remember_all(tracks);
+                                    persist(&w, &a);
+                                    refresh(&w, &mut a);
+                                    w.set_status("".into());
+                                }
+                                Err(_) => w.set_status(
+                                    "Не вдалося завантажити добірки. Спробуйте ще раз.".into(),
+                                ),
+                            }
+                        }
                     }
                     Event::Search(id, key, result) => {
                         if id == a.search_generation {
@@ -2331,8 +2917,20 @@ pub fn run() -> Result<(), slint::PlatformError> {
                             }
                         }
                     }
+                    Event::DownloadProgress(path, current, total) => {
+                        if a.download_pending.contains(&path) {
+                            let progress = total
+                                .filter(|total| *total > 0)
+                                .map(|total| ((current as f64 / total as f64) * 95.0).floor() as i32)
+                                .unwrap_or(-1);
+                            a.download_progress.insert(path, progress.clamp(-1, 95));
+                            refresh_media_rows(&w, &a, None);
+                        }
+                    }
                     Event::Downloaded(track, result) => {
                         a.download_pending.remove(&track.path);
+                        a.download_progress.remove(&track.path);
+                        a.download_tasks.remove(&track.path);
                         match result {
                             Ok(Some(path)) => {
                                 a.store.downloads.insert(track.path.clone(), path.clone());
@@ -2362,6 +2960,34 @@ pub fn run() -> Result<(), slint::PlatformError> {
                         }
                         refresh_media_rows(&w, &a, None);
                     }
+                    Event::Relink(old_path, result) => match result {
+                        Ok(replacement) => {
+                            let old_normalized = normalize_path(&old_path);
+                            let new_normalized = normalize_path(&replacement.path);
+                            let old_key = a.store.tracks.iter()
+                                .find(|track| track.path == old_path)
+                                .map(|track| a.store.identity_key(track));
+                            if a.store.relink_local_path(&old_path, replacement.clone()) {
+                                let new_key = a.store.identity_key(&replacement);
+                                if old_key.as_ref().is_some_and(|key| a.library_view.selected.remove(key)) {
+                                    a.library_view.selected.insert(new_key);
+                                }
+                                for queued in &mut a.queue.tracks {
+                                    if queued.path == old_path { *queued = replacement.clone(); }
+                                }
+                                a.local_paths.remove(&old_normalized);
+                                a.local_paths.insert(new_normalized);
+                                a.library = a.store.library_tracks();
+                                persist(&w, &a);
+                                w.set_status("Файл повторно прив’язано; збережені списки й уподобання залишилися".into());
+                                refresh(&w, &mut a);
+                            } else {
+                                w.set_status("Не вдалося знайти цей запис у бібліотеці".into());
+                            }
+                        }
+                        Err(error) if error == "Файл не вибрано" => {}
+                        Err(error) => w.set_status(error.into()),
+                    },
                     Event::Loaded(serial, path, result) => {
                         if a.load_generation.load(std::sync::atomic::Ordering::SeqCst) == serial
                             && a.current.as_ref().is_some_and(|t| t.path == path)
@@ -2501,14 +3127,27 @@ pub fn run() -> Result<(), slint::PlatformError> {
                             for key in &related {
                                 a.art_failed.remove(key);
                                 a.art.insert(key.clone(), art.clone());
+                                crate::discovery::update_art(&w, key, &art);
                                 refresh_media_rows(&w, &a, Some(key));
                             }
                             refresh_playlists(&w, &a);
+                            refresh_queue_view(&w, &a);
                             if a.current
                                 .as_ref()
                                 .is_some_and(|t| related.contains(&t.path))
                             {
-                                w.set_current_art(art);
+                                w.set_current_art(art.clone());
+                            }
+                            if w.get_active_view() == "explore"
+                                && w.get_catalog_kind() != ""
+                                && a.visible.first().is_some_and(|track| related.contains(&track.path))
+                            {
+                                w.set_catalog_art(art.clone());
+                            }
+                            if w.get_active_view() == "library"
+                                && matches!(a.library_view.category, LibraryCategory::Albums | LibraryCategory::Artists | LibraryCategory::Playlists)
+                            {
+                                refresh(&w, &mut a);
                             }
                         } else {
                             a.art_failed.retain(|_, failed| failed.elapsed() < Duration::from_secs(30));
@@ -2518,13 +3157,6 @@ pub fn run() -> Result<(), slint::PlatformError> {
                         pump_art(&mut a);
                     }
                     Event::Message(msg) => w.set_status(msg.into()),
-                    Event::AuthReady(result) => match result {
-                        Ok(jwt) => {
-                            a.jwt = jwt;
-                            w.set_jwt_status("JWT чинний · автоматично".into());
-                        }
-                        Err(e) => w.set_jwt_status(format!("Автоматична перевірка: {e}").into()),
-                    },
                     Event::Jwt(result) => match result {
                         Ok(jwt) => {
                             a.jwt = jwt;
@@ -2627,14 +3259,6 @@ pub fn run() -> Result<(), slint::PlatformError> {
     if snapshot {
         crate::snapshots::schedule(&w, a.clone());
     } else {
-        w.set_jwt_status("Автоматична перевірка…".into());
-        let app = a.borrow();
-        let tx = app.tx.clone();
-        app.rt.spawn(async move {
-            let result = ls::prewarm_authentication().await;
-            let _ = tx.send(Event::AuthReady(result));
-        });
-        drop(app);
         scan(&a, &w);
     }
     let account_get = {
@@ -2686,6 +3310,30 @@ pub fn run() -> Result<(), slint::PlatformError> {
         })
     };
     crate::home::install(&w, account_get.clone(), account_apply.clone());
+    let discovery_get = {
+        let state = a.clone();
+        Rc::new(move || state.borrow().store.clone())
+    };
+    let discovery_apply = {
+        let state = a.clone();
+        let weak = w.as_weak();
+        Rc::new(move |next: Store| {
+            if let Some(ui) = weak.upgrade() {
+                let mut app = state.borrow_mut();
+                app.store.remember_all(
+                    next.home_catalog
+                        .sections
+                        .iter()
+                        .flat_map(|s| s.items.iter())
+                        .filter_map(crate::discovery::Item::track),
+                );
+                app.store.home_catalog = next.home_catalog;
+                persist(&ui, &app);
+                refresh(&ui, &mut app);
+            }
+        })
+    };
+    crate::discovery::install(&w, discovery_get, discovery_apply);
     let _music_timer = crate::music_accounts::install(
         &w,
         account_get.clone(),

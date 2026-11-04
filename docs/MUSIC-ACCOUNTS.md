@@ -1,22 +1,35 @@
 # Playlist import and connected accounts
 
 Home and Library have an **Import playlist** action. Paste a public YouTube
-Music/YouTube playlist URL and import it without signing in. The desktop app
-uses its existing public catalog transport; the browser calls the same-origin
-Vey backend (`vey --web-server`). Static hosting alone cannot fetch playlists.
+Music/YouTube or Spotify playlist URL; neither public import needs a service
+account. The desktop app uses its public catalog transport; the browser calls
+the same-origin Vey backend (`vey --web-server`). Static hosting alone cannot
+fetch playlists.
 
-Import fetches all pages, preserves source order and repeated songs, and updates
-the same local playlist on another import. Unavailable entries with a real video
-ID retain their source position/reference; this does not make them playable.
-Unknown rows without an ID, pagination cycles and the 20,000-track limit fail the
-import rather than saving an incomplete replacement. Local edits conflict with later remote changes and remain intact.
-Remote deletions never delete Vey playlists.
+YouTube Music import fetches every page. Spotify public import reads the
+service's unauthenticated embed-page metadata, then matches every track to a
+YouTube Music song using exact normalized title/artist and a duration difference
+under eight seconds. Both preserve source order and repeated songs and update a
+stable local playlist identity. Spotify tracks are saved as `yt://VIDEO_ID`, so
+normal Vey/YouTube Music playback handles them; Spotify audio is never played.
+Unknown rows, ambiguous or missing matches, pagination cycles and import limits
+fail without replacing a playlist. Local edits conflict with later remote changes
+and remain intact. Remote deletions never delete Vey playlists. On upgrade, one
+unambiguous playlist created by the retired Spotify account importer keeps its
+existing local ID, avoiding a duplicate; ambiguous histories are left untouched.
+
+Spotify's public embed currently exposes at most 100 rows and gives no total count.
+If it returns 100, Vey refuses the import because it cannot prove the list is
+complete. Public playlists shorter than that are supported; private playlists
+and Spotify account playlists are not. This is an internal, undocumented page
+format and can change without notice.
 
 ## Choose an account
 
 Open **Connected accounts** from the import dialog or Settings → Account.
-Choose Vey, YouTube Music or Spotify. Connections are independent: connecting
-YouTube does not sign in to Vey, and Vey does not require a YouTube account.
+Choose Vey or YouTube Music. Connections are independent: connecting YouTube
+does not sign in to Vey, and Vey does not require a YouTube account. Spotify
+has no account connection; it is a public playlist import source only.
 
 - **Vey** uses the existing browser/QR login and cloud library synchronization.
   Imported video references and playlists use the deployed cloud schema. Enable
@@ -26,15 +39,15 @@ YouTube does not sign in to Vey, and Vey does not require a YouTube account.
   the newly opened tab after it reaches YouTube Music. It then pulls saved/private
   playlists through the signed-in site, including Liked Songs when listed.
   This does not mirror subscriptions, listening history or every library object.
-- **Spotify** imports playlist metadata and conservatively matches songs to the
-  existing Vey/YouTube catalog by normalized title, artist and duration. Successful
-  mappings are cached. Spotify audio is not downloaded or played. An unmatched
-  track, podcast or Spotify-local file leaves that playlist unchanged with an error.
+- **Spotify public playlists** are read without an account or developer app.
+  Metadata is matched to YTM IDs, then stored as ordinary YouTube Music tracks.
+  An unmatched track, podcast/other non-track row or ambiguous match leaves the
+  playlist unchanged with an error. No private account data is read.
 
-Each external connection has its own automatic pull switch. When enabled, it
-pulls after login/startup and every 15 minutes while Vey is running. Vey's own
-automatic cloud sync is a separate switch. Nothing writes back to YouTube or
-Spotify. Disconnecting retains imported playlists. Cancel invalidates the result
+YouTube Music has an automatic pull switch. When enabled, it pulls after
+login/startup and every 15 minutes while Vey is running. Vey's own automatic
+cloud sync is a separate switch. Nothing writes back to YouTube or Spotify.
+Disconnecting YouTube retains imported playlists. Cancel invalidates the result
 and aborts the native request task.
 
 ## Connect YouTube Music on desktop
@@ -81,33 +94,57 @@ The YouTube website interface is undocumented and may change. References:
 [DevTools Runtime](https://chromedevtools.github.io/devtools-protocol/tot/Runtime/)
 and [ytmusicapi’s library implementation](https://github.com/sigma67/ytmusicapi/blob/main/ytmusicapi/mixins/library.py).
 
-### Spotify
+### Spotify public playlist import
 
-1. Register a Spotify developer app and add the exact redirect URI
-   `http://127.0.0.1:43827/callback`.
-2. Enter its Client ID in Vey's Spotify connection (or set
-   `VEY_SPOTIFY_CLIENT_ID`) and select Connect. No Spotify client secret is needed.
-3. Approve `playlist-read-private playlist-read-collaborative`.
+Paste an `https://open.spotify.com/playlist/...` URL into **Import playlist**.
+Vey reads the public embed page without an account, OAuth, Spotify Development
+Mode, or developer credentials. Each Spotify track is searched in YouTube Music;
+only an unambiguous exact title/artist match with a duration difference under
+eight seconds is accepted. All rows must match before Vey saves anything.
+Matching uses the YTM song shelf, at most three concurrent lookups and a
+three-minute import deadline; a cancelled or timed-out import does not change the
+playlist. Independently verified track-ID matches may be cached for a retry.
 
-The implementation uses authorization code + PKCE and the current
-`/v1/playlists/{id}/items` endpoint, accepting both `item` and legacy `track`
-response fields. Access can be restricted to owned/collaborative playlists by
-the provider/app mode. Spotify's development-mode eligibility, Premium and test
-user limits apply; 403/429 responses are surfaced instead of bypassed. See
-[Spotify PKCE](https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow)
-and the [2026 migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide).
+The current embed response has no total-count field and stops at 100 rows. Vey
+therefore rejects a response with 100 rows as potentially incomplete. Split the
+source into shorter public playlists before importing. The page format is
+undocumented, so parser changes may be required if Spotify changes its website.
+An unauthenticated probe on 2026-11-04 read 50, 100, 50 and 75 track rows from
+four public editorial playlists; the embedded playlist entity had no total-count
+field. This is evidence for the guard, not a guarantee that every playlist has
+the same cap.
+The local `spotify-import-matches.json` cache stores only Spotify track IDs and
+their matched YouTube video IDs; delete that file to force matching again. It is
+not uploaded or included in Store backups.
+
+Spotify Development Mode was evaluated and is not used here. Its Client
+Credentials flow requires an app Client Secret, and the current Development
+Mode playlist-items endpoint is limited to playlists the authorized user owns
+or collaborates on. That does not cover arbitrary public playlist links without
+a Spotify account connection. The selected public embed route avoids account
+credentials but is undocumented and can change. See Spotify's [Client
+Credentials flow](https://developer.spotify.com/documentation/web-api/tutorials/client-credentials-flow)
+and [Development Mode migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide).
+
+Track matching currently uses YouTube Music's song search to obtain YTM video
+IDs. It does not use the YouTube Data API: that API requires a project API key
+for public search, and `search.list` has a separate daily quota. Do not embed a
+private project key in desktop/mobile builds. See Google's [authorization
+guide](https://developers.google.com/youtube/data/guides/authentication) and
+[quota costs](https://developers.google.com/youtube/data/determine_quota_cost).
 
 ## Storage and compatibility
 
-Spotify refresh/access tokens and configured credentials live in the separate
-`music-accounts.json` under Vey's local data directory. The YouTube connection
-stores only its verified account identity and browser tab ID there; its website
-session remains in the dedicated browser profile. They are excluded from
-Store backups, migration and Vey cloud requests. The browser has no access to
-desktop tokens; the same-origin import endpoint only exposes public catalog data.
-Do not share the connection file. Unix creation uses mode 0600; Windows uses the
-current user's data-directory ACL. Google passwords are entered on Google’s
-page, not in a Vey form.
+The `music-accounts.json` file stores only the YouTube Music browser connection
+identity and tab ID; its website session remains in the dedicated browser
+profile. On startup, older files are rewritten without the retired Spotify OAuth
+record. The Spotify match cache contains public IDs only. Both files are excluded
+from Store backups and Vey cloud requests. Existing verified track ID matches are
+copied from the retired account file into the local cache during migration. The
+browser has no access
+to desktop sessions; the same-origin import endpoint handles public playlist
+links only. Unix files use mode 0600; Windows uses the current user's data ACL.
+Google passwords are entered on Google's page, not in a Vey form.
 
 The deployed Vey backend allowlists older settings. Cloud serialization now
 sends only those accepted fields; restores retain local layout, custom fonts,
@@ -155,8 +192,8 @@ cargo run --locked --example playlist_import -- "https://music.youtube.com/playl
 Browser search/input checks use the rebuilt WASM and fixture host on 4181:
 `npm run test:search` in `tools/braccato-widget`. The read-only YouTube browser helper has an isolated fixture:
 `npm run test:youtube-browser`. Live Google sign-in/private-library acceptance
-requires the user to finish normal browser login; Spotify OAuth requires its
-configured app. These are separate from fixture passes.
+requires the user to finish normal browser login. Spotify import is public-only;
+private playlist behavior is intentionally unsupported.
 
 ### Verification on 2026-10-30
 
@@ -170,9 +207,9 @@ configured app. These are separate from fixture passes.
   and a real pointer selection of Compact passed:
   `target/library-import-browser-final-verified/`. Search debounce/cache/input
   passed at 1440×900, 320×640, 390×844, 430×932 and 844×390.
-- Opt-in live public imports returned 7 and 552 tracks. The latter exercised
-  pagination and unavailable entries with known video IDs. No personal account,
-  private playlist, Spotify OAuth or live Vey cloud round trip was used.
+- Opt-in live public YouTube Music imports returned 7 and 552 tracks. The latter
+  exercised pagination and unavailable entries with known video IDs. No
+  personal account, private playlist or live Vey cloud round trip was used.
 - Focused formatting and whitespace checks passed. Existing renderer warnings
   remain. Initial disk exhaustion was resolved by preserving the generated
   incremental cache at `F:/CodexBuildCache/vey-incremental-20261030`; final builds
@@ -206,3 +243,12 @@ cargo run --locked --example youtube_browser_login
 
 The ordinary **Connect** action in Vey persists a connection only after the
 newly opened browser tab returns a verified YouTube Music identity.
+
+### Spotify account retirement and public import (2026-11-04)
+
+The Spotify account/OAuth connection was removed. Spotify URLs now use the
+public embed-page import and every accepted row is mapped to a YouTube Music
+`yt://` track. The 100-row response ceiling is treated as ambiguous and rejected
+to prevent silent truncation. Native, browser and Android behavior still needs
+fresh end-to-end acceptance; the older 2026-10-30 screenshots and reports above
+describe the retired Spotify account UI and must not be treated as current.

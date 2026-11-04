@@ -139,6 +139,7 @@ pub(crate) fn set_tracks(w: &MainWindow, rows: Vec<TrackRow>) {
 }
 
 pub(crate) fn set_home_recommendations(w: &MainWindow, rows: Vec<TrackRow>) {
+    w.set_home_revision(w.get_home_revision().wrapping_add(1));
     let previous = w.get_home_recommendation_tracks();
     if let Some(model) = previous.as_any().downcast_ref::<TrackModel>() {
         model.replace(rows);

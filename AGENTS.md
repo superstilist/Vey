@@ -1,18 +1,18 @@
 # Coding agent entry point
 
-Read [.agent/project.md](.agent/project.md) first. Read
-[.agent/workflow.md](.agent/workflow.md) for commands and validation relevant to
-the task. These files are a compact index; open only the linked source or docs
-needed for the current change.
-
-Detailed notes are loaded on demand:
-- [.agent/status.md](.agent/status.md): capabilities, platform matrix and recent work.
-- [.agent/architecture.md](.agent/architecture.md): runtime flows, storage and integration contracts.
-- [.agent/issues.md](.agent/issues.md): bugs, limitations, evidence and verification gaps.
-- [.agent/tasks.md](.agent/tasks.md): suggested backlog with completion criteria.
+Read every Markdown file in `.agent/` at the start of project work, including
+`project.md`, `workflow.md`, `status.md`, `architecture.md`, `issues.md`,
+`tasks.md` and `ricardo.md`. Treat these notes as context; current source and
+the instructions below take precedence where they differ. Then inspect only
+the source and documentation relevant to the task.
+Remember and apply the user's established wording, preferences and trigger
+phrases recorded in `.agent/ricardo.md` in future project conversations.
 
 For bug fixes read the matching issue and task first. Suggested backlog order
 is guidance, not user authorization to start unrelated implementation work.
+
+Version 0.1.27 (`.agent` notes refreshed 2026-10-27). `target/`, `dist/`,
+`web/pkg/` and `node_modules/` are not in the checkout; the first build is cold.
 
 - Check `git status --short` before editing; preserve unrelated work.
 - This is standalone Rust/Slint Vey, formerly PlayerVF. Keep it separate from
