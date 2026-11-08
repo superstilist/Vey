@@ -47,7 +47,7 @@ pub fn id_from_file_stem(stem: &str) -> Option<String> {
 pub async fn fetch_cover(url: &str) -> Result<Vec<u8>, String> {
     static CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> = std::sync::OnceLock::new();
     let client = CLIENT.get_or_init(|| reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())).as_ref().map_err(Clone::clone)?;
     let mut response = client

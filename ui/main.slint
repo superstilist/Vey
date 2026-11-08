@@ -34,12 +34,18 @@ export struct LibraryCollectionRow { kind: string, key: string, title: string, s
 
 export component MainWindow inherits Window {
     in-out property <[HomeShelfRow]> home-shelves;
+    in-out property <[HomeShelfRow]> catalog-shelves;
     in-out property <[string]> home-filters;
     in-out property <bool> home-catalog-loading;
     in-out property <bool> home-catalog-failed;
     in-out property <int> home-revision;
     in-out property <string> catalog-title;
     in-out property <string> catalog-kind;
+    in-out property <bool> catalog-from-home;
+    in-out property <string> catalog-current-id;
+    in-out property <string> catalog-current-json;
+    in-out property <string> catalog-parent-id;
+    in-out property <string> catalog-parent-json;
     in-out property <string> catalog-subtitle;
     in-out property <image> catalog-art;
     in-out property <int> catalog-track-count;
@@ -326,6 +332,7 @@ export component MainWindow inherits Window {
     in-out property <int> library-sort-index;
     in-out property <int> library-category-index;
     in-out property <[LibraryCollectionRow]> library-collections;
+    in-out property <bool> library-collections-loading;
     in-out property <int> library-action-index: -1;
     in-out property <bool> library-action-missing;
     in-out property <int> library-selected-count;
@@ -384,6 +391,12 @@ export component MainWindow inherits Window {
     in-out property <float> lyrics-widget-y;
     in-out property <float> lyrics-widget-width;
     in-out property <float> lyrics-widget-height;
+    in-out property <bool> lyrics-auth-active: false;
+    in-out property <bool> lyrics-auth-loading: false;
+    in-out property <float> lyrics-auth-x;
+    in-out property <float> lyrics-auth-y;
+    in-out property <float> lyrics-auth-width;
+    in-out property <float> lyrics-auth-height;
     in-out property <float> lyrics-editor-x;
     in-out property <float> lyrics-editor-y;
     in-out property <float> lyrics-editor-width;
@@ -857,8 +870,11 @@ export component MainWindow inherits Window {
             opacity: root.navigation-capture && root.navigation-capture-target ? 1 : self.warming ? 0.003922 : 1 - root.navigation-blend;
             clip: true;
             width: 100%; height: root.mobile ? root.page-viewport-height : content.height;
-            background: self.route == "home" ? Tokens.neutral-0.with-alpha(0.96) : transparent;
-            cache-rendering-hint: true;
+            // Keep the shared ambient surface visible on every page.
+            background: transparent;
+            // Keep settled pages live so async cover/model updates paint now.
+            // Cache their viewport only for travel and the startup warm pass.
+            cache-rendering-hint: root.page-moving || self.warming;
             if page-layer.route == "settings": Rectangle {
                 x: (parent.width - min(parent.width - (root.mobile ? 32px : 80px), 840px)) / 2;
                 y: root.mobile ? 12px : 24px;
@@ -1137,7 +1153,10 @@ export component MainWindow inherits Window {
                         overflow: elide;
                     }
                     if page-layer.route == "explore" && root.catalog-title != "": Action {
-                        icon: @image-url("../assets/icons/ChevronLeft.svg"); label: root.catalog-kind != "" ? I18n.tr("Бібліотека") : I18n.tr("Головна"); clicked => { root.navigate(root.catalog-kind != "" ? "library" : "home"); }
+                        icon: @image-url("../assets/icons/ChevronLeft.svg"); label: root.catalog-parent-id != "" ? I18n.tr("Назад") : root.catalog-kind != "" && !root.catalog-from-home ? I18n.tr("Бібліотека") : I18n.tr("Головна"); clicked => {
+                            if root.catalog-parent-id != "" { root.open-discovery-collection(root.catalog-parent-id, root.catalog-parent-json); }
+                            else { root.navigate(root.catalog-kind != "" && !root.catalog-from-home ? "library" : "home"); }
+                        }
                     }
                     if page-layer.route == "explore" && root.catalog-title == "": Action {
                         text: I18n.tr("Оновити");
@@ -1209,6 +1228,12 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                }
+
+                if page-layer.route == "explore" && root.catalog-kind == "artist" && root.catalog-shelves.length > 0: HomeFeed {
+                    shelves: root.catalog-shelves; compact: true; mobile: root.mobile; current-key: root.current-track-key;
+                    open-item(shelf, key) => { root.open-home-item(shelf, key); }
+                    play-shelf(key) => { root.play-home-shelf(key); }
                 }
 
                 if page-layer.route == "settings": Rectangle {
@@ -1531,7 +1556,7 @@ export component MainWindow inherits Window {
                                 toggled => { root.navigation-blur = !root.navigation-blur; root.preferences-changed(); }
                             }
                             SwitchRow {
-                                text: I18n.tr("Вимкнути всі анімації");
+                                text: I18n.tr("Менше руху");
                                 detail: root.mobile ? "" : I18n.tr("Вимикає рух сторінок, панелей і тексту.");
                                 icon: @image-url("../assets/icons/Compass.svg");
                                 checked: root.lyrics-reduced-motion;
@@ -1658,10 +1683,12 @@ export component MainWindow inherits Window {
                             language <=> root.lyrics-translation-language;
                             secondary-gap <=> root.lyrics-secondary-gap;
                             status: root.lyrics-enrichment-status;
+                            auth-status: root.jwt-status;
                             reduced-motion <=> root.lyrics-reduced-motion;
                             stage <=> root.lyrics-stage;
                             passive <=> root.lyrics-passive-scroll;
                             appearance => { root.dialog = "lyric-style"; }
+                            request-auth => { root.open-challenge(); }
                             provider-changed(value) => { root.provider-changed(value); }
                             display-changed => { root.preferences-changed(); }
                             mode-changed => { root.lyric-mode-changed(root.lyrics-stage, root.lyrics-reduced-motion, root.lyrics-passive-scroll); }
@@ -1910,7 +1937,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         HorizontalLayout { height: 40px; spacing: 8px;
-                            Text { text: root.library-category-index == 0 || root.library-category-index == 4 ? (root.library-selected-count > 0 ? root.library-selected-count + " " + I18n.tr("вибрано") + (root.mobile ? "" : " · " + root.library-total-count + " " + I18n.tr("у бібліотеці")) : root.library-total-count + I18n.tr(" композицій у бібліотеці")) : root.library-collections.length + " " + I18n.tr("добірок"); color: Tokens.ink-300; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; }
+                            Text { text: root.library-category-index == 0 || root.library-category-index == 4 ? (root.library-selected-count > 0 ? root.library-selected-count + " " + I18n.tr("вибрано") + (root.mobile ? "" : " · " + root.library-total-count + " " + I18n.tr("у бібліотеці")) : root.library-total-count + I18n.tr(" композицій у бібліотеці")) : (root.library-collections-loading && root.library-collections.length == 0 ? "" : root.library-collections.length + " " + I18n.tr("добірок")); color: Tokens.ink-300; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; }
                             if (root.library-category-index == 0 || root.library-category-index == 4) && page-layer.page-tracks.length > 0: Action { text: root.mobile ? "" : I18n.tr("Вибрати все"); icon: @image-url("../assets/icons/Check.svg"); label: I18n.tr("Вибрати все"); comfortable: root.mobile; outlined: !root.mobile; clicked => { root.library-bulk-action("select-all"); } }
                             if root.library-selected-count > 0: Action { text: root.mobile ? "" : I18n.tr("Очистити вибір"); icon: @image-url("../assets/icons/X.svg"); label: I18n.tr("Очистити вибір"); comfortable: root.mobile; outlined: !root.mobile; clicked => { root.library-bulk-action("clear-selection"); } }
                         }
@@ -1970,7 +1997,10 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    if page-layer.page-tracks.length == 0 && (page-layer.route != "playlist" || root.mobile) && !(page-layer.route == "library" && (root.library-category-index == 1 || root.library-category-index == 2 || root.library-category-index == 3) && root.library-collections.length > 0) && !(page-layer.route == "explore" && root.catalog-title != "" && root.status != ""): Rectangle {
+                    if page-layer.route == "library" && root.library-collections-loading && root.library-collections.length == 0 && (root.library-category-index == 1 || root.library-category-index == 2 || root.library-category-index == 3): Text {
+                        text: I18n.tr("Підготовка медіатеки…"); color: Tokens.ink-300; horizontal-alignment: center; height: 80px; vertical-alignment: center;
+                    }
+                    if page-layer.page-tracks.length == 0 && (page-layer.route != "playlist" || root.mobile) && !(page-layer.route == "library" && (root.library-category-index == 1 || root.library-category-index == 2 || root.library-category-index == 3) && (root.library-collections.length > 0 || root.library-collections-loading)) && !(page-layer.route == "explore" && root.catalog-title != "" && root.status != ""): Rectangle {
                         height: 220px; border-radius: 0px; background: transparent; border-width: 0px; border-color: transparent;
                         VerticalLayout {
                             alignment: center; spacing: 12px; padding: 24px;
@@ -2098,13 +2128,18 @@ export component MainWindow inherits Window {
             // Lyrics change each tick: a permanent full-page cache is redrawn
             // anyway. Keep it only for camera composition and offscreen warming.
             cache-rendering-hint: root.page-moving || self.warming;
-            background: root.mobile && !root.navigation-capture ? Tokens.neutral-50 : transparent;
+            background: root.mobile && !root.navigation-capture ? Tokens.neutral-0 : transparent;
             border-radius: root.mobile ? (PlayerTheme.enabled ? PlayerTheme.corner * 1px : 28px) : 0px;
             clip: true;
             if root.mobile: Rectangle {
                 visible: !root.navigation-capture;
                 width: 100%; height: 100%; border-radius: PlayerTheme.enabled ? PlayerTheme.corner * 1px : 28px; clip: true;
-                Image { source: root.ambient-frame; width: 100%; height: 100%; image-fit: fill; opacity: root.ambient-opacity; }
+                Image {
+                    source: root.ambient-frame;
+                    x: -content.x - player-stage.x; y: -content.y - player-stage.y;
+                    width: root.width; height: root.height;
+                    image-fit: fill; opacity: root.ambient-opacity;
+                }
             }
             if root.mobile: TouchArea {} // The sheet consumes input above the retained page.
             VerticalLayout {
@@ -2681,6 +2716,39 @@ export component MainWindow inherits Window {
                         }
                     }
                     }
+                    if root.lyrics-auth-active: Rectangle {
+                        x: root.mobile ? 0px : 12px;
+                        y: root.mobile ? 50px : 68px;
+                        width: max(1px, parent.width - (root.mobile ? 0px : 24px));
+                        height: max(1px, parent.height - (root.mobile ? 50px : 92px));
+                        background: #08080c;
+                        clip: true;
+                        property <float> host-x: self.absolute-position.x / 1px;
+                        property <float> host-y: self.absolute-position.y / 1px;
+                        Timer {
+                            interval: 16ms;
+                            running: root.lyrics-auth-active;
+                            triggered => {
+                                root.lyrics-auth-x = parent.host-x;
+                                root.lyrics-auth-y = parent.host-y;
+                                root.lyrics-auth-width = parent.width / 1px;
+                                root.lyrics-auth-height = parent.height / 1px;
+                            }
+                        }
+                        if root.lyrics-auth-loading: VerticalLayout {
+                            alignment: center; spacing: 12px;
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 14px;
+                                border-width: 3px; border-color: Tokens.brand-300;
+                                background: transparent;
+                            }
+                            Text {
+                                text: I18n.tr("Завантажуємо перевірку доступу…");
+                                color: Tokens.ink-200; font-size: 13px;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -2744,12 +2812,14 @@ export component MainWindow inherits Window {
                 LyricsSettings {
                     embedded: true;
                     appearance => {root.player-tools=false;root.dialog="lyric-style";}
+                    request-auth => { root.open-challenge(); }
                     provider <=> root.lyrics-provider;
                     romanization <=> root.lyrics-romanization;
                     translation <=> root.lyrics-translation;
                     secondary-gap <=> root.lyrics-secondary-gap;
                     language <=> root.lyrics-translation-language;
                     status: root.lyrics-enrichment-status;
+                    auth-status: root.jwt-status;
                     reduced-motion <=> root.lyrics-reduced-motion;
                     stage <=> root.lyrics-stage;
                     passive <=> root.lyrics-passive-scroll;
@@ -2786,15 +2856,15 @@ export component MainWindow inherits Window {
         }
     }
 
-    // Mobile playback and page selection share one safe-area-aware dock.
+    // One playback dock for every route; mobile also includes page selection.
     Rectangle {
-        x: (!root.mobile && (!PlayerTheme.enabled || root.displayed-view == "lyrics") ? 0px : 8px) + root.safe-left * 1px;
-        y: root.height - (!root.mobile && root.displayed-view == "lyrics" ? root.bottom-dock-height : root.bottom-reserve) - root.safe-bottom * 1px;
-        width: root.width - (!root.mobile && (!PlayerTheme.enabled || root.displayed-view == "lyrics") ? 0px : 16px) - (root.safe-left + root.safe-right) * 1px;
+        x: (root.mobile ? 8px : 0px) + root.safe-left * 1px;
+        y: root.height - (root.mobile ? root.bottom-reserve : root.bottom-dock-height) - root.safe-bottom * 1px;
+        width: root.width - (root.mobile ? 16px : 0px) - (root.safe-left + root.safe-right) * 1px;
         height: root.bottom-dock-height;
         visible: !root.immersive;
-        background: !root.mobile && (!PlayerTheme.enabled || root.displayed-view == "lyrics") ? Tokens.neutral-0 : Tokens.neutral-100;
-        border-radius: !root.mobile && (!PlayerTheme.enabled || root.displayed-view == "lyrics") ? 0px : PlayerTheme.enabled ? PlayerTheme.corner * 1px : 24px;
+        background: root.mobile ? Tokens.neutral-100 : Tokens.neutral-0;
+        border-radius: root.mobile ? (PlayerTheme.enabled ? PlayerTheme.corner * 1px : 24px) : 0px;
         clip: true;
         if root.mobile: TouchArea {
             x: 0px; y: 3px; width: 100%; height: 53px;
@@ -2803,7 +2873,7 @@ export component MainWindow inherits Window {
         }
         // Interactive Top Progress Track
         Rectangle {
-            x: !root.mobile && (!PlayerTheme.enabled || root.displayed-view == "lyrics") ? 0px : 24px; y: 0px;
+            x: root.mobile ? 24px : 0px; y: 0px;
             height: prog-touch.has-hover ? 5px : 3px;
             width: parent.width - self.x * 2;
             border-radius: 3px;

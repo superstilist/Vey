@@ -9,6 +9,61 @@ use std::{
     rc::Rc,
 };
 
+fn parse_blueberry_candidates(data: &serde_json::Value) -> Vec<Track> {
+    let mut seen = HashSet::new();
+    data.get("items").and_then(serde_json::Value::as_array).into_iter().flatten()
+        .take(200).filter_map(|row| {
+            let id = row.get("youtube_id")?.as_str()?;
+            let title = row.get("title")?.as_str()?.trim();
+            let artist = row.get("artist")?.as_str()?.trim();
+            let recording_type = row.get("recording_type").and_then(serde_json::Value::as_str).unwrap_or("unknown");
+            if !crate::services::video_id(id) || title.is_empty() || artist.is_empty()
+                || recording_type != "unknown" || crate::account::recording_type(title) != "unknown"
+                || !seen.insert(id.to_owned()) { return None; }
+            let art = row.get("cover_art").and_then(serde_json::Value::as_str).unwrap_or_default();
+            let art = reqwest::Url::parse(art).ok().filter(|url| url.scheme() == "https" && url.username().is_empty() && url.password().is_none())
+                .map(|url| url.to_string()).unwrap_or_default();
+            let clip = row.get("clip_video_id").and_then(serde_json::Value::as_str)
+                .filter(|id| crate::services::video_id(id)).map(str::to_owned);
+            Some(Track { path: format!("yt://{id}"), video_id: Some(id.to_owned()), clip_video_id: clip,
+                title: title.chars().take(512).collect(), artist: artist.chars().take(512).collect(),
+                album: row.get("album").and_then(serde_json::Value::as_str).unwrap_or_default().chars().take(512).collect(),
+                thumbnail_url: art, ..Default::default() })
+        }).collect()
+}
+
+/// Read public, verified Blueberry recordings without sending private signals.
+/// Vey applies the listener's profile locally in `rank_recommendations`.
+pub(crate) async fn blueberry_candidates() -> Vec<Track> {
+    let Some(base) = crate::account::recommendation_catalog_base() else { return Vec::new() };
+    let fetch = async move {
+        let response = reqwest::get(format!("{base}/vey/catalog/recordings?sort=release&limit=100")).await.ok()?;
+        if !response.status().is_success() || response.content_length().is_some_and(|len| len > 2_000_000) { return None; }
+        let bytes = response.bytes().await.ok()?;
+        if bytes.len() > 2_000_000 { return None; }
+        let data = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
+        Some(parse_blueberry_candidates(&data))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    { tokio::time::timeout(std::time::Duration::from_secs(8), fetch).await.ok().flatten().unwrap_or_default() }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let delay = js_sys::Promise::new(&mut |resolve, _| {
+            if let Some(window) = web_sys::window() {
+                if window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 8_000).is_err() {
+                    let _ = resolve.call0(&wasm_bindgen::JsValue::UNDEFINED);
+                }
+            } else {
+                let _ = resolve.call0(&wasm_bindgen::JsValue::UNDEFINED);
+            }
+        });
+        match futures_util::future::select(Box::pin(fetch), Box::pin(wasm_bindgen_futures::JsFuture::from(delay))).await {
+            futures_util::future::Either::Left((result, _)) => result.unwrap_or_default(),
+            futures_util::future::Either::Right(_) => Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct RecommendationProfile {
     pub seeds: Vec<Track>,
@@ -17,6 +72,18 @@ pub struct RecommendationProfile {
     pub track_weights: HashMap<String, i16>,
     pub artist_weights: HashMap<String, i16>,
     disliked_tracks: HashSet<String>,
+}
+
+/// A local listening seed is usable only when one public recording matches
+/// its title, artist and duration; never seed radio with the first search hit.
+pub fn select_public_seed(source: &Track, candidates: Vec<Track>) -> Option<String> {
+    let mut ids = HashSet::new();
+    for candidate in candidates {
+        if crate::services::same_track_identity(source, &candidate) {
+            if let Some(id) = crate::services::track_video_id(&candidate) { ids.insert(id.to_owned()); }
+        }
+    }
+    (ids.len() == 1).then(|| ids.into_iter().next()).flatten()
 }
 
 /// Blend the current song, recent listening and liked songs into a small
@@ -290,6 +357,33 @@ pub fn recommendation_query(track: &Track) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn blueberry_candidates_reject_invalid_ids_and_duplicate_rows() {
+        let data = serde_json::json!({"items":[
+            {"youtube_id":"abcdefghijk","title":"Song","artist":"Artist","album":"Album","cover_art":"https://example.test/art","clip_video_id":"clip0000001"},
+            {"youtube_id":"abcdefghijk","title":"Duplicate","artist":"Artist"},
+            {"youtube_id":"invalid","title":"Wrong","artist":"Artist"},
+            {"youtube_id":"12345678901","title":" ","artist":"Artist"},
+            {"youtube_id":"22222222222","title":"Song (Remix)","artist":"Artist","recording_type":"unknown"},
+            {"youtube_id":"33333333333","title":"Song","artist":"Artist","recording_type":"live"},
+            {"youtube_id":"lmnopqrstuv","title":"Other","artist":"Artist","cover_art":"http://example.test/not-https"}
+        ]});
+        let tracks = parse_blueberry_candidates(&data);
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].path, "yt://abcdefghijk");
+        assert_eq!(tracks[0].clip_video_id.as_deref(), Some("clip0000001"));
+        assert!(tracks[1].thumbnail_url.is_empty());
+    }
+    #[test]
+    fn local_radio_seed_requires_a_unique_metadata_and_duration_match() {
+        let local = Track { path: "C:/music/song.flac".into(), title: "Song".into(), artist: "Artist".into(),
+            duration_secs: 180.0, ..Default::default() };
+        let good = Track { path: "yt://abcdefghijk".into(), video_id: Some("abcdefghijk".into()), ..local.clone() };
+        let unrelated = Track { title: "Other".into(), ..good.clone() };
+        assert_eq!(select_public_seed(&local, vec![unrelated, good.clone()]).as_deref(), Some("abcdefghijk"));
+        let ambiguous = Track { path: "yt://12345678901".into(), video_id: Some("12345678901".into()), ..good.clone() };
+        assert!(select_public_seed(&local, vec![good, ambiguous]).is_none());
+    }
     use crate::services::{History, Playlist};
 
     fn remote(id: &str, artist: &str) -> Track {

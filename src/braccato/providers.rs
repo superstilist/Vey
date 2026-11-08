@@ -11,6 +11,16 @@ pub fn rank(quality: LyricsSyncType) -> u8 {
         LyricsSyncType::Plain => 3,
     }
 }
+pub fn provider_rank(provider: &str) -> u8 {
+    match provider.to_lowercase().as_str() {
+        "unison" => 0,
+        "dacubeking" => 1,
+        "better lyrics" | "betterlyrics" => 2,
+        "lrclib" => 3,
+        "kugou" => 4,
+        _ => 5,
+    }
+}
 pub fn similarity(a: &str, b: &str) -> f64 {
     // JS's comparison is over UTF-16 code units, including repeated bigrams.
     let a = a.to_lowercase().encode_utf16().collect::<Vec<_>>();
@@ -51,12 +61,35 @@ pub fn normalize_alternatives(alternatives: &mut Vec<LyricsAlternative>) {
     // actual syllable cues within that mode, without trusting provider labels.
     alternatives.sort_by_key(|a| {
         (
+            provider_rank(&a.provider),
             !crate::lyrics::has_syllable_level_timing(&a.lyrics),
             rank(a.sync_type),
         )
     });
     let mut seen = std::collections::HashSet::new();
-    alternatives.retain(|a| seen.insert((a.provider.clone(), a.format.clone(), a.sync_type as u8)));
+    alternatives.retain(|a| serde_json::to_vec(a).map_or(true, |value| seen.insert(value)));
+}
+
+/// Keep distinct previous versions when a refresh returns only partial results.
+/// Identical documents are deduplicated, with fresh results ordered first.
+pub fn merge_refreshed_alternatives(
+    mut fresh: Vec<LyricsAlternative>,
+    previous: &[LyricsAlternative],
+) -> Vec<LyricsAlternative> {
+    fresh.extend_from_slice(previous);
+    normalize_alternatives(&mut fresh);
+    fresh
+}
+
+/// Only supplement ordinary line/plain caches; explicit local or richer
+/// timed lyrics should remain untouched and do not need another lookup.
+pub fn should_supplement_kugou(alternatives: &[LyricsAlternative]) -> bool {
+    !alternatives.is_empty() && !alternatives.iter().any(|alt| {
+        alt.provider.eq_ignore_ascii_case("kugou")
+            || alt.provider == "Власні слова"
+            || alt.provider == "Локальний файл"
+            || matches!(crate::braccato::effective_sync_type(alt), LyricsSyncType::Word | LyricsSyncType::RichSync)
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -269,6 +302,20 @@ pub mod chain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unison_first_and_distinct_versions_survive() {
+        let make = |provider: &str, text: &str| LyricsAlternative {
+            provider: provider.into(), sync_type: LyricsSyncType::Plain,
+            format: "txt".into(), lyrics: crate::lyrics::parse_plain(text),
+        };
+        let mut versions = vec![make("LRCLib", "one"), make("Unison", "first"),
+            make("Unison", "second"), make("Unison", "first")];
+        normalize_alternatives(&mut versions);
+        assert_eq!(versions.len(), 3);
+        assert_eq!(versions[0].provider, "Unison");
+        assert_eq!(versions[1].lyrics.lines[0].text, "second");
+        assert_eq!(versions[2].provider, "LRCLib");
+    }
     #[test]
     fn similarity_counts_repeated_pairs() {
         assert_eq!(similarity("hello", "hello"), 1.);

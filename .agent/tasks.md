@@ -22,7 +22,7 @@ native `home_library` fixture before changing shelf navigation or caching.
 | Android device acceptance | I-10 | `docs/ANDROID-BUILD.md`, `src/lib.rs`, build script | Install on a real device/emulator; check launch, local playback, seek/volume, pause/resume, rotation, settings persistence and accessible paths; record environment |
 | Android storage integration (partial) | I-03 | `src/android.rs`, `src/dialogs.rs`, source/import/export callbacks | Device scanning now uses permission and MediaStore (0.1.5); verify grant/deny/revoke on device. Remaining SAF selection and import/export must round trip actual files without desktop path assumptions |
 | Linux build/runtime acceptance | I-11 | CI workflow dependencies; native platform gates | Fresh build/test and launch/audio/lyrics smoke on working Linux; record fallback limits and actual CI result if checked |
-| Platform lyric authentication | I-04 | `src/challenge.rs`, `src/lyrics_service.rs` | Supported platform challenge/token acquisition and cache/retry work end to end without Google session capture or secret logging |
+| Platform lyric authentication | I-04 | `src/challenge.rs`, `src/lyrics_service.rs`, `src/app.rs` | Complete a real user-solved Turnstile flow in the Windows lyrics-panel WebView and confirm JWT exchange/retry; verify the explicit browser fallback plus Android/Linux/macOS flows on their actual runtimes without logging tokens |
 | Confirm the 0.1.27 camera on non-Windows targets | I-08 | `src/native_lyric_camera.rs`, `ui/native-lyrics.slint` | `examples/native_line_flow.rs` runs on browser/Android (or an equivalent check exists), and the launch/settle numbers are recorded per renderer. Then decide whether `VEY_LEGACY_LYRIC_SCROLL` can be removed |
 
 ## Next: finish user-facing feature gaps
@@ -46,6 +46,22 @@ rewritten) and I-17 (all 31 widget scripts have `npm` entries). Text-only check;
 no fixture or build was re-run.
 
 ## Maintenance
+
+- Build optimization (2026-11-04): Slint UI now builds in `crates/vey-ui`,
+  and native lyric shaping reuses its embedded fonts. Windows release `.exe`
+  measured 101.00 → 78.21 MiB; controller-only check/build and platform check
+  scope, including the running debug executable lock, are in `docs/PERFORMANCE.md`.
+
+- Navigation controller work (2026-11-04): native/Web skip offscreen library
+  collection rebuilds and avoid repeated history sorting and playlist refresh
+  work. Targeted service tests and native/WASM checks passed. A fresh debug
+  route fixture still showed a slow cold first movement; the separate corner
+  fixture failed before motion. Full controller profiling and Android acceptance
+  remain open; details in `docs/PERFORMANCE.md`.
+- Native library collection projection now runs off the UI thread, with one
+  active job, coalesced pending work and stale-generation rejection. Covers
+  update existing rows on the UI thread. Browser Web Worker and device/runtime
+  acceptance remain open; see `docs/PERFORMANCE.md`.
 
 - Spotify account removal/public playlist import (2026-11-04): implementation
   replaces Spotify OAuth/private sync with public URL metadata → exact YTM

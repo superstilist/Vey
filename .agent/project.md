@@ -63,6 +63,7 @@ removed on 2026-10-27. The first build after that is a cold build.
 | Android media permission and device audio discovery | `src/android.rs`, `src/native.rs` (`scan_android_library`) |
 | Vey accounts, metadata sync, private audio | `src/account.rs`, `web/account.js`, `docs/ACCOUNTS.md`; backend in `blueberry_melody` |
 | Playlist import, YTM browser login and public Spotify→YTM import | `src/library_import.rs`, `src/music_accounts.rs`, `src/spotify_import.rs`, `src/youtube_browser.rs`, `native::import_public_playlist`; `docs/MUSIC-ACCOUNTS.md` |
+| Slint build/cache and shared bundled fonts | `crates/vey-ui/`, `src/native_lyric_fonts.rs`, root `build.rs`; `docs/PERFORMANCE.md` |
 | Home compositions and local search/cache | `src/home.rs`, `ui/home-preview.slint`, `src/search_index.rs`; `docs/MUSIC-ACCOUNTS.md` |
 | Store, queue, migration, persistence | `src/services.rs`, `src/storage.rs` |
 | Shared lyric detection/parsing | `src/lyrics.rs` (`parse_payload`), `src/braccato/` |

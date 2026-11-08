@@ -32,4 +32,30 @@ f=fixture([menu,{gridRenderer:{items:[{musicTwoRowItemRenderer:{title:{simpleTex
 result=await f.run({operation:'playlists',expectedOwner:'fixture-owner'});assert.equal(result.playlists.length,2);assert.equal(result.playlists[1].id,'LM');assert.equal(f.requests[1].body.browseId,'FEmusic_liked_playlists');
 f=fixture([menu,{musicPlaylistShelfRenderer:{contents:[continuation('cycle')]}},{musicPlaylistShelfContinuation:{contents:[continuation('cycle')]}}]);result=await f.run({operation:'playlist',id:'PL1234567890'});assert.equal(result.error,'page_cycle');
 f=fixture([menu,{musicPlaylistShelfRenderer:{contents:[{musicResponsiveListItemRenderer:{}}]}}]);result=await f.run({operation:'playlist',id:'PL1234567890'});assert.equal(result.error,'unknown_row');
+const homeTile=(title,endpoint,width=300,height=300)=>({musicTwoRowItemRenderer:{
+  title:{simpleText:title},subtitle:{runs:[{text:'Artist',navigationEndpoint:{browseEndpoint:{browseId:'UCartist'}}}]},
+  navigationEndpoint:endpoint,thumbnailRenderer:{musicThumbnailRenderer:{thumbnail:{thumbnails:[{url:'https://i.ytimg.com/fixture.jpg',width,height}]}}}
+}});
+const greyHome=homeTile('Unavailable',{watchEndpoint:{videoId:'99999999999'}});
+greyHome.musicTwoRowItemRenderer.musicItemRendererDisplayPolicy='MUSIC_ITEM_RENDERER_DISPLAY_POLICY_GREY_OUT';
+f=fixture([menu,{contents:[{musicCarouselShelfRenderer:{header:{musicCarouselShelfBasicHeaderRenderer:{title:{simpleText:'For you'}}},contents:[
+  homeTile('Song',{watchEndpoint:{videoId:'abcdefghijk'}}),
+  homeTile('Video',{watchEndpoint:{videoId:'12345678901',videoType:'MUSIC_VIDEO_TYPE_OMV'}}),
+  homeTile('Album',{browseEndpoint:{browseId:'MPREalbum'}}),
+  homeTile('Artist',{browseEndpoint:{browseId:'UCartist'}}),
+  greyHome,
+  homeTile('Song',{watchEndpoint:{videoId:'abcdefghijk'}})
+]}}]}]);
+result=await f.run({operation:'home',expectedOwner:'fixture-owner'});
+assert.equal(result.ok,true);assert.equal(f.requests[1].body.browseId,'FEmusic_home');
+assert.deepEqual(Array.from(result.catalog.sections,s=>s.kind),['song','video','album','artist']);
+assert.equal(result.catalog.sections[0].items.length,1);
+assert.equal(result.catalog.sections[2].items[0].browseId,'MPREalbum');
+assert.ok(!JSON.stringify(result).includes('fake-test-only-secret'));
+const songShelves=Array.from({length:10},(_,i)=>({musicCarouselShelfRenderer:{contents:[homeTile('Song '+i,{watchEndpoint:{videoId:String(i).padStart(11,'0')}})]}}));
+f=fixture([menu,{contents:[...songShelves,{musicCarouselShelfRenderer:{contents:[homeTile('Artist',{browseEndpoint:{browseId:'UCartist'}})]}}]}]);
+result=await f.run({operation:'home',expectedOwner:'fixture-owner'});
+assert.equal(result.catalog.sections.length,8);assert.ok(result.catalog.sections.some(section=>section.kind==='artist'));
+f=fixture([menu]);result=await f.run({operation:'home',expectedOwner:'other-owner'});
+assert.equal(result.error,'account_changed');assert.equal(f.requests.length,1);
 console.log('YouTube browser helper: identity, read-only API, origin/account guards, pagination, repeats and private-library parsing passed.');

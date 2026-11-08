@@ -1,27 +1,12 @@
 fn main() {
-    println!("cargo:rerun-if-changed=android/java/app/vey/VeyBridge.java");
+    println!("cargo:rerun-if-changed=build.rs");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        println!("cargo:rerun-if-changed=android/java/app/vey/VeyBridge.java");
+        for name in ["ANDROID_HOME", "ANDROID_SDK_ROOT", "JAVA_HOME"] {
+            println!("cargo:rerun-if-env-changed={name}");
+        }
         android_bridge();
     }
-    println!("cargo:rerun-if-changed=ui/main.slint");
-    println!("cargo:rerun-if-changed=ui/home-feed.slint");
-    println!("cargo:rerun-if-changed=ui/home-preview.slint");
-    println!("cargo:rerun-if-changed=ui/controls.slint");
-    println!("cargo:rerun-if-changed=ui/tokens.slint");
-    println!("cargo:rerun-if-changed=ui/braccato-lyrics.slint");
-    println!("cargo:rerun-if-changed=ui/native-lyrics.slint");
-    println!("cargo:rerun-if-changed=ui/lyric-types.slint");
-    println!("cargo:rerun-if-changed=ui/lyric-theme-picker.slint");
-    println!("cargo:rerun-if-changed=ui/lyric-appearance.slint");
-    println!("cargo:rerun-if-changed=ui/player-theme.slint");
-    println!("cargo:rerun-if-changed=third-party/braccato-rust/crates/slint/ui/lyrics.slint");
-    let config = slint_build::CompilerConfiguration::new().with_library_paths(
-        std::collections::HashMap::from([(
-            "braccato".into(),
-            std::path::PathBuf::from("third-party/braccato-rust/crates/slint/ui"),
-        )]),
-    );
-    slint_build::compile_with_config("ui/main.slint", config).expect("failed to compile Slint UI");
 }
 
 fn android_bridge() {

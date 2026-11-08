@@ -5,6 +5,17 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
+pub struct CatalogMetadata {
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub duration_secs: f64,
+    pub thumbnail_url: String,
+    pub local_source_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Track {
     pub path: String,
     pub title: String,
@@ -15,6 +26,9 @@ pub struct Track {
     /// Paired music-video ID used for the visual clip while `video_id` stays the audio source.
     pub clip_video_id: Option<String>,
     pub thumbnail_url: String,
+    /// YT Music metadata stays separate from local file tags and artwork.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog_metadata: Option<CatalogMetadata>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
@@ -257,6 +271,11 @@ pub struct Store {
     pub history: Vec<History>,
     pub recommendations: RecommendationModel,
     pub home_catalog: crate::discovery::Catalog,
+    /// Account-specific YouTube recommendations stay in memory on this device.
+    #[serde(skip)]
+    pub personalized_home_catalog: crate::discovery::Catalog,
+    #[serde(skip)]
+    pub artist_page_catalog: crate::discovery::Catalog,
     pub offsets: BTreeMap<String, i64>,
     pub legacy: BTreeMap<String, Value>,
     pub lyrics_cache: BTreeMap<String, std::sync::Arc<CachedLyrics>>,
@@ -282,6 +301,8 @@ impl Default for Store {
             history: vec![],
             recommendations: RecommendationModel::default(),
             home_catalog: crate::discovery::Catalog::default(),
+            personalized_home_catalog: crate::discovery::Catalog::default(),
+            artist_page_catalog: crate::discovery::Catalog::default(),
             offsets: BTreeMap::new(),
             legacy: BTreeMap::new(),
             lyrics_cache: BTreeMap::new(),
@@ -357,8 +378,27 @@ pub fn same_track_identity(a: &Track, b: &Track) -> bool {
         _ => same_track_metadata(a, b),
     }
 }
-fn merge_track_metadata(existing: &mut Track, incoming: Track) {
+fn merge_track_metadata(existing: &mut Track, mut incoming: Track) {
     if normalize_path(&existing.path) == normalize_path(&incoming.path) {
+        // A new scan may not contain the identity or artwork found earlier.
+        // Keep them only while the file still describes the same recording.
+        if same_track_metadata(existing, &incoming)
+            && (track_video_id(&incoming).is_none()
+                || track_video_id(&incoming) == track_video_id(existing))
+        {
+            if track_video_id(&incoming).is_none() {
+                incoming.video_id = track_video_id(existing).map(str::to_owned);
+            }
+            if incoming.clip_video_id.is_none() {
+                incoming.clip_video_id = existing.clip_video_id.clone();
+            }
+            if incoming.thumbnail_url.is_empty() {
+                incoming.thumbnail_url = existing.thumbnail_url.clone();
+            }
+            if incoming.catalog_metadata.is_none() {
+                incoming.catalog_metadata = existing.catalog_metadata.clone();
+            }
+        }
         *existing = incoming;
         return;
     }
@@ -367,6 +407,9 @@ fn merge_track_metadata(existing: &mut Track, incoming: Track) {
     }
     if track_video_id(existing).is_none() {
         existing.video_id = track_video_id(&incoming).map(str::to_owned);
+    }
+    if existing.clip_video_id.is_none() {
+        existing.clip_video_id = incoming.clip_video_id.clone();
     }
     if existing.title.trim().is_empty() || existing.title.eq_ignore_ascii_case("unknown title") {
         existing.title = incoming.title;
@@ -382,6 +425,9 @@ fn merge_track_metadata(existing: &mut Track, incoming: Track) {
     }
     if existing.thumbnail_url.is_empty() {
         existing.thumbnail_url = incoming.thumbnail_url;
+    }
+    if existing.catalog_metadata.is_none() {
+        existing.catalog_metadata = incoming.catalog_metadata;
     }
 }
 /// Deduplicate a catalog/search/library batch in first-seen order. Metadata
@@ -730,10 +776,17 @@ impl Store {
             .flat_map(|p| p.tracks.iter().map(String::as_str))
             .chain(self.likes.iter().map(String::as_str))
             .collect();
+        // Scanning maintains local track membership and prunes missing
+        // downloads on a worker. Never hit the filesystem while projecting
+        // a library page: a disconnected drive can block the UI for seconds.
+        let local_paths: HashSet<String> = self.tracks.iter()
+            .filter(|track| !key_is_remote(&track.path))
+            .map(|track| normalize_path(&track.path))
+            .collect();
         let downloaded: HashSet<&str> = self
             .downloads
             .iter()
-            .filter(|(_, path)| std::path::Path::new(path).is_file())
+            .filter(|(_, path)| local_paths.contains(&normalize_path(path)))
             .filter_map(|(key, _)| key.strip_prefix("yt://"))
             .collect();
         let local = self.tracks
@@ -1314,6 +1367,29 @@ impl LibraryViewState {
             })
             .cloned()
             .collect();
+        if self.sort == LibrarySort::RecentlyPlayed {
+            // Identity matching can scan the history and normalize metadata. Do
+            // that once per row, rather than for every sort comparison.
+            result.sort_by_cached_key(|track| {
+                let identity = store.identity_key(track);
+                let played_at = store
+                    .history
+                    .iter()
+                    .filter(|entry| {
+                        store.identity_key(&entry.track) == identity
+                            || same_track_identity(&entry.track, track)
+                    })
+                    .map(|entry| entry.played_at)
+                    .max()
+                    .unwrap_or_default();
+                (
+                    std::cmp::Reverse(played_at),
+                    track.artist.to_lowercase(),
+                    track.title.to_lowercase(),
+                )
+            });
+            return result;
+        }
         result.sort_by(|left, right| {
             let text_cmp = |a: &str, b: &str| a.to_lowercase().cmp(&b.to_lowercase());
             match self.sort {
@@ -1329,25 +1405,7 @@ impl LibraryViewState {
                     .then_with(|| text_cmp(&left.title, &right.title)),
                 LibrarySort::Source => text_cmp(&left.path, &right.path)
                     .then_with(|| text_cmp(&left.title, &right.title)),
-                LibrarySort::RecentlyPlayed => {
-                    let played_at = |track: &Track| {
-                        let identity = store.identity_key(track);
-                        store
-                            .history
-                            .iter()
-                            .filter(|entry| {
-                                store.identity_key(&entry.track) == identity
-                                    || same_track_identity(&entry.track, track)
-                            })
-                            .map(|entry| entry.played_at)
-                            .max()
-                            .unwrap_or_default()
-                    };
-                    played_at(right)
-                        .cmp(&played_at(left))
-                        .then_with(|| text_cmp(&left.artist, &right.artist))
-                        .then_with(|| text_cmp(&left.title, &right.title))
-                }
+                LibrarySort::RecentlyPlayed => unreachable!("handled above"),
             }
         });
         result
@@ -1389,6 +1447,7 @@ impl LibraryViewState {
                             members[0].album.trim().to_string(),
                             members[0].artist.trim().to_string(),
                             members,
+                            self.sort == LibrarySort::RecentlyPlayed,
                         )
                     })
                     .collect()
@@ -1414,6 +1473,7 @@ impl LibraryViewState {
                             title,
                             String::new(),
                             members,
+                            self.sort == LibrarySort::RecentlyPlayed,
                         )
                     })
                     .collect()
@@ -1440,6 +1500,7 @@ impl LibraryViewState {
                         playlist.name.clone(),
                         String::new(),
                         members,
+                        self.sort == LibrarySort::RecentlyPlayed,
                     )
                     .with_representative(representative)
                     .with_track_count(playlist.tracks.len())
@@ -1523,18 +1584,23 @@ fn make_library_collection(
     title: String,
     subtitle: String,
     tracks: Vec<Track>,
+    include_last_played: bool,
 ) -> LibraryCollection {
-    let last_played = tracks
-        .iter()
-        .flat_map(|track| {
-            store
-                .history
-                .iter()
-                .filter(move |entry| same_track_identity(&entry.track, track))
-                .map(|entry| entry.played_at)
-        })
-        .max()
-        .unwrap_or_default();
+    let last_played = if include_last_played {
+        tracks
+            .iter()
+            .flat_map(|track| {
+                store
+                    .history
+                    .iter()
+                    .filter(move |entry| same_track_identity(&entry.track, track))
+                    .map(|entry| entry.played_at)
+            })
+            .max()
+            .unwrap_or_default()
+    } else {
+        0
+    };
     LibraryCollection {
         kind: kind.into(),
         key,
@@ -1824,6 +1890,28 @@ mod tests {
     }
 
     #[test]
+    fn recent_sort_matches_local_aliases_without_merging_distinct_video_ids() {
+        let remote = Track { path: "yt://abcdefghijk".into(), title: "Song".into(), artist: "Artist".into(), album: "Album A".into(), duration_secs: 180.0, ..Default::default() };
+        let local = Track { path: "song.flac".into(), title: "Song".into(), artist: "Artist".into(), album: "Album A".into(), duration_secs: 180.0, ..Default::default() };
+        let other = Track { path: "yt://12345678901".into(), title: "Song".into(), artist: "Artist".into(), album: "Album B".into(), duration_secs: 180.0, ..Default::default() };
+        let tracks = vec![other.clone(), local.clone(), remote.clone()];
+        let store = Store {
+            tracks: tracks.clone(),
+            history: vec![History { track: remote, played_at: 50, ..Default::default() }],
+            ..Default::default()
+        };
+        let view = LibraryViewState { sort: LibrarySort::RecentlyPlayed, ..Default::default() };
+        let sorted = view.apply(&store, &tracks, |_| true);
+        assert_eq!(sorted.iter().map(|track| track.path.as_str()).collect::<Vec<_>>(),
+            ["song.flac", "yt://abcdefghijk", "yt://12345678901"]);
+
+        let albums = LibraryViewState { category: LibraryCategory::Albums, sort: LibrarySort::RecentlyPlayed, ..Default::default() }
+            .collections(&store, &tracks, |_| true);
+        assert_eq!(albums.iter().map(|album| album.title.as_str()).collect::<Vec<_>>(), ["Album A", "Album B"]);
+        assert_eq!(albums.iter().map(|album| album.last_played).collect::<Vec<_>>(), [50, 0]);
+    }
+
+    #[test]
     fn relinking_updates_saved_references_without_touching_the_file() {
         let old = Track { path: "C:/gone/old.mp3".into(), title: "Old title".into(), ..Default::default() };
         let replacement = Track { path: "D:/Music/new.mp3".into(), title: "New title".into(), ..Default::default() };
@@ -1933,6 +2021,20 @@ mod tests {
             .collect();
         assert_eq!(titles, ["Local file", "Saved"]);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn library_download_projection_uses_scanned_tracks_without_disk_access() {
+        let remote = Track { path: "yt://abcdefghijk".into(), title: "Remote".into(), ..Default::default() };
+        let local = Track { path: "Z:/offline/song.mp3".into(), title: "Local".into(), ..Default::default() };
+        let mut store = Store { tracks: vec![remote.clone()], ..Default::default() };
+        store.likes.insert(remote.path.clone());
+        store.downloads.insert(remote.path.clone(), local.path.clone());
+        assert_eq!(store.library_tracks()[0].path, remote.path);
+        store.tracks.push(local.clone());
+        let tracks = store.library_tracks();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].path, local.path);
     }
 
     #[test]
@@ -2081,6 +2183,31 @@ mod tests {
     }
 
     #[test]
+    fn rescan_preserves_only_the_matching_recordings_links() {
+        let saved = Track {
+            path: "C:/music/song.mp3".into(), title: "Song".into(), artist: "Artist".into(),
+            duration_secs: 180.0, video_id: Some("abcdefghijk".into()),
+            clip_video_id: Some("clip0000001".into()), thumbnail_url: "https://example.test/art".into(),
+            ..Default::default()
+        };
+        let scan = Track { video_id: None, clip_video_id: None, thumbnail_url: String::new(), ..saved.clone() };
+        let merged = deduplicate_tracks([saved.clone(), scan.clone()]);
+        assert_eq!(merged[0].video_id, saved.video_id);
+        assert_eq!(merged[0].clip_video_id, saved.clip_video_id);
+        assert_eq!(merged[0].thumbnail_url, saved.thumbnail_url);
+
+        let changed = Track { title: "Different song".into(), ..scan.clone() };
+        let replaced = deduplicate_tracks([saved.clone(), changed]);
+        assert!(replaced[0].video_id.is_none());
+        assert!(replaced[0].clip_video_id.is_none());
+
+        let new_identity = Track { video_id: Some("other000001".into()), ..scan };
+        let replaced = deduplicate_tracks([saved, new_identity]);
+        assert_eq!(replaced[0].video_id.as_deref(), Some("other000001"));
+        assert!(replaced[0].clip_video_id.is_none());
+    }
+
+    #[test]
     fn metadata_fallback_pairs_local_and_web_when_one_id_is_missing() {
         let local = Track {
             path: "C:/music/song.mp3".into(),
@@ -2092,6 +2219,7 @@ mod tests {
         let matching = Track {
             path: "search-result".into(),
             video_id: Some("abcdefghijk".into()),
+            clip_video_id: Some("clip0000001".into()),
             title: "a-song".into(),
             artist: "the artist".into(),
             duration_secs: 185.0,
@@ -2101,6 +2229,7 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].path, local.path);
         assert_eq!(merged[0].video_id.as_deref(), Some("abcdefghijk"));
+        assert_eq!(merged[0].clip_video_id.as_deref(), Some("clip0000001"));
         assert_eq!(merged[0].duration_secs, 180.0);
 
         let no_id_copy = Track {

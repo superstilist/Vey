@@ -11,15 +11,53 @@ fn present_during_travel(moving: bool, reduced: bool, has_frame: bool, elapsed: 
     !moving || reduced || !has_frame || elapsed >= TRAVEL_FRAME_INTERVAL
 }
 
+// One in-flight frame bounds the CPU queue even while the UI is busy.
+struct FrameJob {
+    source: Option<(image::RgbaImage, KawarpSettings)>,
+    phase: f32,
+    reduced: bool,
+    mix: f32,
+    warp: f32,
+}
+
 pub fn install(w: &MainWindow) -> slint::Timer {
+    let (send, jobs) = std::sync::mpsc::sync_channel::<FrameJob>(1);
+    let (done, frames) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("vey-ambient".into())
+        .spawn(move || {
+            let mut target = Vec::new();
+            let mut from = Vec::new();
+            let mut shown = Vec::new();
+            while let Ok(job) = jobs.recv() {
+                if let Some((source, options)) = job.source {
+                    target = prepare(&source, &options);
+                    from.clone_from(&shown);
+                }
+                crate::ambient_motion::compose(
+                    &target,
+                    &from,
+                    &mut shown,
+                    (W as usize, H as usize),
+                    job.phase,
+                    job.warp,
+                    job.reduced,
+                    job.mix,
+                );
+                if done.send(shown.clone()).is_err() {
+                    break;
+                }
+            }
+        })
+        .expect("native ambient worker");
     let throttle_travel = std::env::var("VEY_LEGACY_AMBIENT_TRAVEL").as_deref() != Ok("1");
     let weak = w.as_weak();
     let timer = slint::Timer::default();
     let mut art = slint::Image::default();
     let mut options = KawarpSettings::default();
-    let mut target = Vec::<u8>::new();
-    let mut from = Vec::<u8>::new();
-    let mut shown = Vec::<u8>::new();
+    let mut initialized = false;
+    let mut pending = false;
+    let mut has_frame = false;
     let mut settled = false;
     let mut last_reduced = false;
     let mut started = Instant::now();
@@ -33,13 +71,32 @@ pub fn install(w: &MainWindow) -> slint::Timer {
             let Some(w) = weak.upgrade() else {
                 return;
             };
+            let _timer_span = crate::player_debug::begin_span(&w, "ambient_timer_callback");
             let now = Instant::now();
             let elapsed = now.duration_since(last).as_secs_f32().min(0.2);
             last = now;
+            // Always drain a completed job, including while hidden, so resuming
+            // cannot leave the bounded worker waiting behind an unconsumed frame.
+            if let Ok(pixels) = frames.try_recv() {
+                pending = false;
+                w.set_ambient_frame(slint::Image::from_rgba8(
+                    slint::SharedPixelBuffer::clone_from_slice(&pixels, W, H),
+                ));
+                has_frame = true;
+                last_presented = now;
+            }
             if w.window().is_minimized()
                 || (w.get_color_mode() == "static" && !w.get_player_theme_style().enabled)
                 || w.get_ambient_opacity() <= 0.001
             {
+                return;
+            }
+            let reduced = w.get_lyrics_reduced_motion();
+            let moving = w.get_player_state() == "playing" && !reduced;
+            if moving {
+                phase += elapsed * 0.24;
+            }
+            if pending {
                 return;
             }
             let next = w.get_current_art();
@@ -52,37 +109,34 @@ pub fn install(w: &MainWindow) -> slint::Timer {
                 dim_bright: w.get_kawarp_dim(),
             }
             .normalized();
-            let empty = next.size().width == 0 || next.size().height == 0;
-            if !empty && (next != art || config != options) {
-                if let Some(pixels) = next.to_rgba8() {
-                    let image = image::RgbaImage::from_raw(
-                        pixels.width(),
-                        pixels.height(),
-                        pixels.as_bytes().to_vec(),
-                    )
-                    .unwrap();
-                    target = prepare(&image, &config);
-                    from = shown.clone();
-                    started = now;
-                    art = next;
-                    options = config.clone();
-                    settled = false;
-                }
-            }
-            if target.is_empty() || (empty && config != options) {
-                let fallback = image::RgbaImage::from_fn(64, 64, |x, y| {
-                    image::Rgba([(40 + x * 2) as u8, (45 + y) as u8, (110 + y * 2) as u8, 255])
-                });
-                target = prepare(&fallback, &config);
-                options = config.clone();
+            let mut source = None;
+            if !initialized || next != art || config != options {
+                let image = next
+                    .to_rgba8()
+                    .and_then(|p| {
+                        image::RgbaImage::from_raw(p.width(), p.height(), p.as_bytes().to_vec())
+                    })
+                    .unwrap_or_else(|| {
+                        image::RgbaImage::from_fn(64, 64, |x, y| {
+                            image::Rgba([
+                                (40 + x * 2) as u8,
+                                (45 + y) as u8,
+                                (110 + y * 2) as u8,
+                                255,
+                            ])
+                        })
+                    });
+                source = Some((image, config.clone()));
+                art = next;
+                options = config;
+                initialized = true;
                 started = now;
+                settled = false;
             }
-            let reduced = w.get_lyrics_reduced_motion();
             if reduced != last_reduced {
                 settled = false;
                 last_reduced = reduced;
             }
-            let moving = w.get_player_state() == "playing" && !reduced;
             let t = if reduced {
                 1.
             } else {
@@ -91,35 +145,28 @@ pub fn install(w: &MainWindow) -> slint::Timer {
             if !moving && t >= 1. && settled {
                 return;
             }
-            if moving {
-                phase += elapsed * 0.24;
-            }
-            if throttle_travel
+            if source.is_none()
+                && throttle_travel
                 && !present_during_travel(
                     w.get_page_moving(),
                     reduced,
-                    !shown.is_empty(),
+                    has_frame,
                     now.duration_since(last_presented),
                 )
             {
                 return;
             }
             let mix = t * t * t * (t * (t * 6. - 15.) + 10.);
-            crate::ambient_motion::compose(
-                &target,
-                &from,
-                &mut shown,
-                (W as usize, H as usize),
-                phase,
-                options.warp,
-                reduced,
-                mix,
-            );
+            pending = send
+                .try_send(FrameJob {
+                    source,
+                    phase,
+                    reduced,
+                    mix,
+                    warp: options.warp,
+                })
+                .is_ok();
             settled = !moving && t >= 1.;
-            w.set_ambient_frame(slint::Image::from_rgba8(
-                slint::SharedPixelBuffer::clone_from_slice(&shown, W, H),
-            ));
-            last_presented = now;
         },
     );
     timer

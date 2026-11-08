@@ -120,6 +120,18 @@ Host adaptations (all other copied crate source is unchanged):
   software feather at physical-pixel resolution, and uses premultiplied color
   samples for translucent gradient consistency. Vey's settled letter motion
   starts from a neutral phase. Source cue and fill clocks remain unchanged.
+- Native stable-fill bounds the gradient feather to 64 coverage cells instead
+  of 512 text/scissor draws per word. Solid-region boundaries remain aligned to
+  physical pixels; each cell integrates its covered gradient interval. The
+  narrow/broad feather artifact fixtures check transformed glyph interiors.
+  The original conditional neutral Text remains; a pool bounded to 64 cells has a stable size
+  throughout partial coverage, then releases at solid ink. Hidden pools on every
+  unsung/completed word regressed frame time and are deliberately not retained.
+  Retaining a hidden neutral Text during partial ink also regressed the measured
+  viewport workload; only the per-fill repeater capacity is stabilized.
+  The optional `LyricInk.max-feather-span` comes from static ramp/fragment/glyph
+  geometry, retaining only the capacity needed for normal narrow feathers.
+  Neutral ink keeps its original unclipped Text origin for ligature handoffs.
 - Vey's `src/native_lyric_glyphs.rs` is based on demo/src/glyph_plans.rs, with
   Vey's generated glyph type and bundled Roboto test font. The original source
   license applies. Integration lives in src/native_lyrics.rs and ui/native-lyrics.slint.

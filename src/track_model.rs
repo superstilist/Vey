@@ -93,6 +93,9 @@ impl Model for TrackModel {
     fn model_tracker(&self) -> &dyn slint::ModelTracker {
         self.rows.model_tracker()
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 pub(crate) fn mounted(w: &MainWindow) -> Vec<ModelRc<TrackRow>> {
@@ -149,6 +152,18 @@ pub(crate) fn set_home_recommendations(w: &MainWindow, rows: Vec<TrackRow>) {
     }
 }
 
+/// Rebind the playlist's retained model after a batch of artwork updates.
+/// This also invalidates Slint's indexed bindings used by its cover collage.
+pub(crate) fn rebind_playlist(w: &MainWindow) {
+    let previous = w.get_playlist_page_tracks();
+    let rows = (0..previous.row_count())
+        .filter_map(|index| previous.row_data(index))
+        .collect();
+    let model: ModelRc<TrackRow> = Rc::new(TrackModel::new(rows)).into();
+    w.set_playlist_page_tracks(model.clone());
+    w.set_tracks(model);
+}
+
 pub(crate) fn update_path(w: &MainWindow, path: &str, mut update: impl FnMut(&mut TrackRow)) {
     for model in mounted(w) {
         if let Some(rows) = model.as_any().downcast_ref::<TrackModel>() {
@@ -168,6 +183,19 @@ mod tests {
                 ..Default::default()
             })
             .collect()
+    }
+    #[test]
+    fn model_rc_can_update_delayed_artwork_without_reopening() {
+        let model: ModelRc<TrackRow> = Rc::new(TrackModel::new(rows(&["first", "second", "first"]))).into();
+        let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(1, 1);
+        pixels.make_mut_bytes().copy_from_slice(&[255, 0, 0, 255]);
+        let art = slint::Image::from_rgba8(pixels);
+        let retained = model.as_any().downcast_ref::<TrackModel>()
+            .expect("mounted ModelRc must expose its TrackModel");
+        retained.update_path("first", |row| row.art = art.clone());
+        assert_eq!(model.row_data(0).unwrap().art, art);
+        assert_eq!(model.row_data(2).unwrap().art, art);
+        assert_eq!(model.row_data(1).unwrap().art.size().width, 0);
     }
     #[test]
     fn keyed_updates_follow_removal_reorder_and_duplicate_paths() {

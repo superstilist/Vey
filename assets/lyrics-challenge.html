@@ -2,25 +2,42 @@
 <html lang="uk">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{background:#08080c;color:#f5f3f8;font:14px system-ui}iframe{width:100%;height:280px;border:0}</style>
-<p>Перевірка доступу до слів пісень</p>
+<style>
+*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0}body{display:grid;grid-template-rows:52px 1fr;background:#08080c;color:#f5f3f8;font:14px system-ui,sans-serif}
+header{display:flex;align-items:center;justify-content:space-between;padding:0 18px;border-bottom:1px solid #ffffff18;background:#101014;font-weight:650}
+button{border:0;border-radius:9px;padding:8px 12px;background:#ffffff12;color:#f5f3f8;font:inherit;cursor:pointer}button:hover{background:#ffffff22}
+main{display:grid;place-items:center;overflow:auto;padding:18px}.card{width:min(100%,460px);padding:18px;border:1px solid #ffffff18;border-radius:20px;background:#141419;text-align:center}
+.spinner{width:28px;height:28px;margin:0 auto 12px;border:3px solid #ffffff28;border-top-color:#b7e48c;border-radius:50%;animation:spin .85s linear infinite}
+iframe{display:block;width:100%;height:280px;margin-top:12px;border:0;border-radius:10px;background:#ffffff}
+#status{min-height:20px;margin:0;color:#bcb9c4;font-size:12px}#fallback{display:none;margin-top:12px;color:#c7ee9f;background:#ffffff10}
+@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.spinner{animation:none}}
+</style>
+<header><span>Перевірка доступу до слів пісень</span><button id="cancel" type="button">Закрити</button></header>
+<main><section class="card"><div class="spinner" aria-hidden="true"></div><p id="status">Завантажуємо перевірку…</p><iframe title="Перевірка Turnstile"></iframe><button id="fallback" type="button">Не завантажилося? Відкрити у браузері</button></section></main>
 <script>
 // Register before navigating the frame, as in the WebStorm authentication host.
-const frame = document.createElement('iframe');
+const frame = document.querySelector('iframe');
 const status = state => window.ipc.postMessage(JSON.stringify({type:'challenge-status',state}));
+const statusText = document.getElementById('status');
+const cancel = document.getElementById('cancel');
+const fallback = document.getElementById('fallback');
+const post = value => window.ipc.postMessage(JSON.stringify(value));
 status('host-ready');
-frame.addEventListener('load', () => status('frame-loaded'));
+cancel.addEventListener('click', () => post({type:'challenge-cancel'}));
+fallback.addEventListener('click', () => post({type:'challenge-browser-fallback'}));
+frame.addEventListener('load', () => { status('frame-loaded'); statusText.textContent='Завершіть перевірку нижче.'; });
+if (!window.__VEY_EXTERNAL__) setTimeout(() => { fallback.style.display='inline-block'; }, 12000);
 addEventListener('message', event => {
   if (event.origin !== 'https://lyrics.api.dacubeking.com' || event.source !== frame.contentWindow) return;
   const data = event.data;
   if (!data || typeof data !== 'object') return;
   if (data.type === 'turnstile-token' && typeof data.token === 'string' && data.token.trim() && data.token.length < 16384) {
-    window.ipc.postMessage(JSON.stringify({type: data.type, token: data.token}));
+    post({type: data.type, token: data.token});
   } else if (['turnstile-error','turnstile-expired','turnstile-timeout'].includes(data.type)) {
-    window.ipc.postMessage(JSON.stringify({type: data.type, error: String(data.error || '').slice(0,64)}));
+    statusText.textContent='Перевірка не пройшла. Спробуйте ще раз або відкрийте браузер.';
+    fallback.style.display='inline-block';
   }
 });
 frame.src = 'https://lyrics.api.dacubeking.com/challenge';
-document.body.appendChild(frame);
 </script>
 </html>

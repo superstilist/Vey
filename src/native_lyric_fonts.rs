@@ -6,9 +6,9 @@ fn faces() -> &'static [Face<'static>; 3] {
     static FACES: OnceLock<[Face<'static>; 3]> = OnceLock::new();
     FACES.get_or_init(|| {
         let mut faces = [
-            Face::parse(include_bytes!("../assets/fonts/Satoshi-700.otf"), 0).unwrap(),
-            Face::parse(include_bytes!("../assets/fonts/NotoSans.ttf"), 0).unwrap(),
-            Face::parse(include_bytes!("../assets/fonts/NotoSansJP.ttf"), 0).unwrap(),
+            Face::parse(vey_ui::FONT_SATOSHI_700, 0).unwrap(),
+            Face::parse(vey_ui::FONT_NOTO_SANS, 0).unwrap(),
+            Face::parse(vey_ui::FONT_NOTO_SANS_JP, 0).unwrap(),
         ];
         for face in &mut faces {
             face.set_variation(ttf_parser::Tag::from_bytes(b"wght"), 700.);
@@ -138,11 +138,11 @@ fn data(family: &str, weight: u16) -> Option<std::sync::Arc<Vec<u8>>> {
         return Some(font.bytes.clone());
     }
     let bytes: &[u8] = match family {
-        "Satoshi" if weight < 600 => include_bytes!("../assets/fonts/Satoshi-500.otf"),
-        "Satoshi" => include_bytes!("../assets/fonts/Satoshi-700.otf"),
-        "Roboto" => include_bytes!("../assets/fonts/Roboto.ttf"),
-        "Noto Sans" => include_bytes!("../assets/fonts/NotoSans.ttf"),
-        "Noto Sans JP" => include_bytes!("../assets/fonts/NotoSansJP.ttf"),
+        "Satoshi" if weight < 600 => vey_ui::FONT_SATOSHI_500,
+        "Satoshi" => vey_ui::FONT_SATOSHI_700,
+        "Roboto" => vey_ui::FONT_ROBOTO,
+        "Noto Sans" => vey_ui::FONT_NOTO_SANS,
+        "Noto Sans JP" => vey_ui::FONT_NOTO_SANS_JP,
         _ => return None,
     };
     // Bundled data is retained once, never copied for each measured text run.
@@ -158,23 +158,23 @@ fn data(family: &str, weight: u16) -> Option<std::sync::Arc<Vec<u8>>> {
             [
                 (
                     "Satoshi",
-                    include_bytes!("../assets/fonts/Satoshi-700.otf").to_vec(),
+                    vey_ui::FONT_SATOSHI_700.to_vec(),
                 ),
                 (
                     "Satoshi 500",
-                    include_bytes!("../assets/fonts/Satoshi-500.otf").to_vec(),
+                    vey_ui::FONT_SATOSHI_500.to_vec(),
                 ),
                 (
                     "Roboto",
-                    include_bytes!("../assets/fonts/Roboto.ttf").to_vec(),
+                    vey_ui::FONT_ROBOTO.to_vec(),
                 ),
                 (
                     "Noto Sans",
-                    include_bytes!("../assets/fonts/NotoSans.ttf").to_vec(),
+                    vey_ui::FONT_NOTO_SANS.to_vec(),
                 ),
                 (
                     "Noto Sans JP",
-                    include_bytes!("../assets/fonts/NotoSansJP.ttf").to_vec(),
+                    vey_ui::FONT_NOTO_SANS_JP.to_vec(),
                 ),
             ]
             .into_iter()
@@ -539,11 +539,11 @@ pub fn refresh_cache(cache: &mut braccato_slint::GlowCache, previous: &mut u64) 
 pub fn cache() -> braccato_slint::GlowCache {
     let mut cache = braccato_slint::GlowCache::new(
         [
-            include_bytes!("../assets/fonts/Satoshi-700.otf").to_vec(),
-            include_bytes!("../assets/fonts/Satoshi-500.otf").to_vec(),
-            include_bytes!("../assets/fonts/NotoSans.ttf").to_vec(),
-            include_bytes!("../assets/fonts/NotoSansJP.ttf").to_vec(),
-            include_bytes!("../assets/fonts/Roboto.ttf").to_vec(),
+            vey_ui::FONT_SATOSHI_700.to_vec(),
+            vey_ui::FONT_SATOSHI_500.to_vec(),
+            vey_ui::FONT_NOTO_SANS.to_vec(),
+            vey_ui::FONT_NOTO_SANS_JP.to_vec(),
+            vey_ui::FONT_ROBOTO.to_vec(),
         ],
         384,
     );

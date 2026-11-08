@@ -10,6 +10,7 @@ export component HomeFeed inherits Rectangle {
     in property <[HomeShelfRow]> shelves;
     in property <[string]> filters: ["all"];
     in property <bool> mobile;
+    in property <bool> compact: false;
     in property <int> layout;
     in property <bool> loading;
     in property <bool> failed;
@@ -27,7 +28,7 @@ export component HomeFeed inherits Rectangle {
     feed := VerticalLayout {
         spacing: 0px;
         padding-bottom: 36px;
-        HorizontalLayout {
+        if !root.compact: HorizontalLayout {
             height: 40px; spacing: 12px;
             ScrollView {
                 horizontal-stretch: 1;
@@ -43,7 +44,7 @@ export component HomeFeed inherits Rectangle {
             }
             Action { icon: @image-url("../assets/icons/RefreshCw.svg"); label: I18n.tr("Оновити добірки"); enabled: !root.loading; clicked => { root.refresh(); } }
         }
-        Rectangle { height: root.mobile ? 32px : 52px; }
+        if !root.compact: Rectangle { height: root.mobile ? 32px : 52px; }
         if root.shelves.length == 0: VerticalLayout {
             spacing: 20px;
             Text { text: root.loading ? I18n.tr("Музика для вас") : I18n.tr("Ваша музика починається тут"); color: Tokens.ink-100; font-size: root.mobile ? 26px : 34px; font-weight: 700; wrap: word-wrap; }

@@ -108,8 +108,8 @@ State backups include local settings, likes, playlists, history, offsets, native
 lyric caches and imported theme data. Tag backups are stored separately under
 `tag-backups/` before applying a reviewed YT metadata match.
 
-The Windows challenge window hosts only the lyric provider challenge. Its IPC
-passes just the Turnstile token to Rust, which exchanges and caches the JWT in a
+The Windows challenge WebView is embedded over the lyrics area. Its IPC passes
+only the Turnstile token to Rust, which exchanges and caches the JWT in a
 separate `lyrics-auth.json`; that file is never part of data migration or backups.
 Public YouTube Music playlist links can be imported without sign-in. Connected
 accounts lets you choose Vey, YouTube Music or Spotify independently. Desktop
@@ -197,24 +197,18 @@ Authentication matches the WebStorm app: `/verify-turnstile` takes JSON
 `POST /v2/lyrics` with all seven form fields, including `videoId`,
 `alwaysFetchMetadata=false`, and `token`, with the YouTube Music Origin and
 Referer. A shared cookie-aware client handles both requests. Cached JWT expiry
-is decoded from the token, and a valid token remains usable during its last
-hour while renewal runs in the background. A rejected token triggers one
-renewal and retry. Settings → **Вставити JWT** accepts a JWT, a Bearer-prefixed
+is decoded from the token; a rejected token is invalidated and requires manual
+verification. Settings → **Вставити JWT** accepts a JWT, a Bearer-prefixed
 JWT, a JSON token response, or a Turnstile token in a masked input. Successful
 verification refreshes the current lyrics; use **Перевірка Turnstile** when an
 interactive challenge is required.
 
-JWT acquisition starts automatically at launch, as in the WebStorm project's
-`prewarmAuthenticationToken()`. Missing/expired tokens use the hidden official
-challenge and are exchanged and cached automatically. Concurrent callers share
-one refresh, including failures; failed attempts have a 30-second cooldown.
-The helper drains and flushes its IPC output while running, so long challenge
-tokens cannot block the process. Challenge errors reach the status display
-without logging credentials. `vey --lyrics-auth-check` checks this flow
-without opening the player and prints only whether authentication succeeded.
-The navigation filter allows WebView2's `data:text/html;charset=utf-8;base64,`
-representation only when it matches the exact bundled challenge host. Rejecting
-that navigation previously prevented the iframe from ever starting.
+Silent automatic challenges are unavailable. On Windows, **Перевірка Turnstile**
+opens the provider challenge over the lyrics panel; the system browser is a
+fallback if the embedded WebView cannot start or the in-app page does not load.
+Other native platforms still use the system-browser flow. Public lyric providers
+continue in parallel when a saved JWT is unavailable. `vey --lyrics-auth-check`
+checks for an unexpired saved JWT without printing it or verifying it with the server.
 
 
 Native targets use the copied Rust Braccato renderer for letter sweeps/waves,

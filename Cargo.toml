@@ -9,9 +9,6 @@ lto = "thin"
 codegen-units = 8
 strip = "debuginfo"
 
-[build-dependencies]
-slint-build = "1.18.1"
-
 [[bin]]
 name = "vey"
 path = "src/main.rs"
@@ -21,6 +18,7 @@ name = "playervf"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
+vey-ui = { path = "crates/vey-ui" }
 slint = { version = "1.18.1", features = ["backend-winit", "renderer-femtovg", "raw-window-handle-06", "unstable-fontique-011"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
@@ -90,3 +88,4 @@ name = "android.permission.READ_EXTERNAL_STORAGE"
 max_sdk_version = 32
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"
+wry = { version = "0.57.1", default-features = false }

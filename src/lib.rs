@@ -53,6 +53,8 @@ mod native_lyric_masks;
 mod native_lyric_paint;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native_lyrics;
+#[cfg(not(target_arch = "wasm32"))]
+mod player_debug;
 pub mod navigation_fx;
 pub mod player_themes;
 mod preferences;
@@ -70,7 +72,7 @@ pub mod track_model;
 pub mod video;
 #[cfg(target_arch = "wasm32")]
 mod web;
-slint::include_modules!();
+pub use vey_ui::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run() -> Result<(), slint::PlatformError> {
     app::run()

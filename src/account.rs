@@ -61,9 +61,61 @@ struct CatalogImportTrack {
     album: String,
     duration_secs: f64,
     thumbnail_url: String,
+    clip_video_id: Option<String>,
+    source_url: String,
+    youtube_music_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    local_source_key: Option<String>,
+    recording_type: String,
     lyrics_text: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     lyrics_tracks: Vec<CatalogLyricsTrack>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    lyrics_variants: Vec<crate::lyrics::LyricsAlternative>,
+}
+
+pub(crate) fn recording_type(title: &str) -> &'static str {
+    const MARKERS: &[(&str, &str)] = &[
+        ("remix", "remix"), ("re mix", "remix"), ("mix", "mix"),
+        ("live", "live"), ("acoustic", "acoustic"), ("instrumental", "instrumental"),
+        ("cover", "cover"), ("karaoke", "mix"), ("demo", "mix"),
+        ("radio edit", "mix"), ("remaster", "mix"), ("remastered", "mix"),
+        ("sped up", "mix"), ("slowed", "mix"), ("nightcore", "mix"),
+        ("8d", "mix"), ("bass boosted", "mix"), ("reverb", "mix"),
+        ("chopped and screwed", "mix"), ("mashup", "mix"), ("bootleg", "mix"),
+        ("fan made", "mix"), ("tribute", "mix"), ("extended mix", "mix"),
+        ("club mix", "mix"), ("short", "mix"), ("teaser", "mix"),
+        ("trailer", "mix"), ("preview", "mix"), ("loop", "mix"),
+    ];
+    fn has_phrase(text: &str, phrase: &str, suffix_only: bool) -> bool {
+        let words = text.to_lowercase().split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty()).map(str::to_owned).collect::<Vec<_>>();
+        let target = phrase.split_whitespace().collect::<Vec<_>>();
+        if target.len() > words.len() { return false; }
+        let matches = |window: &[String]| window.iter().map(String::as_str).eq(target.iter().copied());
+        if suffix_only { matches(&words[words.len() - target.len()..]) }
+        else { words.windows(target.len()).any(matches) }
+    }
+
+    let mut marked_segments = Vec::new();
+    for (index, open) in title
+        .char_indices()
+        .filter(|(_, ch)| *ch == '(' || *ch == '[')
+    {
+        let close = if open == '(' { ')' } else { ']' };
+        if let Some(end) = title[index + open.len_utf8()..].find(close) {
+            marked_segments.push(&title[index + open.len_utf8()..index + open.len_utf8() + end]);
+        }
+    }
+    if let Some((_, suffix)) = title.rsplit_once(" - ") { marked_segments.push(suffix); }
+    for (marker, kind) in MARKERS {
+        if marked_segments.iter().any(|segment| has_phrase(segment, marker, false))
+            || has_phrase(title, marker, true)
+        {
+            return kind;
+        }
+    }
+    "unknown"
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -72,6 +124,51 @@ struct CatalogLyricsTrack {
     kind: String,
     lang: String,
     text: String,
+}
+
+// Keep each request below the Worker's 1 MiB limit. A track can span requests;
+// the caller acknowledges it only after its final fragment succeeds.
+fn split_catalog_track(item: &CatalogImportTrack) -> Result<Vec<CatalogImportTrack>, String> {
+    const LIMIT: usize = 890_000;
+    let mut current = item.clone();
+    let variants = std::mem::take(&mut current.lyrics_variants);
+    let mut parts = Vec::new();
+    for variant in variants {
+        if serde_json::to_vec(&variant).map_err(|_| "Помилка тексту".to_string())?.len() > 800_000 {
+            return Err("Одна версія тексту завелика для сервера каталогу".into());
+        }
+        current.lyrics_variants.push(variant);
+        if current.lyrics_variants.len() > 100 || serde_json::to_vec(&current).map_err(|_| "Помилка каталогу".to_string())?.len() > LIMIT {
+            let variant = current.lyrics_variants.pop().unwrap();
+            parts.push(current);
+            current = item.clone();
+            current.lyrics_text.clear();
+            current.lyrics_tracks.clear();
+            current.lyrics_variants.clear();
+            current.lyrics_variants.push(variant);
+            if serde_json::to_vec(&current).map_err(|_| "Помилка каталогу".to_string())?.len() > LIMIT {
+                return Err("Одна версія тексту завелика для сервера каталогу".into());
+            }
+        }
+    }
+    parts.push(current);
+    Ok(parts)
+}
+
+async fn send_catalog_batch(s: &Session, batch: &[(String, String, CatalogImportTrack, bool)]) -> Result<(), String> {
+    let payload = batch.iter().map(|(_, _, item, _)| item).collect::<Vec<_>>();
+    let value = request(s, "catalog/import", "POST", Some(json!({"items":payload}))).await?;
+    if value["catalogVersion"].as_u64() != Some(2) {
+        return Err("Сервер каталогу ще не підтримує всі версії текстів".into());
+    }
+    if batch.iter().any(|(_, _, item, _)| item.path.starts_with("local://"))
+        && value["localCatalogVersion"].as_u64() != Some(1) {
+        return Err("Сервер каталогу ще не підтримує локальні записи".into());
+    }
+    if value["accepted"].as_u64().unwrap_or(0) as usize != batch.len() {
+        return Err("Blueberry прийняв лише частину пакета каталогу".into());
+    }
+    Ok(())
 }
 
 fn catalog_lyrics_tracks(lyrics: &crate::lyrics::ParsedLyrics) -> Vec<CatalogLyricsTrack> {
@@ -144,42 +241,103 @@ fn catalog_candidates(
 ) -> Vec<(String, String, CatalogImportTrack)> {
     use sha1::{Digest, Sha1};
 
+    let identities = CloudIdentities::new(store);
     let mut tracks = store.tracks.clone();
     tracks.extend(store.history.iter().map(|event| event.track.clone()));
-    tracks.extend(store.recommendations.tracks.iter().cloned());
+    // Suggestions are private ranking output, not library submissions.
+    // Cached tracks can outlive history. Only recover those with actual
+    // title/artist metadata; never infer a song from its local filename.
+    let known = tracks.iter().map(|track| track.path.clone()).collect::<HashSet<_>>();
+    for path in store.lyrics_cache.keys().filter(|path| !known.contains(*path)) {
+        if let Some(lyrics) = store.cached_lyrics(path).unwrap_or_default().into_iter()
+            .map(|alternative| alternative.lyrics)
+            .find(|lyrics| lyrics.title.as_ref().is_some_and(|s| !s.trim().is_empty())
+                && lyrics.artist.as_ref().is_some_and(|s| !s.trim().is_empty())) {
+            tracks.push(Track { path: path.clone(), title: lyrics.title.unwrap_or_default(),
+                artist: lyrics.artist.unwrap_or_default(), album: lyrics.album.unwrap_or_default(), ..Default::default() });
+        }
+    }
+    // A local file and its public track may each have different providers.
+    let mut local_by_identity = BTreeMap::<String, Vec<&str>>::new();
+    for track in &tracks {
+        if let Some(id) = identities.track(track).map(|track| track.path) {
+            local_by_identity.entry(id).or_default().push(track.path.as_str());
+        }
+    }
     let mut unique = BTreeMap::<String, Track>::new();
-    for track in tracks {
-        let Some(track) = cloud_track(store, &track) else {
+    for track in &tracks {
+        let Some(track) = identities.track(track) else {
             continue;
         };
         if !track.path.starts_with("yt://")
-            || track.title.trim().is_empty()
-            || track.artist.trim().is_empty()
-            || track.title.eq_ignore_ascii_case("unknown title")
-            || track.artist.eq_ignore_ascii_case("unknown artist")
-            || track.title.chars().count() > 512
-            || track.artist.chars().count() > 512
-            || track.album.chars().count() > 512
+            || recording_type(track.catalog_metadata.as_ref().map_or(&track.title, |meta| &meta.title)) != "unknown"
+            || track.catalog_metadata.as_ref().map_or(&track.title, |meta| &meta.title).trim().is_empty()
+            || track.catalog_metadata.as_ref().map_or(&track.artist, |meta| &meta.artist).trim().is_empty()
+            || track.catalog_metadata.as_ref().map_or(&track.title, |meta| &meta.title).eq_ignore_ascii_case("unknown title")
+            || track.catalog_metadata.as_ref().map_or(&track.artist, |meta| &meta.artist).eq_ignore_ascii_case("unknown artist")
+            || track.catalog_metadata.as_ref().map_or(&track.title, |meta| &meta.title).chars().count() > 512
+            || track.catalog_metadata.as_ref().map_or(&track.artist, |meta| &meta.artist).chars().count() > 512
+            || track.catalog_metadata.as_ref().map_or(&track.album, |meta| &meta.album).chars().count() > 512
         {
             continue;
         }
         unique.entry(track.path.clone()).or_insert(track);
     }
 
+    // A music video is an extra link on its audio recording. If that video is
+    // also present in the library as a standalone YouTube row, send it only
+    // through clipVideoId on the main song, never as a second catalog track.
+    let attached_video_paths = unique
+        .values()
+        .filter_map(|track| {
+            let song_id = track.path.strip_prefix("yt://")?;
+            let clip_id = track.clip_video_id.as_deref()?;
+            (clip_id != song_id && crate::services::video_id(clip_id))
+                .then(|| format!("yt://{clip_id}"))
+        })
+        .collect::<HashSet<_>>();
+    unique.retain(|path, _| !attached_video_paths.contains(path));
+
     unique
         .into_iter()
         .filter_map(|(id, track)| {
-            let alternatives = store.cached_lyrics(&track.path).or_else(|| {
-                store
-                    .tracks
-                    .iter()
-                    .find(|local| cloud_identity(store, &local.path).as_deref() == Some(id.as_str()))
-                    .and_then(|local| store.cached_lyrics(&local.path))
+            let metadata = track.catalog_metadata.as_ref();
+            let title = metadata.map_or_else(|| track.title.clone(), |meta| meta.title.clone());
+            let artist = metadata.map_or_else(|| track.artist.clone(), |meta| meta.artist.clone());
+            let album = metadata.map_or_else(|| track.album.clone(), |meta| meta.album.clone());
+            let duration_secs = metadata.map_or(track.duration_secs, |meta| meta.duration_secs);
+            let thumbnail_url = metadata.map_or_else(|| track.thumbnail_url.clone(), |meta| {
+                if meta.thumbnail_url.trim().is_empty() { track.thumbnail_url.clone() } else { meta.thumbnail_url.clone() }
             });
-            let selected = alternatives
-                .as_ref()
-                .and_then(|items| {
-                    items.iter().max_by_key(|item| {
+            let local_source_key = metadata.and_then(|meta| meta.local_source_key.clone())
+                .filter(|key| key.strip_prefix("local://").is_some_and(|hash| hash.len() == 64
+                    && hash.bytes().all(|byte| byte.is_ascii_hexdigit())))
+                .or_else(|| {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        local_by_identity.get(&id).into_iter().flatten().find_map(|path| {
+                            if crate::services::key_is_remote(path) { return None; }
+                            tracks.iter().find(|candidate| crate::services::normalize_path(&candidate.path)
+                                == crate::services::normalize_path(path))
+                                .and_then(local_catalog_track)
+                                .map(|local| local.path)
+                        })
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    { None }
+                });
+            let mut alternatives = Vec::new();
+            let mut seen = HashSet::new();
+            for path in std::iter::once(track.path.as_str()).chain(
+                local_by_identity.get(&id).into_iter().flatten().copied()
+            ) {
+                for alternative in store.cached_lyrics(path).unwrap_or_default() {
+                    if let Ok(key) = serde_json::to_string(&alternative) {
+                        if seen.insert(key) { alternatives.push(alternative); }
+                    }
+                }
+            }
+            let selected = alternatives.iter().max_by_key(|item| {
                         let has_text = item.lyrics.lines.iter().any(|line| !line.text.trim().is_empty());
                         let quality = match item.sync_type {
                             crate::lyrics::LyricsSyncType::RichSync => 4,
@@ -187,9 +345,8 @@ fn catalog_candidates(
                             crate::lyrics::LyricsSyncType::Synced => 2,
                             crate::lyrics::LyricsSyncType::Plain => 1,
                         };
-                        (has_text, quality, item.lyrics.lines.len())
+                        (has_text, std::cmp::Reverse(crate::braccato::providers::provider_rank(&item.provider)), quality, item.lyrics.lines.len())
                     })
-                })
                 .filter(|item| item.lyrics.lines.iter().any(|line| !line.text.trim().is_empty()));
             let lyrics_tracks = selected.map_or_else(Vec::new, |item| catalog_lyrics_tracks(&item.lyrics));
             let lyrics_text = selected.map_or_else(String::new, |item| {
@@ -204,18 +361,27 @@ fn catalog_candidates(
                     crate::lyrics::serialize_lrc(&source)
                 }
             });
+            let youtube_music_url = id.strip_prefix("yt://")
+                .map(|video| format!("https://music.youtube.com/watch?v={video}"))
+                .unwrap_or_default();
             let item = CatalogImportTrack {
                 path: id.clone(),
-                title: track.title,
-                artist: track.artist,
-                album: track.album,
-                duration_secs: track.duration_secs,
-                thumbnail_url: track.thumbnail_url,
+                source_url: youtube_music_url.clone(),
+                youtube_music_url,
+                local_source_key,
+                recording_type: recording_type(&title).into(),
+                clip_video_id: track.clip_video_id.clone().filter(|id| crate::services::video_id(id)),
+                title,
+                artist,
+                album,
+                duration_secs,
+                thumbnail_url,
                 lyrics_text: if lyrics_text.len() <= 120_000 { lyrics_text } else { String::new() },
                 lyrics_tracks: lyrics_tracks
                     .into_iter()
                     .filter(|track| track.text.len() <= 120_000)
                     .collect(),
+                lyrics_variants: alternatives,
             };
             let serialized = serde_json::to_vec(&item).ok()?;
             let fingerprint = format!("{:x}", Sha1::digest(serialized));
@@ -279,6 +445,81 @@ fn portable_track(track: &Track) -> Track {
     }
     result
 }
+
+/// Local retry identity based only on song metadata, never the local path.
+#[cfg(any(not(target_arch = "wasm32"), test))]
+fn local_catalog_track(track: &Track) -> Option<Track> {
+    use sha2::{Digest, Sha256};
+    if crate::services::key_is_remote(&track.path) { return None; }
+    let title = crate::services::normalize_music_text(&track.title);
+    let artist = crate::services::normalize_music_text(&track.artist);
+    if title.is_empty() || artist.is_empty() || title == "unknown title" || artist == "unknown artist" { return None; }
+    let album = crate::services::normalize_music_text(&track.album);
+    let duration = if track.duration_secs.is_finite() { track.duration_secs.max(0.).round() as u64 } else { 0 };
+    let identity = format!("{title}\n{artist}\n{album}\n{duration}");
+    let mut result = portable_track(track);
+    result.path = format!("local://{:x}", Sha256::digest(identity.as_bytes()));
+    Some(result)
+}
+
+/// Resolve a batch of account keys without repeatedly scanning the library.
+struct CloudIdentities {
+    tracks: BTreeMap<String, Option<String>>,
+    downloads: BTreeMap<String, String>,
+}
+
+impl CloudIdentities {
+    fn new(store: &Store) -> Self {
+        let mut tracks = BTreeMap::new();
+        for track in &store.tracks {
+            tracks
+                .entry(crate::services::normalize_path(&track.path))
+                .or_insert_with(|| {
+                    track.video_id.as_deref()
+                        .filter(|id| crate::services::video_id(id))
+                        .map(|id| format!("yt://{id}"))
+                });
+        }
+        let mut downloads = BTreeMap::new();
+        for (remote, path) in &store.downloads {
+            if cloud_key(remote) {
+                downloads
+                    .entry(crate::services::normalize_path(path))
+                    .or_insert_with(|| remote.clone());
+            }
+        }
+        Self { tracks, downloads }
+    }
+
+    fn identity(&self, key: &str) -> Option<String> {
+        if cloud_key(key) {
+            return Some(key.to_owned());
+        }
+        if let Some(id) = key
+            .strip_prefix("vid:")
+            .filter(|id| crate::services::video_id(id))
+        {
+            return Some(format!("yt://{id}"));
+        }
+        let local = crate::services::normalize_path(key);
+        self.tracks
+            .get(&local)
+            .and_then(Clone::clone)
+            .or_else(|| self.downloads.get(&local).cloned())
+    }
+
+    fn track(&self, track: &Track) -> Option<Track> {
+        let key = track
+            .video_id
+            .as_deref()
+            .filter(|id| crate::services::video_id(id))
+            .map(|id| format!("yt://{id}"))
+            .or_else(|| self.identity(&track.path))?;
+        let mut result = portable_track(track);
+        result.path = key;
+        Some(result)
+    }
+}
 /// The portable key for anything the account may store: cloud keys pass
 /// through, and a local file maps to `yt://<id>` when its tags, remembered
 /// track or download link expose a YouTube Music identity.
@@ -308,26 +549,14 @@ fn cloud_identity(store: &Store, key: &str) -> Option<String> {
         .find(|(remote, path)| cloud_key(remote) && crate::services::normalize_path(path) == local)
         .map(|(remote, _)| remote.clone())
 }
-/// Turn a stored track into its portable cloud copy, keeping the public
-/// metadata but never a local path or a private artwork URL.
-fn cloud_track(store: &Store, track: &Track) -> Option<Track> {
-    let key = track
-        .video_id
-        .as_deref()
-        .filter(|id| crate::services::video_id(id))
-        .map(|id| format!("yt://{id}"))
-        .or_else(|| cloud_identity(store, &track.path))?;
-    let mut result = portable_track(track);
-    result.path = key;
-    Some(result)
-}
 impl CloudLibrary {
     fn capture(store: &Store, auto_upload: bool) -> Self {
+        let identities = CloudIdentities::new(store);
         let mut seen = BTreeSet::new();
         let tracks: Vec<Track> = store
             .tracks
             .iter()
-            .filter_map(|track| cloud_track(store, track))
+            .filter_map(|track| identities.track(track))
             .filter(|track| seen.insert(track.path.clone()))
             .collect();
         Self {
@@ -335,7 +564,7 @@ impl CloudLibrary {
             likes: store
                 .likes
                 .iter()
-                .filter_map(|key| cloud_identity(store, key))
+                .filter_map(|key| identities.identity(key))
                 .collect(),
             playlists: store
                 .playlists
@@ -347,7 +576,7 @@ impl CloudLibrary {
                         tracks: p
                             .tracks
                             .iter()
-                            .filter_map(|key| cloud_identity(store, key))
+                            .filter_map(|key| identities.identity(key))
                             .collect(),
                         ..p.clone()
                     }
@@ -358,7 +587,7 @@ impl CloudLibrary {
                 .iter()
                 .filter_map(|h| {
                     Some(History {
-                        track: cloud_track(store, &h.track)?,
+                        track: identities.track(&h.track)?,
                         ..h.clone()
                     })
                 })
@@ -406,13 +635,13 @@ impl CloudLibrary {
             offsets: store
                 .offsets
                 .iter()
-                .filter_map(|(key, value)| cloud_identity(store, key).map(|key| (key, *value)))
+                .filter_map(|(key, value)| identities.identity(key).map(|key| (key, *value)))
                 .collect(),
             lyrics_choices: store
                 .lyrics_choices
                 .iter()
                 .filter_map(|(key, value)| {
-                    cloud_identity(store, key).map(|key| (key, value.clone()))
+                    identities.identity(key).map(|key| (key, value.clone()))
                 })
                 .collect(),
             auto_upload,
@@ -528,6 +757,29 @@ struct FileInfo {
 }
 #[derive(Clone)]
 enum Action {
+    PreparePush(Store, bool),
+    PrepareInitialSnapshot(Store, bool),
+    #[cfg(not(target_arch = "wasm32"))]
+    PrepareRestore {
+        store: Store,
+        cloud: CloudLibrary,
+        cloud_revision: u64,
+        store_revision: u64,
+        last_snapshot: String,
+        force: bool,
+    },
+    Prepare {
+        store: Store,
+        last_snapshot: String,
+        verified: bool,
+        check_due: bool,
+        #[cfg(not(target_arch = "wasm32"))]
+        match_attempts: BTreeMap<String, u64>,
+        #[cfg(not(target_arch = "wasm32"))]
+        match_busy: bool,
+    },
+    #[cfg(not(target_arch = "wasm32"))]
+    MatchLocal(Track),
     Login {
         email: String,
         password: String,
@@ -555,10 +807,25 @@ enum Action {
     Download(FileInfo),
 }
 enum Output {
+    PreparedPush(CloudLibrary),
+    PreparedInitialSnapshot(String, bool),
+    #[cfg(not(target_arch = "wasm32"))]
+    PreparedRestore {
+        store_revision: u64,
+        cloud_revision: u64,
+        prior_revision: Option<u64>,
+        auto_sync: bool,
+        prior_auto_upload: bool,
+        auto_upload: bool,
+        restored: Option<(Store, String)>,
+    },
+    Prepared(Option<Box<Action>>, bool, bool, Option<u64>),
     Unchanged,
     Session(Session),
     Pushed(u64, String),
     CatalogQueued(Vec<(String, String)>, usize, Option<String>),
+    #[cfg(not(target_arch = "wasm32"))]
+    LocalMatched(Track, Option<Track>, u64),
     Pulled(u64, CloudLibrary, bool),
     Account(Value, Option<image::RgbaImage>),
     Profile(Value),
@@ -583,6 +850,15 @@ fn base(value: &str) -> Result<String, String> {
         return Err("Потрібна HTTPS-адреса API без паролів і параметрів".into());
     }
     Ok(u.as_str().trim_end_matches('/').to_string())
+}
+pub(crate) fn recommendation_catalog_base() -> Option<String> {
+    let session = load_session();
+    let api = if session.api.trim().is_empty() {
+        "https://blueberry-melody.superstilist.workers.dev"
+    } else {
+        session.api.trim()
+    };
+    base(api).ok()
 }
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(module = "/web/account.js")]
@@ -801,8 +1077,108 @@ fn login_result(mut s: Session, value: Value) -> Result<Session, String> {
     s.uploaded.clear();
     Ok(s)
 }
+#[cfg(not(target_arch = "wasm32"))]
+fn select_local_youtube_match(local: &Track, candidates: Vec<Track>) -> Option<Track> {
+    if recording_type(&local.title) != "unknown" || crate::services::track_video_id(local).is_some() {
+        return None;
+    }
+    let mut matches = BTreeMap::new();
+    for candidate in candidates {
+        let Some(id) = crate::services::track_video_id(&candidate) else { continue };
+        if recording_type(&candidate.title) == "unknown"
+            && crate::services::same_track_identity(local, &candidate)
+        {
+            matches.entry(id.to_string()).or_insert(candidate);
+        }
+    }
+    (matches.len() == 1).then(|| matches.into_values().next()).flatten()
+}
 async fn work(s: Session, action: Action) -> Result<Output, String> {
     match action {
+        Action::PreparePush(store, auto_upload) => Ok(Output::PreparedPush(CloudLibrary::capture(&store, auto_upload))),
+        Action::PrepareInitialSnapshot(store, auto_upload) => Ok(Output::PreparedInitialSnapshot(
+            serde_json::to_string(&CloudLibrary::capture(&store, auto_upload)).unwrap_or_default(), auto_upload,
+        )),
+        #[cfg(not(target_arch = "wasm32"))]
+        Action::PrepareRestore { mut store, cloud, cloud_revision, store_revision, last_snapshot, force } => {
+            let auto_upload = cloud.auto_upload;
+            let conflict = !force && last_snapshot != serde_json::to_string(&CloudLibrary::capture(&store, s.auto_upload)).unwrap_or_default();
+            let restored = if conflict { None } else {
+                cloud.restore(&mut store);
+                store.migrate_identities();
+                let snapshot = if cloud_revision == 0 && s.auto_sync { String::new() }
+                    else { serde_json::to_string(&CloudLibrary::capture(&store, auto_upload)).unwrap_or_default() };
+                Some((store, snapshot))
+            };
+            Ok(Output::PreparedRestore { store_revision, cloud_revision, prior_revision: s.revision,
+                auto_sync: s.auto_sync, prior_auto_upload: s.auto_upload, auto_upload, restored })
+        }
+        Action::Prepare { store, last_snapshot, verified, check_due, #[cfg(not(target_arch = "wasm32"))] match_attempts, #[cfg(not(target_arch = "wasm32"))] match_busy } => {
+            let action = if !verified {
+                Some(Action::Account)
+            } else if s.revision.is_none() && s.auto_sync {
+                check_due.then_some(Action::Check)
+            } else {
+                let changed = if s.auto_sync {
+                    let current = CloudLibrary::capture(&store, s.auto_upload);
+                    let text = serde_json::to_string(&current).unwrap_or_default();
+                    (last_snapshot != text).then_some(Action::Push(current))
+                } else { None };
+                if changed.is_some() { changed }
+                else if check_due {
+                    let pending = catalog_candidates(&store, &s.catalog_uploaded);
+                    if !pending.is_empty() { Some(Action::CatalogImport(pending)) }
+                    else {
+                        let fallback = || if s.auto_upload && s.premium {
+                            Some(Action::Auto(store.tracks.iter().filter(|t| !cloud_key(&t.path)).map(|t| t.path.clone()).collect()))
+                        } else if s.auto_sync { Some(Action::Check) } else { None };
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let identities = CloudIdentities::new(&store);
+                            let now = crate::services::now_ms();
+                            let local = (s.auto_sync && !match_busy).then(|| store.tracks.iter().filter_map(|track| {
+                                if crate::services::key_is_remote(&track.path)
+                                    || identities.identity(&track.path).is_some()
+                                    || !track.duration_secs.is_finite() || track.duration_secs <= 0.0
+                                    || recording_type(&track.title) != "unknown" { return None; }
+                                let key = local_catalog_track(track)?;
+                                let retry_at = match_attempts.get(&key.path).copied().unwrap_or(0);
+                                (retry_at <= now).then_some((retry_at, track))
+                            }).min_by_key(|(retry_at, _)| *retry_at).map(|(_, track)| track.clone())).flatten();
+                            local.map(Action::MatchLocal).or_else(fallback)
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        { fallback() }
+                    }
+                } else { None }
+            };
+            Ok(Output::Prepared(action.map(Box::new), s.auto_sync, s.auto_upload, s.revision))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Action::MatchLocal(local) => {
+            let query = format!("{} {}", local.artist, local.title);
+            let results = tokio::time::timeout(Duration::from_secs(20), crate::native::ytm_match_candidates(query, Some(24))).await;
+            let (candidates, mut retry_ms) = match results {
+                Ok(Ok(songs)) => (songs.into_iter().filter(|song| song.kind == "song" && !song.has_video)
+                    .map(|song| Track { path: format!("yt://{}", song.video_id), video_id: Some(song.video_id),
+                        title: song.title, artist: song.artist, album: song.album, duration_secs: song.duration_secs as f64,
+                        thumbnail_url: song.thumbnail_url, clip_video_id: (!song.clip_video_id.is_empty()).then_some(song.clip_video_id),
+                        catalog_metadata: None })
+                    .collect(), 6 * 60 * 60 * 1000),
+                _ => (Vec::new(), 5 * 60 * 1000),
+            };
+            let mut matched = select_local_youtube_match(&local, candidates);
+            if let Some(candidate) = &matched {
+                let id = candidate.video_id.clone().unwrap_or_default();
+                let playable = tokio::time::timeout(Duration::from_secs(12), crate::native::ytm_stream_url(id)).await;
+                if !matches!(playable, Ok(Ok(Some(ref stream))) if stream.duration_secs == 0
+                    || (stream.duration_secs as f64 - local.duration_secs).abs() <= 5.0) {
+                    matched = None;
+                    retry_ms = 5 * 60 * 1000;
+                }
+            }
+            Ok(Output::LocalMatched(local, matched, retry_ms))
+        }
         Action::Login {
             email,
             password,
@@ -977,22 +1353,36 @@ async fn work(s: Session, action: Action) -> Result<Output, String> {
             let mut acknowledged = Vec::new();
             let mut accepted = 0usize;
             let mut failure = None;
-            for batch in items.chunks(100).take(10) {
-                let payload = batch.iter().map(|(_, _, item)| item).collect::<Vec<_>>();
-                match request(&s, "catalog/import", "POST", Some(json!({"items":payload}))).await {
-                    Ok(value) => {
-                        let count = value["accepted"].as_u64().unwrap_or(0) as usize;
-                        if count != batch.len() {
-                            failure = Some("Blueberry прийняв лише частину пакета каталогу".to_string());
-                            break;
+            let mut requests = 0usize;
+            let mut batch = Vec::<(String, String, CatalogImportTrack, bool)>::new();
+            let mut bytes = 32usize;
+            'tracks: for (id, fingerprint, item) in items {
+                if requests >= 10 { break; }
+                let parts = match split_catalog_track(&item) {
+                    Ok(parts) => parts,
+                    Err(error) => { failure = Some(error); break; }
+                };
+                let count = parts.len();
+                for (part_index, part) in parts.into_iter().enumerate() {
+                    let size = serde_json::to_vec(&part).map_err(|_| "Помилка каталогу".to_string())?.len() + 1;
+                    if !batch.is_empty() && (bytes + size > 900_000 || batch.len() == 100 || part_index > 0) {
+                        if let Err(error) = send_catalog_batch(&s, &batch).await { failure = Some(error); break 'tracks; }
+                        requests += 1;
+                        for (id, fingerprint, _, last) in batch.drain(..) {
+                            if last { acknowledged.push((id, fingerprint)); accepted += 1; }
                         }
-                        accepted += count;
-                        acknowledged.extend(batch.iter().map(|(id, fingerprint, _)| (id.clone(), fingerprint.clone())));
+                        bytes = 32;
                     }
-                    Err(error) => {
-                        failure = Some(error);
-                        break;
-                    }
+                    bytes += size;
+                    batch.push((id.clone(), fingerprint.clone(), part, part_index + 1 == count));
+                }
+            }
+            if failure.is_none() && !batch.is_empty() {
+                match send_catalog_batch(&s, &batch).await {
+                    Ok(()) => for (id, fingerprint, _, last) in batch {
+                        if last { acknowledged.push((id, fingerprint)); accepted += 1; }
+                    },
+                    Err(error) => failure = Some(error),
                 }
             }
             Ok(Output::CatalogQueued(acknowledged, accepted, failure))
@@ -1060,6 +1450,7 @@ pub(crate) fn snapshot(store: &Store) -> Store {
         offsets: store.offsets.clone(),
         downloads: store.downloads.clone(),
         lyrics_choices: store.lyrics_choices.clone(),
+        lyrics_cache: store.lyrics_cache.clone(),
         ..Store::default()
     }
 }
@@ -1102,6 +1493,49 @@ fn save_session(s: &Session) -> Result<(), String> {
             .map_err(|_| "Не вдалося зберегти сесію".to_string())?;
     }
     Ok(())
+}
+
+// Account writes are ordered and coalesced on one worker; filesystem sync must
+// never stall playback. Closing the app flushes the last queued state.
+#[cfg(not(target_arch = "wasm32"))]
+struct SessionWriter {
+    sender: Option<std::sync::mpsc::Sender<Session>>,
+    errors: std::sync::mpsc::Receiver<String>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl SessionWriter {
+    fn new() -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel::<Session>();
+        let (error_tx, errors) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            while let Ok(mut session) = receiver.recv() {
+                while let Ok(newer) = receiver.try_recv() { session = newer; }
+                if let Err(error) = save_session(&session) { let _ = error_tx.send(error); }
+            }
+        });
+        Self { sender: Some(sender), errors, worker: Some(worker) }
+    }
+    fn request(&self, session: &Session) -> Result<(), String> {
+        self.sender.as_ref().ok_or("Збереження сесії зупинено")?
+            .send(session.clone()).map_err(|_| "Не вдалося зберегти сесію".into())
+    }
+    fn take_error(&self) -> Option<String> { self.errors.try_recv().ok() }
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for SessionWriter {
+    fn drop(&mut self) {
+        self.sender.take();
+        if let Some(worker) = self.worker.take() { let _ = worker.join(); }
+    }
+}
+#[cfg(target_arch = "wasm32")]
+struct SessionWriter;
+#[cfg(target_arch = "wasm32")]
+impl SessionWriter {
+    fn new() -> Self { Self }
+    fn request(&self, session: &Session) -> Result<(), String> { save_session(session) }
+    fn take_error(&self) -> Option<String> { None }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1406,6 +1840,7 @@ pub fn install(
     w: &MainWindow,
     get: Rc<dyn Fn() -> Store>,
     apply: Rc<dyn Fn(Store)>,
+    #[cfg(not(target_arch = "wasm32"))] store_revision: Rc<dyn Fn() -> u64>,
     #[cfg(not(target_arch = "wasm32"))] runtime: std::sync::Arc<tokio::runtime::Runtime>,
 ) -> slint::Timer {
     struct State {
@@ -1422,6 +1857,10 @@ pub fn install(
         next_ui: u64,
         verified: bool,
         locals: Vec<String>,
+        #[cfg(not(target_arch = "wasm32"))]
+        match_attempts: BTreeMap<String, u64>,
+        #[cfg(not(target_arch = "wasm32"))]
+        match_generation: Option<u64>,
     }
     let mut session = load_session();
     if session.api.is_empty() {
@@ -1460,7 +1899,12 @@ pub fn install(
         next_ui: 0,
         verified: false,
         locals: Vec::new(),
+        #[cfg(not(target_arch = "wasm32"))]
+        match_attempts: BTreeMap::new(),
+        #[cfg(not(target_arch = "wasm32"))]
+        match_generation: None,
     }));
+    let session_writer = Rc::new(SessionWriter::new());
     let (tx, rx) = std::sync::mpsc::channel::<(u64, Result<Output, String>)>();
     let dispatch: Rc<dyn Fn(u64, Session, Action)> = {
         let tx = tx.clone();
@@ -1508,6 +1952,7 @@ pub fn install(
         let start = start.clone();
         let get = get.clone();
         let dispatch = dispatch.clone();
+        let session_writer = session_writer.clone();
         #[cfg(target_arch = "wasm32")]
         let tx = tx.clone();
         w.on_account_command(move |command| {
@@ -1594,7 +2039,7 @@ pub fn install(
                 clear_device_ui(&ui);
                 ui.set_account_cloud_files(slint::ModelRc::default());
                 ui.set_account_status("Ви вийшли з акаунта".into());
-                let _ = save_session(&a.session);
+                let _ = session_writer.request(&a.session);
                 dispatch(generation, old, Action::Logout);
                 return;
             }
@@ -1678,7 +2123,7 @@ pub fn install(
                 }
                 "delete-avatar" => Action::DeleteAvatar,
                 "files" => Action::Files,
-                "push" => Action::Push(CloudLibrary::capture(&get(), ui.get_account_auto_upload())),
+                "push" => Action::PreparePush(get(), ui.get_account_auto_upload()),
                 "pull" => Action::Pull,
                 "upload" => {
                     if !state.borrow().session.premium {
@@ -1719,17 +2164,95 @@ pub fn install(
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated,Duration::from_millis(100),move||{
         let Some(ui)=weak.upgrade()else{return;};
+        if let Some(error)=session_writer.take_error(){ui.set_account_status(error.into());}
+        #[cfg(not(target_arch = "wasm32"))]
+        let _timing = crate::player_debug::begin_span(&ui, "account_timer_callback");
         let total=TRANSFER_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
         if total>0 {let sent=TRANSFER_DONE.load(std::sync::atomic::Ordering::Relaxed);ui.set_account_status(format!("Завантаження аудіо · {}%",sent*100/total).into());}
         while let Ok((generation,result))=rx.try_recv(){
-            let mut a=state.borrow_mut();if generation!=a.generation{continue;}a.active=false;ui.set_account_busy(false);
+            let mut a=state.borrow_mut();
+            #[cfg(not(target_arch = "wasm32"))]
+            let is_local_match=matches!(&result,Ok(Output::LocalMatched(..)));
+            #[cfg(not(target_arch = "wasm32"))]
+            if is_local_match && a.match_generation==Some(generation){a.match_generation=None;}
+            if generation!=a.generation{continue;}
+            #[cfg(not(target_arch = "wasm32"))]
+            if !is_local_match{a.active=false;ui.set_account_busy(false);}
+            #[cfg(target_arch = "wasm32")]
+            {a.active=false;ui.set_account_busy(false);}
             match result {
+                Ok(Output::PreparedPush(cloud))=>{
+                    a.active=true;ui.set_account_busy(true);dispatch(a.generation,a.session.clone(),Action::Push(cloud));continue;
+                }
+                Ok(Output::PreparedInitialSnapshot(snapshot,auto_upload))=>{
+                    if a.session.revision.is_none() && a.last_snapshot.is_empty() && a.session.auto_upload==auto_upload {a.last_snapshot=snapshot;}
+                    continue;
+                }
+                Ok(Output::Prepared(action, auto_sync, auto_upload, revision))=>{
+                    if a.session.auto_sync==auto_sync && a.session.auto_upload==auto_upload && a.session.revision==revision {
+                        if let Some(action)=action{
+                            #[cfg(not(target_arch = "wasm32"))]
+                            if matches!(&*action,Action::MatchLocal(_)) {
+                                if a.match_generation!=Some(a.generation){a.match_generation=Some(a.generation);dispatch(a.generation,a.session.clone(),*action);}
+                                continue;
+                            }
+                            CANCEL_UPLOAD.store(false,std::sync::atomic::Ordering::Relaxed);a.active=true;ui.set_account_busy(true);dispatch(a.generation,a.session.clone(),*action);
+                        }
+                    }
+                    continue;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                Ok(Output::PreparedRestore{store_revision:original,cloud_revision,prior_revision,auto_sync,prior_auto_upload,auto_upload,restored})=>{
+                    if store_revision()!=original || a.session.revision!=prior_revision || a.session.auto_sync!=auto_sync || a.session.auto_upload!=prior_auto_upload || restored.is_none() {
+                        a.session.auto_sync=false;ui.set_account_auto_sync(false);
+                        ui.set_account_status("Дані змінилися під час відновлення. Виберіть зберегти або відновити бібліотеку.".into());
+                    } else if let Some((store,snapshot))=restored {
+                        a.session.revision=Some(cloud_revision);a.session.auto_upload=auto_upload;ui.set_account_auto_upload(auto_upload);
+                        apply(store);a.last_snapshot=snapshot;ui.set_account_status("Бібліотеку й налаштування відновлено".into());
+                    }
+                }
                 Ok(Output::Unchanged)=>{}
                 Ok(Output::Session(s))=>{a.verified=false;a.session=s;ui.set_account_email(a.session.email.clone().into());ui.set_account_name(a.session.name.clone().into());clear_profile_ui(&ui);a.device=None;a.last_snapshot.clear();ui.set_account_signed_in(true);ui.set_account_premium(a.session.premium);clear_device_ui(&ui);close_login_page();ui.set_account_status("Вхід виконано. Збережіть дані пристрою або відновіть хмарну бібліотеку.".into());}
                 Ok(Output::Pushed(revision,sent))=>{a.session.revision=Some(revision);a.last_snapshot=sent;ui.set_account_status("Бібліотеку збережено у хмарі".into());}
                 Ok(Output::CatalogQueued(items,count,failure))=>{a.session.catalog_uploaded.extend(items);ui.set_account_status(match failure{Some(error)=>format!("До черги Blueberry додано {count}; решту буде повторено автоматично ({error})"),None=>format!("До черги Blueberry додано {count} треків")}.into());}
-                Ok(Output::Pulled(revision,cloud,force))=>{if !force && a.last_snapshot!=serde_json::to_string(&CloudLibrary::capture(&get(),ui.get_account_auto_upload())).unwrap_or_default(){a.session.auto_sync=false;ui.set_account_auto_sync(false);ui.set_account_status("Дані змінилися на обох пристроях. Виберіть зберегти або відновити бібліотеку.".into());let _=save_session(&a.session);continue;}a.session.revision=Some(revision);a.session.auto_upload=cloud.auto_upload;ui.set_account_auto_upload(cloud.auto_upload);let mut store=get();cloud.restore(&mut store);apply(store);a.last_snapshot=if revision==0&&a.session.auto_sync{String::new()}else{serde_json::to_string(&CloudLibrary::capture(&get(),a.session.auto_upload)).unwrap_or_default()};ui.set_account_status("Бібліотеку й налаштування відновлено".into());}
-                Ok(Output::Account(value,avatar))=>{a.verified=true;a.session.premium=value["premium"].as_bool().unwrap_or(false);apply_profile(&mut a.session,&ui,&value);set_avatar_image(&ui,avatar);ui.set_account_premium(a.session.premium);if a.session.revision.is_none()&&a.last_snapshot.is_empty(){a.last_snapshot=serde_json::to_string(&CloudLibrary::capture(&get(),a.session.auto_upload)).unwrap_or_default();}ui.set_account_status(if a.session.premium{"Premium · доступ розробника або тестувальника"}else{"Базовий акаунт · синхронізація налаштувань, улюбленого та історії"}.into());}
+                #[cfg(not(target_arch = "wasm32"))]
+                Ok(Output::LocalMatched(source, matched, retry_ms))=>{
+                    if let Some(key)=local_catalog_track(&source){a.match_attempts.insert(key.path,crate::services::now_ms()+retry_ms);}
+                    if let Some(matched)=matched.filter(|_|a.session.auto_sync && ui.get_account_auto_sync()) {
+                        let mut store=get();
+                        if let Some(track)=store.tracks.iter_mut().find(|track|
+                            crate::services::normalize_path(&track.path)==crate::services::normalize_path(&source.path)
+                                && crate::services::track_video_id(track).is_none()
+                                && crate::services::same_track_identity(track,&source)) {
+                            track.video_id=matched.video_id.clone();
+                            track.catalog_metadata=Some(crate::services::CatalogMetadata {
+                                title: matched.title.clone(),
+                                artist: matched.artist.clone(),
+                                album: matched.album.clone(),
+                                duration_secs: matched.duration_secs,
+                                thumbnail_url: matched.thumbnail_url.clone(),
+                                local_source_key: local_catalog_track(&source).map(|local| local.path),
+                            });
+                            if track.clip_video_id.is_none(){track.clip_video_id=matched.clip_video_id;}
+                            if let Some(id)=track.video_id.as_deref(){store.downloads.entry(format!("yt://{id}")).or_insert_with(||source.path.clone());}
+                            store.migrate_identities();
+                            apply(store);
+                        }
+                    }
+                }
+                Ok(Output::Pulled(revision,cloud,force))=>{
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let action=Action::PrepareRestore{store:get(),cloud,cloud_revision:revision,store_revision:store_revision(),last_snapshot:a.last_snapshot.clone(),force};
+                        a.active=true;ui.set_account_busy(true);dispatch(a.generation,a.session.clone(),action);
+                        continue;
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        if !force && a.last_snapshot!=serde_json::to_string(&CloudLibrary::capture(&get(),ui.get_account_auto_upload())).unwrap_or_default(){a.session.auto_sync=false;ui.set_account_auto_sync(false);ui.set_account_status("Дані змінилися на обох пристроях. Виберіть зберегти або відновити бібліотеку.".into());let _=session_writer.request(&a.session);continue;}a.session.revision=Some(revision);a.session.auto_upload=cloud.auto_upload;ui.set_account_auto_upload(cloud.auto_upload);let mut store=get();cloud.restore(&mut store);apply(store);a.last_snapshot=if revision==0&&a.session.auto_sync{String::new()}else{serde_json::to_string(&CloudLibrary::capture(&get(),a.session.auto_upload)).unwrap_or_default()};ui.set_account_status("Бібліотеку й налаштування відновлено".into());
+                    }
+                }
+                Ok(Output::Account(value,avatar))=>{a.verified=true;a.session.premium=value["premium"].as_bool().unwrap_or(false);apply_profile(&mut a.session,&ui,&value);set_avatar_image(&ui,avatar);ui.set_account_premium(a.session.premium);ui.set_account_status(if a.session.premium{"Premium · доступ розробника або тестувальника"}else{"Базовий акаунт · синхронізація налаштувань, улюбленого та історії"}.into());if a.session.revision.is_none()&&a.last_snapshot.is_empty(){let action=Action::PrepareInitialSnapshot(get(),a.session.auto_upload);a.active=true;dispatch(a.generation,a.session.clone(),action);}}
                 Ok(Output::Profile(value))=>{apply_profile(&mut a.session,&ui,&value);ui.set_account_status("Дані акаунта збережено".into());}
                 Ok(Output::Avatar(value,avatar))=>{apply_profile(&mut a.session,&ui,&value);set_avatar_image(&ui,avatar);ui.set_account_status("Аватар оновлено".into());}
                 Ok(Output::Password)=>{ui.set_account_current_password("".into());ui.set_account_new_password("".into());ui.set_account_status("Пароль змінено. Інші Vey-сесії завершено".into());}
@@ -1757,12 +2280,12 @@ pub fn install(
                 Ok(Output::Downloaded(file,path))=>{let mut store=get();add_file(&mut store,&file,path,None);apply(store);ui.set_account_status("Пісню додано до бібліотеки пристрою".into());}
                 Err(error)=>{a.device=None;if a.session.token.is_empty(){close_login_page();clear_device_ui(&ui);}if error=="Сесія завершилася. Увійдіть знову."{a.session.token.clear();a.session.revision=None;a.files.clear();ui.set_account_signed_in(false);ui.set_account_premium(false);ui.set_account_cloud_files(slint::ModelRc::default());clear_profile_ui(&ui);}ui.set_account_status(error.clone().into());if a.session.revision.is_some()&&(error.contains("Library changed on another device")||error.contains("Conflict")){a.session.auto_sync=false;ui.set_account_auto_sync(false);}}
             }
-            if let Err(error)=save_session(&a.session){ui.set_account_status(error.into());}
+            if let Err(error)=session_writer.request(&a.session){ui.set_account_status(error.into());}
         }
         let mut a=state.borrow_mut();let now=crate::services::now_ms();
         let changed=a.session.auto_sync!=ui.get_account_auto_sync()||a.session.auto_upload!=ui.get_account_auto_upload();
         a.session.auto_sync=ui.get_account_auto_sync();a.session.auto_upload=ui.get_account_auto_upload();
-        if changed {let _=save_session(&a.session);}
+        if changed {let _=session_writer.request(&a.session);}
         if let Some((_,expires))=a.device.as_ref(){
             ui.set_account_seconds_left(((expires.saturating_sub(now)+999)/1000) as i32);
             if now>=*expires{a.generation+=1;a.active=false;a.device=None;ui.set_account_busy(false);clear_device_ui(&ui);close_login_page();ui.set_account_status("Код входу застарів. Почніть знову.".into());return;}
@@ -1775,7 +2298,7 @@ pub fn install(
         let showing=ui.get_active_view()=="settings"&&ui.get_settings_section()=="account";
         if !showing&&a.session.token.is_empty(){a.next_ui=now+3000;return;}
         let store=get();
-        if now>=a.next_ui{
+        if showing && now>=a.next_ui{
             a.next_ui=now+3000;
             a.locals=store.tracks.iter().filter(|t|!cloud_key(&t.path)).map(|t|t.path.clone()).collect();
             let names=store.tracks.iter().filter(|t|!cloud_key(&t.path)).map(|t|slint::SharedString::from(t.title.clone())).collect::<Vec<_>>();
@@ -1785,15 +2308,11 @@ pub fn install(
         if !a.session.token.is_empty(){
             let check_due=now>=a.next_sync;
             if check_due{a.next_sync=now+15000;}
-            let current=CloudLibrary::capture(&store,a.session.auto_upload);let text=serde_json::to_string(&current).unwrap_or_default();
-            let pending_catalog=if check_due{catalog_candidates(&store,&a.session.catalog_uploaded)}else{Vec::new()};
-            let action=if !a.verified{Some(Action::Account)}
-                else if a.session.revision.is_none(){(check_due&&a.session.auto_sync).then_some(Action::Check)}
-                else if a.session.auto_sync&&a.last_snapshot!=text{Some(Action::Push(current))}
-                else if check_due&&!pending_catalog.is_empty(){Some(Action::CatalogImport(pending_catalog))}
-                else if check_due&&a.session.auto_upload&&a.session.premium{Some(Action::Auto(store.tracks.iter().filter(|t|!cloud_key(&t.path)).map(|t|t.path.clone()).collect()))}
-                else if check_due&&a.session.auto_sync{Some(Action::Check)}else{None};
-            if let Some(action)=action{CANCEL_UPLOAD.store(false,std::sync::atomic::Ordering::Relaxed);a.active=true;ui.set_account_busy(true);dispatch(a.generation,a.session.clone(),action);}
+            if !showing { a.next_ui=now+3000; }
+            let action=Action::Prepare{store,last_snapshot:a.last_snapshot.clone(),verified:a.verified,check_due,
+                #[cfg(not(target_arch = "wasm32"))] match_attempts:a.match_attempts.clone(),
+                #[cfg(not(target_arch = "wasm32"))] match_busy:a.match_generation==Some(a.generation)};
+            a.active=true;dispatch(a.generation,a.session.clone(),action);
         }
     });
     timer
@@ -1827,6 +2346,291 @@ fn open_page(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unplayed_recommendations_are_not_submitted_to_shared_catalog() {
+        let suggestion = Track { path: "yt://abcdefghijk".into(), video_id: Some("abcdefghijk".into()),
+            title: "Suggested song".into(), artist: "Artist".into(), ..Default::default() };
+        let mut store = Store::default();
+        store.recommendations.tracks.push(suggestion);
+        assert!(catalog_candidates(&store, &BTreeMap::new()).is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn local_youtube_matching_requires_one_standard_recording() {
+        let local = Track { path: "C:/Music/song.flac".into(), title: "Song".into(),
+            artist: "Artist".into(), duration_secs: 180.0, ..Default::default() };
+        let good = Track { path: "yt://abcdefghijk".into(), video_id: Some("abcdefghijk".into()),
+            duration_secs: 183.0, ..local.clone() };
+        let wrong_artist = Track { artist: "Another artist".into(), ..good.clone() };
+        let wrong_length = Track { duration_secs: 200.0, ..good.clone() };
+        let cover = Track { title: "Song (Cover)".into(), ..good.clone() };
+        assert_eq!(select_local_youtube_match(&local, vec![wrong_artist, wrong_length, cover, good.clone()]), Some(good.clone()));
+        let second = Track { path: "yt://other000001".into(), video_id: Some("other000001".into()), ..good.clone() };
+        assert!(select_local_youtube_match(&local, vec![good.clone(), second]).is_none());
+        assert!(select_local_youtube_match(&Track { duration_secs: 0.0, ..local.clone() }, vec![good.clone()]).is_none());
+
+        let linked = Track { video_id: good.video_id, ..local.clone() };
+        let store = Store { tracks: vec![linked], likes: BTreeSet::from([local.path.clone()]),
+            playlists: vec![Playlist { tracks: vec![local.path], ..Default::default() }], ..Default::default() };
+        let cloud = CloudLibrary::capture(&store, false);
+        assert_eq!(cloud.tracks[0].path, "yt://abcdefghijk");
+        assert!(cloud.likes.contains("yt://abcdefghijk"));
+        assert_eq!(cloud.playlists[0].tracks, vec!["yt://abcdefghijk"]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn automatic_local_matching_runs_only_when_sync_is_enabled_and_retry_is_due() {
+        let local = Track { path: "C:/Music/song.flac".into(), title: "Song".into(),
+            artist: "Artist".into(), duration_secs: 180.0, ..Default::default() };
+        let store = Store { tracks: vec![local.clone()], ..Default::default() };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        for (enabled, retry_at, busy, expect_match) in [(true, 0, false, true), (false, 0, false, false),
+            (true, u64::MAX, false, false), (true, 0, true, false)] {
+            let session = Session { auto_sync: enabled, revision: Some(1), ..Default::default() };
+            let snapshot = serde_json::to_string(&CloudLibrary::capture(&store, false)).unwrap();
+            let attempts = BTreeMap::from([(local_catalog_track(&local).unwrap().path, retry_at)]);
+            let output = runtime.block_on(work(session, Action::Prepare { store: store.clone(),
+                last_snapshot: snapshot, verified: true, check_due: true, match_attempts: attempts, match_busy: busy })).unwrap();
+            let Output::Prepared(action, ..) = output else { panic!("prepared action expected") };
+            assert_eq!(action.is_some_and(|action| matches!(*action, Action::MatchLocal(_))), expect_match);
+        }
+    }
+
+    #[test]
+    fn indexed_account_identities_preserve_first_match_and_download_fallback() {
+        let store = Store {
+            tracks: vec![
+                Track { path: "C:/Music/a.mp3".into(), ..Default::default() },
+                Track { path: "C:/Music/a.mp3".into(), video_id: Some("abcdefghijk".into()), ..Default::default() },
+                Track { path: "C:/Music/b.mp3".into(), video_id: Some("lmnopqrstuv".into()), ..Default::default() },
+            ],
+            downloads: BTreeMap::from([("yt://12345678901".into(), "C:/Music/a.mp3".into())]),
+            ..Default::default()
+        };
+        let index = CloudIdentities::new(&store);
+        for key in ["C:/Music/a.mp3", "C:/Music/b.mp3", "C:/Music/no.mp3", "yt://abcdefghijk", "vid:abcdefghijk"] {
+            assert_eq!(index.identity(key), cloud_identity(&store, key), "{key}");
+        }
+        assert_eq!(index.identity("C:/Music/a.mp3").as_deref(), Some("yt://12345678901"));
+    }
+
+    #[test]
+    fn catalog_collects_lyrics_from_local_alias_when_public_track_has_none() {
+        let remote = Track { path: "yt://abcdefghijk".into(), title: "Song".into(), artist: "Artist".into(), ..Default::default() };
+        let local = Track { path: "C:/Music/song.mp3".into(), video_id: Some("abcdefghijk".into()), title: "Song".into(), artist: "Artist".into(), ..Default::default() };
+        let mut store = Store { tracks: vec![remote, local.clone()], ..Default::default() };
+        store.cache_lyrics(local.path, vec![crate::lyrics::LyricsAlternative {
+            provider: "local".into(),
+            sync_type: crate::lyrics::LyricsSyncType::Plain,
+            format: "text".into(),
+            lyrics: crate::lyrics::ParsedLyrics { lines: vec![crate::lyrics::LyricLine { text: "Text".into(), ..Default::default() }], ..Default::default() },
+        }]);
+        let pending = catalog_candidates(&store, &BTreeMap::new());
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].2.lyrics_text, "Text");
+        assert_eq!(pending[0].2.lyrics_variants.len(), 1);
+    }
+
+    #[test]
+    fn catalog_snapshot_includes_all_cached_providers_and_timing() {
+        let remote = Track { path: "yt://abcdefghijk".into(), title: "Song".into(), artist: "Artist".into(), ..Default::default() };
+        let local = Track { path: "C:/Music/song.mp3".into(), video_id: Some("abcdefghijk".into()), ..remote.clone() };
+        let mut store = Store { tracks: vec![remote.clone(), local.clone()], ..Default::default() };
+        let make = |provider: &str, start| crate::lyrics::LyricsAlternative {
+            provider: provider.into(), sync_type: crate::lyrics::LyricsSyncType::Synced, format: "lrc".into(),
+            lyrics: crate::lyrics::ParsedLyrics { lines: vec![crate::lyrics::LyricLine {
+                text: "Lyrics".into(), start_ms: start, translation: "Translation".into(), ..Default::default()
+            }], ..Default::default() },
+        };
+        store.cache_lyrics(remote.path, vec![make("provider-a", 1000)]);
+        store.cache_lyrics(local.path, vec![make("provider-b", 2000)]);
+        let items = catalog_candidates(&snapshot(&store), &BTreeMap::new());
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].2.recording_type, "unknown");
+        assert_eq!(items[0].2.lyrics_variants.len(), 2);
+        assert_eq!(items[0].2.lyrics_variants[1].lyrics.lines[0].start_ms, 2000);
+        assert_eq!(items[0].2.lyrics_variants[1].lyrics.lines[0].translation, "Translation");
+        assert_eq!(items[0].2.source_url, "https://music.youtube.com/watch?v=abcdefghijk");
+    }
+
+    #[test]
+    fn recording_categories_require_explicit_version_labels() {
+        assert_eq!(recording_type("Song (Club Mix)"), "mix");
+        assert_eq!(recording_type("Song - Live at Home"), "live");
+        assert_eq!(recording_type("I Believe"), "unknown");
+        assert_eq!(recording_type("Cover Me"), "unknown");
+    }
+
+    #[test]
+    fn catalog_waits_for_a_public_identity_for_local_tracks() {
+        let local = Track { path: "C:/private/music/song.flac".into(), title: "Song".into(),
+            artist: "Artist".into(), album: "Record".into(), duration_secs: 123., ..Default::default() };
+        let mut store = Store { tracks: vec![local.clone()], ..Default::default() };
+        store.cache_lyrics(local.path.clone(), vec![crate::lyrics::LyricsAlternative {
+            provider: "fixture".into(), format: "plain".into(), sync_type: crate::lyrics::LyricsSyncType::Plain,
+            lyrics: crate::lyrics::ParsedLyrics { lines: vec![crate::lyrics::LyricLine { text: "Words".into(), ..Default::default() }], ..Default::default() },
+        }]);
+        let items = catalog_candidates(&snapshot(&store), &BTreeMap::new());
+        assert!(items.is_empty());
+        let key = local_catalog_track(&local).unwrap().path;
+        assert!(!key.contains("C:/private"));
+        let mut moved = local; moved.path = "D:/elsewhere/song.flac".into();
+        assert_eq!(local_catalog_track(&moved).unwrap().path, key);
+    }
+
+    #[test]
+    fn catalog_recovers_orphaned_public_cache_only_with_real_song_metadata() {
+        let mut store = Store::default();
+        let lyrics = |title: Option<&str>, artist: Option<&str>| crate::lyrics::LyricsAlternative {
+            provider: "fixture".into(), format: "plain".into(), sync_type: crate::lyrics::LyricsSyncType::Plain,
+            lyrics: crate::lyrics::ParsedLyrics { title: title.map(str::to_owned), artist: artist.map(str::to_owned),
+                lines: vec![crate::lyrics::LyricLine { text: "Words".into(), ..Default::default() }], ..Default::default() },
+        };
+        store.cache_lyrics("C:/private/one.mp3".into(), vec![lyrics(Some("Song"), Some("Artist"))]);
+        store.cache_lyrics("C:/private/two.mp3".into(), vec![lyrics(None, None)]);
+        store.cache_lyrics("yt://abcdefghijk".into(), vec![lyrics(Some("Song"), Some("Artist"))]);
+        let items = catalog_candidates(&snapshot(&store), &BTreeMap::new());
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].0, "yt://abcdefghijk");
+        assert_eq!(items[0].2.lyrics_variants.len(), 1);
+        assert!(!serde_json::to_string(&items[0].2).unwrap().contains("C:/private"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cloud_restore_is_prepared_off_thread_and_keeps_conflict_checks() {
+        let local = Track { path: "C:/Music/local.flac".into(), title: "Local".into(), artist: "Artist".into(), ..Default::default() };
+        let remote = Track { path: "yt://abcdefghijk".into(), title: "Remote".into(), artist: "Artist".into(), ..Default::default() };
+        let store = Store { tracks: vec![local.clone()], ..Default::default() };
+        let cloud = CloudLibrary::capture(&Store { tracks: vec![remote.clone()], ..Default::default() }, false);
+        let baseline = serde_json::to_string(&CloudLibrary::capture(&store, false)).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        for (force, snapshot, expected) in [(false, baseline.as_str(), true), (false, "stale", false), (true, "stale", true)] {
+            let output = runtime.block_on(work(Session::default(), Action::PrepareRestore {
+                store: store.clone(), cloud: cloud.clone(), cloud_revision: 4, store_revision: 7,
+                last_snapshot: snapshot.into(), force,
+            })).unwrap();
+            let Output::PreparedRestore { restored, store_revision, cloud_revision, .. } = output else { panic!("restore output expected") };
+            assert_eq!((store_revision, cloud_revision), (7, 4));
+            assert_eq!(restored.is_some(), expected);
+            if let Some((restored, snapshot)) = restored {
+                assert!(restored.tracks.iter().any(|track| track.path == local.path));
+                assert!(restored.tracks.iter().any(|track| track.path == remote.path));
+                assert_eq!(snapshot, serde_json::to_string(&CloudLibrary::capture(&restored, false)).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_splits_provider_versions_without_losing_them() {
+        let item = CatalogImportTrack {
+            path: "yt://abcdefghijk".into(), title: "Song".into(), artist: "Artist".into(), album: String::new(),
+            duration_secs: 1.0, thumbnail_url: String::new(), clip_video_id: None,
+            source_url: "https://music.youtube.com/watch?v=abcdefghijk".into(),
+            youtube_music_url: "https://music.youtube.com/watch?v=abcdefghijk".into(), local_source_key: None,
+            recording_type: "unknown".into(),
+            lyrics_text: "Hello".into(), lyrics_tracks: Vec::new(),
+            lyrics_variants: (0..101).map(|i| crate::lyrics::LyricsAlternative {
+                provider: format!("provider-{i}"), format: "plain".into(), sync_type: crate::lyrics::LyricsSyncType::Plain,
+                lyrics: crate::lyrics::ParsedLyrics { lines: vec![crate::lyrics::LyricLine { text: "Hello".into(), ..Default::default() }], ..Default::default() },
+            }).collect(),
+        };
+        let parts = split_catalog_track(&item).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts.iter().map(|part| part.lyrics_variants.len()).sum::<usize>(), 101);
+        assert_eq!(parts[0].lyrics_text, "Hello");
+        assert!(parts[1].lyrics_text.is_empty());
+        assert!(parts.iter().all(|part| serde_json::to_vec(part).unwrap().len() < 900_000));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn catalog_acknowledges_only_after_every_fragment_and_v2_response() {
+        use std::io::{Read, Write};
+        for scenario in ["success", "second_failed", "legacy"] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let api = format!("http://{}", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let mut seen = 0;
+                for index in 0..if scenario == "legacy" { 1 } else { 2 } {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let mut request = Vec::new();
+                    let end = loop {
+                        let mut bytes = [0; 4096];
+                        let size = stream.read(&mut bytes).unwrap();
+                        assert!(size > 0);
+                        request.extend_from_slice(&bytes[..size]);
+                        if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                            let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+                            let size = headers.lines().find_map(|line| line.strip_prefix("content-length:")?.trim().parse::<usize>().ok()).unwrap();
+                            if request.len() >= end + 4 + size { break end; }
+                        }
+                    };
+                    let payload: Value = serde_json::from_slice(&request[end + 4..]).unwrap();
+                    seen += payload["items"][0]["lyricsVariants"].as_array().unwrap().len();
+                    let (status, body) = if scenario == "legacy" { (200, r#"{"accepted":1}"#) }
+                        else if scenario == "second_failed" && index == 1 { (500, r#"{"error":{"message":"fixture"}}"#) }
+                        else { (200, r#"{"accepted":1,"catalogVersion":2}"#) };
+                    write!(stream, "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                }
+                seen
+            });
+            let variant = crate::lyrics::LyricsAlternative { provider: "fixture".into(), format: "plain".into(),
+                sync_type: crate::lyrics::LyricsSyncType::Plain, lyrics: crate::lyrics::ParsedLyrics::default() };
+            let item = CatalogImportTrack { path: "yt://abcdefghijk".into(), title: "Song".into(), artist: "Artist".into(),
+                album: String::new(), duration_secs: 0., thumbnail_url: String::new(), clip_video_id: None,
+                source_url: "https://music.youtube.com/watch?v=abcdefghijk".into(),
+                youtube_music_url: "https://music.youtube.com/watch?v=abcdefghijk".into(), local_source_key: None,
+                recording_type: "unknown".into(),
+                lyrics_text: String::new(), lyrics_tracks: Vec::new(), lyrics_variants: vec![variant; 101] };
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let result = runtime.block_on(work(Session { api, ..Default::default() },
+                Action::CatalogImport(vec![(item.path.clone(), "fingerprint".into(), item)]))).unwrap();
+            let Output::CatalogQueued(acknowledged, accepted, failure) = result else { panic!("catalog output expected") };
+            let seen = server.join().unwrap();
+            if scenario == "success" {
+                assert_eq!(seen, 101); assert_eq!(accepted, 1); assert_eq!(acknowledged.len(), 1); assert!(failure.is_none());
+            } else {
+                assert_eq!(accepted, 0); assert!(acknowledged.is_empty()); assert!(failure.is_some());
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "comparative performance fixture"]
+    fn catalog_alias_lookup_performance() {
+        let store = if let Some(path) = std::env::var_os("VEY_ACCOUNT_BENCH_STATE") {
+            let contents = std::fs::read(path).expect("read benchmark state");
+            let original: Store = serde_json::from_slice(&contents).expect("parse benchmark state");
+            snapshot(&original)
+        } else {
+            let mut tracks = (0..88).map(|i| Track {
+                path: format!("C:/Music/local-{i}.mp3"), ..Default::default()
+            }).collect::<Vec<_>>();
+            tracks.extend((0..472).map(|i| Track {
+                path: format!("yt://{i:011}"), title: "Song".into(), artist: "Artist".into(), ..Default::default()
+            }));
+            Store { tracks, ..Default::default() }
+        };
+        let ids = store.tracks.iter().filter(|t| t.path.starts_with("yt://")).map(|t| t.path.clone()).collect::<Vec<_>>();
+        let start = std::time::Instant::now();
+        let old = ids.iter().map(|id| store.tracks.iter().position(|track| cloud_identity(&store, &track.path).as_deref() == Some(id.as_str()))).collect::<Vec<_>>();
+        let old_time = start.elapsed();
+        let start = std::time::Instant::now();
+        let identities = CloudIdentities::new(&store);
+        let mut indexed = BTreeMap::new();
+        for (position, track) in store.tracks.iter().enumerate() {
+            if let Some(id) = identities.identity(&track.path) { indexed.entry(id).or_insert(position); }
+        }
+        let new = ids.iter().map(|id| indexed.get(id).copied()).collect::<Vec<_>>();
+        let new_time = start.elapsed();
+        assert_eq!(old, new);
+        println!("{} tracks, {} lookups: old={old_time:?} indexed={new_time:?}", store.tracks.len(), ids.len());
+    }
 
     #[test]
     fn catalog_retry_keeps_public_metadata_and_cached_lyrics_only_until_acknowledged() {

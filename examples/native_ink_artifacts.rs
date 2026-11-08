@@ -14,6 +14,7 @@ slint::slint! {
         in property <float> factor: 1.025;
         in property <float> origin: 40.4;
         in property <float> phase: 0.5;
+        in property <float> feather: 0.05;
         in property <bool> stable: true;
         out property <float> advance: metrics.preferred-width / 1px;
         metrics := Text { visible: false; text: root.text; font-family: "Satoshi"; font-weight: 700; font-size: 48px; wrap: no-wrap; }
@@ -27,8 +28,9 @@ slint::slint! {
                 font-family: "Satoshi"; font-size: 48px; font-weight: 700;
                 ink: white; base-ink: #ffffff55;
                 reveal: root.mode == 0 ? 0 : 1;
-                sweep-start: root.mode == 1 ? 1 : root.phase - 0.05;
-                sweep-end: root.mode == 1 ? 1 : root.phase + 0.05;
+                sweep-start: root.mode == 1 ? 1 : root.phase - root.feather;
+                sweep-end: root.mode == 1 ? 1 : root.phase + root.feather;
+                max-feather-span: 2 * root.feather;
                 native-text-gradients: true;
                 stable-fill: root.stable;
             }
@@ -50,6 +52,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let legacy = std::env::args().any(|a| a == "--legacy");
     let enforce = std::env::args().any(|a| a == "--assert");
     let w = InkProbe::new()?;
+    if std::env::args().any(|a| a == "--broad") {
+        w.set_feather(0.35);
+    }
     w.set_stable(!legacy);
     let cases = [
         ("into", 1.),
@@ -86,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for y in 1..im.height()-1 {for x in 1..im.width()-1 {
             if !(y-1..=y+1).all(|yy|(x-1..=x+1).all(|xx|s.3[1].get_pixel(xx,yy)[0]>245)){continue;}
             let at=((x as f32+0.5)/scale-w.get_origin())/w.get_factor()/w.get_advance();
-            let coverage=((phase+0.05-at)/0.1).clamp(0.,1.);
+            let coverage=((phase+w.get_feather()-at)/(2.*w.get_feather())).clamp(0.,1.);
             let base=s.3[0].get_pixel(x,y)[0] as f32;let full=s.3[1].get_pixel(x,y)[0] as f32;
             let actual=im.get_pixel(x,y)[0] as f32;
             let error=(actual-(base+(full-base)*coverage)).abs();

@@ -156,6 +156,8 @@ export component LyricInk inherits Rectangle {
     in property <float> reveal: 1;
     in property <float> sweep-start;
     in property <float> sweep-end;
+    // Static upper bound supplied by the word/glyph plan, not the current clock.
+    in property <float> max-feather-span: 1;
     in property <length> wave-amplitude;
     in property <float> wave-phase;
     in property <bool> native-text-gradients: true;
@@ -232,14 +234,19 @@ export component LyricInk inherits Rectangle {
         wrap: no-wrap; horizontal-alignment: root.text-advance > 0px ? right : left; vertical-alignment: center;
     }
     // Software Text accepts solid brushes only. Keep the shaped run's origin
-    // fixed, paint solid regions once, and sample just the feather at physical
-    // pixel resolution. Bound broad custom feathers without coarsening normal ink.
+    // fixed and paint solid regions once. Limit the feather's draw calls:
+    // one Text per physical pixel made a broad fill instantiate hundreds of
+    // shaped runs per word. Exact solid-region boundaries remain pixel aligned;
+    // coverage is integrated across each bounded feather cell below.
     private property <length> ink-padding: ceil(root.font-size / 4phx) * 1phx;
     private property <length> ink-right: ceil((root.paint-width + root.ink-padding) / 1phx) * 1phx;
     private property <length> feather-first: max(-root.ink-padding, min(root.ink-right, floor(root.sweep-start * root.width / 1phx) * 1phx));
     private property <length> feather-last: max(root.feather-first, min(root.ink-right, ceil(root.sweep-end * root.width / 1phx) * 1phx));
-    private property <length> cell-size: max(1, ceil((root.feather-last - root.feather-first) / 512phx)) * 1phx;
-    private property <int> cell-count: max(0, ceil((root.feather-last - root.feather-first) / root.cell-size));
+    private property <length> cell-size: max(1, ceil((root.feather-last - root.feather-first) / (root.cell-count * 1phx))) * 1phx;
+    // Keep capacity stable through a fill. Retaining hidden cells on every
+    // unsung/completed word makes offscreen layout work grow with the viewport.
+    // Solid ink uses the original conditional Text path without a hidden run.
+    private property <int> cell-count: min(64, max(1, ceil(max(0,root.max-feather-span) * root.width / 1phx) + 3));
     if (!root.native-text-gradients || root.stable-fill) && !root.solid: Rectangle {
         width: root.width; height: root.height;
         Rectangle {
@@ -276,7 +283,8 @@ export component LyricInk inherits Rectangle {
                 * min(1, max(0, (self.end - (self.feather-from + self.feather-to) / 2)
                     / max(0.0001, self.end - self.start)))) / max(0.0001, self.edge-to - self.edge-from)));
         x: root.feather-first + cell * root.cell-size;
-        width: min(root.cell-size, root.feather-last - self.x); height: root.height; clip: true;
+        width: max(0px, min(root.cell-size, root.feather-last - self.x));
+        height: root.height; clip: true; visible: self.width > 0px;
         Text {
             x: -parent.x - root.text-origin-x + root.origin-bias;
             width: root.text-width; height: root.height; text: root.text;
@@ -381,6 +389,8 @@ component LyricWordView inherits Rectangle {
             : root.ease-progress(min(1, max(0, (root.elapsed-ms + root.cue-duration-ms * root.swipe-lead-ratio) / (root.cue-duration-ms * root.swipe-duration-ratio))), root.swipe-easing)) : 1;
     private property <float> ramp-start: (root.swipe-start-from + (root.swipe-start-to - root.swipe-start-from) * root.progress - (root.finish-fill-at-cue-end ? 0 : root.cue-offset)) / (root.finish-fill-at-cue-end ? 1 : root.fragment-span);
     private property <float> ramp-end: (root.swipe-end-from + (root.swipe-end-to - root.swipe-end-from) * root.progress - (root.finish-fill-at-cue-end ? 0 : root.cue-offset)) / (root.finish-fill-at-cue-end ? 1 : root.fragment-span);
+    private property <float> max-feather-span: max(0, max(root.swipe-end-from - root.swipe-start-from,
+        root.swipe-end-to - root.swipe-start-to)) / (root.finish-fill-at-cue-end ? 1 : root.fragment-span);
     private property <float> fade-phase: min(1, max(0, root.after-line-ms / max(1, root.highlight-fade-out-ms)));
     private property <float> fade: !root.highlight-fade ? 1 : root.smooth-highlight-fade
         ? 1 - root.fade-phase * root.fade-phase * (3 - 2 * root.fade-phase) : 1 - root.fade-phase;
@@ -617,6 +627,7 @@ component LyricWordView inherits Rectangle {
             wave-amplitude: root.motion == "karaoke" || root.cue-duration-ms <= 0 ? 0px : min(root.font-size * root.swipe-wave-em, root.width * 0.025);
             wave-phase: root.finish-fill-at-cue-end ? root.local-cue-phase : root.progress;
             native-text-gradients: root.native-text-gradients;
+            max-feather-span: root.max-feather-span;
             sweep-start: root.fill-complete || root.motion == "karaoke" || root.cue-duration-ms <= 0 ? 1 : root.ramp-start;
             // lyrics.css adds one physical pixel to the unlettered gradient's transparent stop.
             sweep-end: root.fill-complete || root.motion == "karaoke" || root.cue-duration-ms <= 0 ? 1 : root.ramp-end + 1phx / max(1px, root.width);
@@ -670,6 +681,8 @@ component LyricWordView inherits Rectangle {
                 wave-amplitude: min(root.font-size * root.swipe-wave-em, root.width * 0.025);
                 wave-phase: root.finish-fill-at-cue-end ? root.local-cue-phase : root.progress;
                 native-text-gradients: root.native-text-gradients;
+                max-feather-span: root.finish-fill-at-cue-end || root.fragment-span < 0.9999
+                    ? root.max-feather-span * root.width / max(0.0001px, self.width) : glyph.sweep-feather;
                 private property <float> mask-progress: min(1, max(0,
                     (root.progress * root.cue-duration-ms * root.swipe-duration-ratio - glyph.sweep-delay-ms)
                     / max(1, glyph.sweep-duration-ms)));

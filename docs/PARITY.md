@@ -14,7 +14,7 @@ The TypeScript/Tauri source project was read as the reference and was not delete
 | Lyrics | LRC, enhanced timing, QRC, TTML, SRT/WebVTT, nested background vocals, translations, malformed-provider fallback, SSE alternatives, Unison, captions and LRCLib |
 | Lyrics renderer | Copied Rust Braccato Slint component on native targets; preserved original JavaScript source and effects in the browser iframe; see NATIVE-BRACCATO.md |
 | Themes | Native Rust Braccato sweep/glow/wave/stage behavior with Vey display settings; browser CSS/RICS and highlighted editor remain browser-only |
-| JWT | Automatic startup prewarm, hidden official challenge, cached JWT, background renewal in the last hour, invalidation and one retry after 401; live Windows acquisition verified |
+| JWT | Locally cached JWT and user-initiated verification; rejected credentials are invalidated. Silent renewal is unavailable. |
 | Account boundary | Voice and Google session/account modules excluded. No embedded Google login, header import, cookie capture or account playlist/liked APIs |
 | Web | Rust/WASM Slint canvas, browser audio, local file picker, durable local state, public network functions through same-origin Rust backend |
 

@@ -2561,12 +2561,18 @@ fn ytm_base_title(title: &str) -> String {
 /// with no counterpart is left without a clip so the UI can hide the control.
 fn pair_song_clips(songs: &mut [YtmSong]) -> usize {
     // Index the playable videos by bare title, then by full normalized title.
-    let mut by_base: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut by_full: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut by_base: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    let mut by_full: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
     for (index, song) in songs.iter().enumerate() {
         // Only rows from the Videos shelf can lend a clip, and never a row that
         // has already been paired.
-        if song.kind != "video" || !song.has_video || !song.clip_video_id.is_empty() {
+        if song.kind != "video"
+            || !song.has_video
+            || song.video_id.is_empty()
+            || !song.clip_video_id.is_empty()
+        {
             continue;
         }
         let full = ytm_match_key(&song.title);
@@ -2574,15 +2580,17 @@ fn pair_song_clips(songs: &mut [YtmSong]) -> usize {
         if base.is_empty() {
             continue;
         }
-        // First occurrence wins: the Videos shelf is already relevance-ordered.
-        by_base.entry(base).or_insert(index);
-        by_full.entry(full).or_insert(index);
+        // Keep relevance order, but allow a later same-title result from the
+        // right artist when the first hit is an unrelated performer.
+        by_base.entry(base).or_default().push(index);
+        by_full.entry(full).or_default().push(index);
     }
 
     let mut paired = 0usize;
+    let mut used_videos = std::collections::HashSet::new();
     for index in 0..songs.len() {
-        if songs[index].has_video && songs[index].clip_video_id.is_empty() {
-            continue; // already a playable video in its own right
+        if songs[index].kind != "song" || songs[index].has_video {
+            continue; // only audio song rows can receive an attached clip
         }
         if songs[index].video_id.is_empty() {
             continue;
@@ -2592,9 +2600,16 @@ fn pair_song_clips(songs: &mut [YtmSong]) -> usize {
         // Exact bare-title match first, then a looser full-title match.
         let candidate = by_base
             .get(&base)
-            .or_else(|| by_full.get(&full))
-            .copied()
-            .filter(|candidate| *candidate != index);
+            .into_iter()
+            .chain(by_full.get(&full))
+            .flat_map(|indices| indices.iter().copied())
+            .find(|candidate| {
+                *candidate != index
+                    && !songs[*candidate].video_id.is_empty()
+                    && songs[*candidate].video_id != songs[index].video_id
+                    && !used_videos.contains(&songs[*candidate].video_id)
+                    && ytm_artists_compatible(&songs[index].artist, &songs[*candidate].artist)
+            });
         let Some(candidate) = candidate else { continue };
         let clip_id = songs[candidate].video_id.clone();
         if clip_id.is_empty() || clip_id == songs[index].video_id {
@@ -2603,12 +2618,25 @@ fn pair_song_clips(songs: &mut [YtmSong]) -> usize {
         // Re-point the still at the paired video, which is a real frame rather
         // than the song's static cover.
         let still = format!("https://i.ytimg.com/vi/{clip_id}/maxresdefault.jpg");
+        used_videos.insert(clip_id.clone());
         songs[index].clip_video_id = clip_id;
         songs[index].has_video = true;
         songs[index].clip_url = still;
         paired += 1;
     }
     paired
+}
+
+/// Don't attach a same-title clip from a different performer. Some YouTube
+/// shelves return covers and unrelated songs under common titles.
+fn ytm_artists_compatible(song_artist: &str, video_artist: &str) -> bool {
+    let song_artist = ytm_match_key(song_artist);
+    let video_artist = ytm_match_key(video_artist);
+    song_artist.is_empty()
+        || video_artist.is_empty()
+        || song_artist == video_artist
+        || song_artist.contains(&video_artist)
+        || video_artist.contains(&song_artist)
 }
 
 /// Whether a video found by a targeted follow-up search is an acceptable clip
@@ -2624,6 +2652,9 @@ fn ytm_clip_fallback_accept(song: &YtmSong, video: &YtmSong) -> bool {
         return false;
     }
     if video.video_id == song.video_id {
+        return false;
+    }
+    if !ytm_artists_compatible(&song.artist, &video.artist) {
         return false;
     }
     let song_base = ytm_base_title(&song.title);
@@ -2703,6 +2734,15 @@ pub async fn ytm_search_songs(query: String, limit: Option<usize>) -> Result<Vec
         }
     }
     let paired = pair_song_clips(&mut out);
+    // The video is now an additional link on its audio song. Keeping its
+    // Videos-shelf row as well makes Vey offer/save the same clip as a second
+    // recording, so remove only videos that were actually attached.
+    let attached_clip_ids = out
+        .iter()
+        .filter(|song| song.kind == "song" && !song.clip_video_id.is_empty())
+        .map(|song| song.clip_video_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    out.retain(|song| !(song.kind == "video" && attached_clip_ids.contains(&song.video_id)));
     out.truncate(limit);
     // Songs still without a clip get one targeted YouTube search each. Capped
     // so one user query can cost at most three extra videos-filtered requests,
@@ -2803,6 +2843,54 @@ pub async fn ytm_match_candidates(
         continuation = Some(next);
     }
     Ok(songs)
+}
+
+/// Find a conservative YouTube Music cover match for a local audio file.
+/// The title and credited artist must match after punctuation/case cleanup;
+/// when both durations are known, reject different versions over 20 seconds
+/// apart and prefer the closest duration.
+pub(crate) async fn ytm_cover_candidate(
+    title: &str,
+    artist: &str,
+    duration_secs: f64,
+) -> Result<Option<YtmSong>, String> {
+    let title = title.trim();
+    let artist = artist.trim();
+    let wanted_title = ytm_base_title(title);
+    let wanted_artist = ytm_match_key(artist);
+    if wanted_title.is_empty() || wanted_artist.is_empty() {
+        return Ok(None);
+    }
+
+    let candidates =
+        ytm_match_candidates(format!("{artist} {title}"), Some(12)).await?;
+    let mut matches = candidates
+        .into_iter()
+        .filter_map(|song| {
+            if ytm_base_title(&song.title) != wanted_title
+                || ytm_match_key(&song.artist) != wanted_artist
+                || (song.thumbnail_url.trim().is_empty()
+                    && !crate::services::video_id(&song.video_id))
+            {
+                return None;
+            }
+            let duration_delta = if duration_secs.is_finite()
+                && duration_secs > 0.0
+                && song.duration_secs > 0
+            {
+                let delta = (duration_secs - song.duration_secs as f64).abs();
+                if delta > 20.0 {
+                    return None;
+                }
+                delta.round() as u64
+            } else {
+                u64::MAX
+            };
+            Some((duration_delta, song))
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by_key(|(duration_delta, _)| *duration_delta);
+    Ok(matches.into_iter().next().map(|(_, song)| song))
 }
 
 /// A clip found for one specific track.
@@ -3605,9 +3693,38 @@ pub async fn ytm_collection_tracks(id: String) -> Result<Vec<crate::services::Tr
                 album: s.album,
                 duration_secs: s.duration_secs as f64,
                 thumbnail_url: s.thumbnail_url,
+                catalog_metadata: None,
             })
             .collect()
     })
+}
+
+fn parse_ytm_artist_page(value: &serde_json::Value) -> crate::discovery::ArtistPage {
+    let mut catalog = crate::discovery::parse(value);
+    let mut seen = std::collections::HashSet::new();
+    let tracks = catalog.sections.iter().filter(|section| section.kind == "song")
+        .flat_map(|section| section.items.iter().filter_map(crate::discovery::Item::track))
+        .filter(|track| seen.insert(track.path.clone())).collect();
+    catalog.sections.retain(|section| matches!(section.kind.as_str(), "album" | "video" | "artist" | "playlist"));
+    for (index, section) in catalog.sections.iter_mut().enumerate() {
+        section.key = format!("artist-page-{index}-{}", section.kind);
+    }
+    crate::discovery::ArtistPage { tracks, catalog }
+}
+
+pub async fn ytm_artist_page(id: String) -> Result<crate::discovery::ArtistPage, String> {
+    if !id.starts_with("UC") || id.len() > 200
+        || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return Err("Invalid artist".into());
+    }
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(25)).build().map_err(|e| e.to_string())?;
+    let auth = youtube_auth(&client).await;
+    let body = serde_json::json!({"context":innertube_context("WEB_REMIX",YT_REMIX_VERSION,auth.visitor.as_deref()),"browseId":id});
+    let response = ytm_innertube_post(&client, "browse", &body, &auth, YT_REMIX_VERSION, None).await
+        .ok_or("Сторінка виконавця недоступна")?;
+    let page = parse_ytm_artist_page(&response);
+    if page.tracks.is_empty() && page.catalog.sections.is_empty() { return Err("Сторінка виконавця порожня".into()); }
+    Ok(page)
 }
 
 pub async fn ytm_home_catalog(query: Option<String>) -> Result<crate::discovery::Catalog, String> {
@@ -6334,6 +6451,27 @@ pub fn open_url(url: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn artist_page_keeps_albums_and_videos_as_links_not_songs() {
+        let tile = |title: &str, nav: serde_json::Value, width, height| serde_json::json!({
+            "musicTwoRowItemRenderer": {"title":{"simpleText":title}, "subtitle":{"simpleText":"Artist"},
+                "navigationEndpoint":nav, "thumbnailRenderer":{"musicThumbnailRenderer":{"thumbnail":{"thumbnails":[
+                    {"url":"https://example.test/art","width":width,"height":height}
+                ]}}}}
+        });
+        let json = serde_json::json!({"contents":[{"musicCarouselShelfRenderer":{
+            "header":{"musicCarouselShelfBasicHeaderRenderer":{"title":{"simpleText":"Artist"}}},
+            "contents":[tile("Song",serde_json::json!({"watchEndpoint":{"videoId":"abcdefghijk"}}),300,300),
+                tile("Album",serde_json::json!({"browseEndpoint":{"browseId":"MPREalbum"}}),300,300),
+                tile("Video",serde_json::json!({"watchEndpoint":{"videoId":"12345678901"}}),640,360)]
+        }}]});
+        let page = parse_ytm_artist_page(&json);
+        assert_eq!(page.tracks.len(), 1);
+        assert_eq!(page.tracks[0].path, "yt://abcdefghijk");
+        assert_eq!(page.catalog.sections.iter().map(|s| s.kind.as_str()).collect::<Vec<_>>(), ["album", "video"]);
+        assert_eq!(page.catalog.sections[0].items[0].browse_id, "MPREalbum");
+    }
 
     #[test]
     fn cancelled_library_scan_stops_before_enumerating_sources() {

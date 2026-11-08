@@ -43,6 +43,24 @@ Automatic sync then checks every 15 seconds while Vey is open. A conflicting
 revision pauses automatic sync and asks which copy to keep. Restore preserves
 local-only tracks and playlist entries, but replaces synchronized preferences.
 
+The shared Blueberry catalog receives track identity, title, artist,
+album, duration, cover and clip links, plus all valid cached lyric alternatives
+for public tracks and local files with known title and artist. Local tracks
+without a public video ID use a hash of normalized title, artist, album and
+duration; no filesystem path or local audio file is sent. Provider, format, timings, backing
+parts and translations remain in each structured version. These versions are
+published to the shared catalog, unlike the private account library. Only
+explicit recording labels such as `(Remix)` or `- Live` are classified;
+the rest stay unknown. YouTube audio uses a stable video identity and Blueberry's
+`/playback/audio?v=...` resolver instead of saving expiring signed media URLs.
+
+This requires Blueberry catalog protocol v2, the local catalog capability and
+the `0026_vey_catalog_lyrics` / `0027_vey_local_catalog` migrations. Until the server supports them, Vey does not mark enhanced submissions
+as acknowledged and will retry. The client does not independently fetch every
+provider for every song; it shares the valid versions already available in its
+cache. Large sets of provider versions are split across bounded requests; a
+single oversized version is reported and remains pending.
+
 Premium is an administrator-issued developer/tester invitation. No checkout or
 purchase exists. Refresh account access after an invitation. Select a local song
 already imported into Vey and upload it, or enable automatic upload while Vey is

@@ -2,7 +2,11 @@
 
 Home uses the shared `ui/home-feed.slint` surface on native and WASM. It combines
 local listening/playlists, the private recommendation snapshot, and a public
-YouTube Music catalog cache. Cards retain their actual type: square songs,
+YouTube Music catalog cache. Verified Blueberry recordings contribute the first
+candidate batch; Vey ranks them with the private listening profile. A connected
+YouTube Music account adds at most one supplementary shelf each for songs,
+videos, albums and artists, with at most five cards per shelf. Its normalized feed remains in memory on this device
+and is not submitted to the shared catalog. Cards retain their actual type: square songs,
 albums and playlists, circular artists, and 16:9 music videos. Shelves support
 dragging, horizontal paging, type filters and a playable queue. Artwork updates
 individual rows through the existing bounded artwork/cache services.
@@ -21,16 +25,20 @@ services; browser image decoding still runs on the WASM thread.
 Songs select a shelf queue. Videos select their real video ID, enable clip mode
 and open Now Playing. Actions retain the shelf identity when the same track
 also occurs on Listen again or recommendations. Albums open their track
-collection; artists open search.
+collection; artists open their YouTube Music page, including its bounded song,
+album and video sections. Artist pages currently show the first parsed shelves;
+they do not follow all continuation pages.
 Public playlist collections reuse the complete playlist importer, preserving
-order and intentional repeats. New public song/video metadata enters the
-existing catalog-import path. Personal listening history and profile signals
+order and intentional repeats. Opening a public collection does not save every
+track; played or deliberately saved tracks follow the existing catalog path.
+Personal listening history and profile signals
 are not sent as shared catalog records.
 
 The six existing Home choices now control density and ordering: standard,
 compact, quick picks first, discovery first, playlists first and artists first.
-Custom player colors remain available. The default desktop Home and player dock
-use open, flat surfaces; the mobile dock retains its safe-area layout.
+Custom player colors remain available. Home and the other pages share the
+player's ambient background, and the same desktop playback dock stays fixed
+across routes. The mobile dock retains its safe-area layout.
 
 Verification commands (use fresh output directories):
 
@@ -39,6 +47,9 @@ cargo test --locked --lib
 cargo check --locked --lib --target wasm32-unknown-unknown
 cargo run --locked --example home_library -- target/home-feed-native-new
 cargo run --locked --example home_library -- target/home-feed-phone-new --mobile
+cargo run --locked --example home_library -- target/artist-feed-native-new --artist
+cargo run --locked --example home_library -- target/artist-feed-phone-new --artist --mobile
+cargo run --locked --example home_library -- target/artist-live-new --artist-live
 ./scripts/build-web.ps1 -Debug
 # In tools/braccato-widget, with npm run serve on port 4181:
 npm run test:home -- ../../target/home-feed-native-new ../../target/home-feed-browser-new

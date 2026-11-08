@@ -35,7 +35,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if std::env::args().any(|a| a == "--artist-live") {
+        let rt = tokio::runtime::Runtime::new()?;
+        let catalog = rt.block_on(playervf::native::ytm_home_catalog(None))?;
+        let artist_id = catalog.sections.iter().flat_map(|s| s.items.iter())
+            .find(|item| item.kind == "artist" && item.browse_id.starts_with("UC"))
+            .map(|item| item.browse_id.clone())
+            .unwrap_or_else(|| "UCuAXFkgsw1L7xaCfnd5JJOw".into());
+        let page = rt.block_on(playervf::native::ytm_artist_page(artist_id))?;
+        println!("Artist page: {} tracks, {} shelves", page.tracks.len(), page.catalog.sections.len());
+        for section in page.catalog.sections { println!("{}: {} items", section.kind, section.items.len()); }
+        return Ok(());
+    }
     let mobile = std::env::args().any(|a| a == "--mobile");
+    let artist_page = std::env::args().any(|a| a == "--artist");
     let w = MainWindow::new()?;
     w.set_mobile(mobile);
     w.window().set_size(slint::LogicalSize::new(
@@ -188,6 +201,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     playervf::home::install(&w, get, apply);
     w.set_music_supported(true);
     w.set_music_link("https://music.youtube.com/playlist?list=PL1234567890".into());
+    if artist_page {
+        let catalog = playervf::discovery::Catalog {
+            updated_at: playervf::services::now_ms(),
+            sections: store.borrow().home_catalog.sections.iter()
+                .filter(|section| section.kind == "album" || section.kind == "video")
+                .cloned().collect(),
+        };
+        store.borrow_mut().artist_page_catalog = catalog.clone();
+        w.set_catalog_title("Fixture Artist".into());
+        w.set_catalog_kind("artist".into());
+        w.set_catalog_from_home(true);
+        w.set_catalog_track_count(12);
+        w.set_catalog_art(w.get_current_art());
+        w.set_explore_page_tracks(w.get_home_page_tracks());
+        playervf::discovery::sync_artist_page(&w, &catalog);
+        w.set_active_view("explore".into());
+        w.show()?;
+        playervf::discovery::request_artist_art(&w, &catalog);
+        let weak = w.as_weak();
+        slint::Timer::single_shot(Duration::from_millis(1400), move || {
+            let w = weak.upgrade().unwrap();
+            let frame = w.window().take_snapshot().unwrap();
+            image::save_buffer(out.join("artist.png"), frame.as_bytes(), frame.width(), frame.height(), image::ColorType::Rgba8).unwrap();
+            slint::quit_event_loop().unwrap();
+        });
+        slint::run_event_loop()?;
+        return Ok(());
+    }
     w.show()?;
     let step = Rc::new(Cell::new(0));
     let weak = w.as_weak();
@@ -227,11 +268,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 9 => {
                     w.set_connection_provider(1);
-                    w.set_music_provider(0);
                 }
                 10 => {
                     w.set_connection_provider(2);
-                    w.set_music_provider(1);
                 }
                 _ => {
                     assert_eq!(w.get_home_layout(), 5);

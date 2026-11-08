@@ -55,7 +55,7 @@ removed on 2026-10-27, so the first build after that is a cold build.
 | Native render workload timings | `cargo run --locked --example native_lyric_performance -- label`; JSON under `target/native-lyrics-check/` |
 | Same native workload with word wobble enabled | `cargo run --locked --example native_lyric_performance -- label --wobble` |
 | Release event-loop/model-read benchmark without GPU snapshot readback | `cargo run --release --locked --example native_lyric_performance -- label --wobble --no-snapshots`; repeat three times per renderer |
-| Cold/repeated player entry and dense line handoff stalls | `cargo run --release --locked --example native_lyric_stutter -- label`; add `--no-blur` to isolate capture work; reports under `target/native-lyrics-check/stutter-*.json` |
+| Cold/repeated player entry and dense line handoff stalls | `cargo run --release --locked --example native_lyric_stutter -- label --audio --soak --no-blur`; lock `SLINT_SCALE_FACTOR=1`, compare `VEY_LEGACY_LYRIC_CADENCE=1` with unset using the same executable; heartbeat and rendered clock reports under `target/native-lyrics-check/stutter-*.json` |
 | Native executable release build | `cargo build --release --bin vey --locked`; output `target/release/vey.exe` |
 | Windows release package | `./scripts/build-release.ps1`; `-SkipBuild` repackages the existing executable. ZIP includes `MUSIC-ACCOUNTS.md` alongside the release README and notices |
 | Copied renderer unit checks | `cargo test --locked --manifest-path third-party/braccato-rust/Cargo.toml --target-dir target -p braccato-slint -p braccato-engine -p braccato-types -p braccato-themes` |
@@ -94,8 +94,14 @@ use the normal backend selection.
 The performance fixture restores only its own minimized test window without
 activation; production playback still suspends while minimized. Compare matching
 release workloads and separate event-loop intervals from snapshot costs or FPS.
-`VEY_TRACE_LYRIC_FRAMES=1` reports native layout time and UI updates over 8ms;
-clear it after diagnostics. `VEY_LEGACY_LYRIC_SCROLL=1` restores the pre-0.1.27
+`VEY_DEBUG_PLAYER=1` writes bounded asynchronous player timing data to
+`%APPDATA%\PlayerVF-Rust\debug\player-timing-*.jsonl`; see
+`docs/PLAYER-TIMING-DEBUG.md`. It measures per-route render cadence, renderer
+callback duration, lyric update/fill timing, startup store-load timing, and
+synchronous navigation-handler timing without recording track names.
+`VEY_TRACE_LYRIC_FRAMES=1` remains a compatibility alias. Clear either flag
+after diagnostics.
+`VEY_LEGACY_LYRIC_SCROLL=1` restores the pre-0.1.27
 ease-restart scroll for A/B checks; clear it after use. Warm steady playback
 alone does not cover player entry, retargeting or line-boundary stalls.
 

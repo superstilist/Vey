@@ -29,11 +29,11 @@ After the first three seconds, one page at a time is painted through a clipped
 edge strip; the currently visible page is already warm. This leaves startup and
 the initial Home artwork pass free of offscreen page rasterization. Travel
 starts on the route-change callback, without waiting for warming, screenshot
-readback or a preparation timer. Slint's rendering-cache hint keeps these surfaces ready
-for compositing, trading viewport-scaled render-cache memory for fast returns.
-Normal model and size dependencies refresh the relevant cache when content or
-the viewport changes. Warming pauses during navigation and palette fades;
-off-screen painting pauses during palette fades while pages remain mounted.
+readback or a preparation timer. Route surfaces use a rendering cache while
+moving or warming; settled pages draw live so asynchronous cover updates appear
+without leaving and reopening the page. Warming pauses during navigation and
+palette fades; off-screen painting pauses during palette fades while pages
+remain mounted.
 The player shell
 remains mounted between visits.
 The lyric host promotes its moving content to a compositor layer and skips

@@ -14,8 +14,62 @@ use braccato_slint::{LayoutOptions, Lyric, LyricPart, LyricSyncType, StageRole};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
+#[path = "native_lyric_layout.rs"]
+mod layout_worker;
+
 fn model<T: Clone + 'static>(rows: Vec<T>) -> ModelRc<T> {
     Rc::new(VecModel::from(rows)).into()
+}
+
+fn install_frame_trace(w: &MainWindow, trace: Option<crate::player_debug::Recorder>) -> bool {
+    let enabled = trace.is_some();
+    let weak = w.as_weak();
+    let mut last_frame: Option<(String, web_time::Instant)> = None;
+    let mut render_start: Option<(String, web_time::Instant)> = None;
+    let frame_trace = trace.clone();
+    let result = w.window().set_rendering_notifier(move |state, _| {
+        if !enabled {
+            return;
+        }
+        let now = web_time::Instant::now();
+        match state {
+            slint::RenderingState::BeforeRendering => {
+                let route = weak.upgrade().map_or_else(
+                    || "closed/closed".to_owned(),
+                    |window| format!("{}/{}", window.get_active_view(), window.get_player_tab()),
+                );
+                if let Some((previous_route, previous)) = last_frame.take() {
+                    if route == previous_route {
+                        if let Some(trace) = &frame_trace {
+                            trace.record(
+                                &route,
+                                "frame_interval",
+                                now.duration_since(previous).as_secs_f64() * 1000.,
+                            );
+                        }
+                    }
+                }
+                last_frame = Some((route.clone(), now));
+                render_start = Some((route, now));
+            }
+            slint::RenderingState::AfterRendering => {
+                if let Some((route, started)) = render_start.take() {
+                    if let Some(trace) = &frame_trace {
+                        trace.record(
+                            &route,
+                            "renderer_callback",
+                            now.duration_since(started).as_secs_f64() * 1000.,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    });
+    if enabled {
+        eprintln!("[player-debug] frame capture is connected to the async recorder");
+    }
+    !matches!(result, Err(slint::SetRenderingNotifierError::Unsupported))
 }
 
 // Do not replace a sung line with a future cue. Preserve genuine vocal overlaps.
@@ -171,6 +225,62 @@ fn line_synced_words(text: &str, start_ms: f32) -> Vec<braccato_slint::LyricWord
         .collect()
 }
 
+fn collapse_display_spaces(text: &str, previous_space: &mut bool) -> String {
+    let mut display = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_whitespace() && !matches!(ch, '\n' | '\r') {
+            if !*previous_space {
+                display.push(' ');
+                *previous_space = true;
+            }
+        } else {
+            display.push(ch);
+            *previous_space = false;
+        }
+    }
+    display
+}
+
+fn collapse_display_text(text: &str) -> String {
+    collapse_display_spaces(text, &mut false)
+}
+
+fn normalize_display_lyrics(lyrics: &[Lyric]) -> Vec<Lyric> {
+    lyrics
+        .iter()
+        .cloned()
+        .map(|mut lyric| {
+            let mut previous_space = false;
+            lyric.words = collapse_display_spaces(&lyric.words, &mut previous_space);
+
+            if let Some(parts) = lyric.parts.as_mut() {
+                let mut previous_space = false;
+                for part in parts {
+                    part.words = collapse_display_spaces(&part.words, &mut previous_space);
+                }
+            }
+            if let Some(parts) = lyric.timed_romanization.as_mut() {
+                let mut previous_space = false;
+                for part in parts {
+                    part.words = collapse_display_spaces(&part.words, &mut previous_space);
+                }
+            }
+            if let Some(translation) = lyric.translation.as_mut() {
+                translation.text = collapse_display_text(&translation.text);
+            }
+            if let Some(translations) = lyric.translations.as_mut() {
+                for translation in translations.values_mut() {
+                    *translation = collapse_display_text(translation);
+                }
+            }
+            if let Some(romanization) = lyric.romanization.as_mut() {
+                *romanization = collapse_display_text(romanization);
+            }
+            lyric
+        })
+        .collect()
+}
+
 fn styled_layout(
     source: &ModelRc<LyricRow>,
     lyrics: &[Lyric],
@@ -182,7 +292,11 @@ fn styled_layout(
     weight: i32,
     timed: bool,
 ) -> (Vec<BraccatoRow>, Vec<f32>) {
-    let raw = braccato_slint::lyric_rows(lyrics, None, -1.);
+    // Some timed providers include a trailing word space and a second
+    // inter-span space. Collapse those display-only runs before measuring and
+    // wrapping; source text and cue times remain untouched.
+    let display_lyrics = normalize_display_lyrics(lyrics);
+    let raw = braccato_slint::lyric_rows(&display_lyrics, None, -1.);
     let mut normalized = vec![];
     for i in 0..raw.row_count() {
         let Some(mut row) = raw.row_data(i) else {
@@ -191,7 +305,7 @@ fn styled_layout(
         let original = source.row_data(row.source_index as usize).unwrap();
         // Timed line lyrics keep their canonical line cue but split into words so
         // every word and symbol can wobble. Plain lyrics stay one wrapping run.
-        let lyric = &lyrics[row.source_index as usize];
+        let lyric = &display_lyrics[row.source_index as usize];
         let line_synced = timed
             && !row.secondary
             && !row.instrumental
@@ -215,7 +329,7 @@ fn styled_layout(
         normalized.push(row.clone());
         if !row.secondary && original.words.row_count() == 0 && !original.background_text.is_empty()
         {
-            row.text = original.background_text.clone();
+            row.text = collapse_display_text(&original.background_text).into();
             row.secondary = true;
             row.parts = model(vec![braccato_slint::LyricWord {
                 text: row.text.clone(),
@@ -248,9 +362,11 @@ fn styled_layout(
             let synthetic_line =
                 !r.romanization && r.parts.row_data(0).is_some_and(|p| p.line_synced);
             let line_only = if r.romanization {
-                lyrics[source_index as usize].timed_romanization.is_none()
+                display_lyrics[source_index as usize]
+                    .timed_romanization
+                    .is_none()
             } else {
-                !synthetic_line && lyrics[source_index as usize].parts.is_none()
+                !synthetic_line && display_lyrics[source_index as usize].parts.is_none()
             };
             BraccatoRow {
                 text: r.text,
@@ -422,10 +538,8 @@ pub fn install(w: &MainWindow) {
     // first color. Probe the actual renderer once, rather than relying on the
     // requested backend name (which may have fallen back during creation).
     // Native GPU renderers support rendering notifications; software does not.
-    let gradients = !matches!(
-        w.window().set_rendering_notifier(|_, _| {}),
-        Err(slint::SetRenderingNotifierError::Unsupported)
-    );
+    let player_trace = crate::player_debug::Recorder::start();
+    let gradients = install_frame_trace(w, player_trace.clone());
     w.set_native_text_gradients(gradients);
     w.set_native_lyrics(true);
     w.set_lyrics_web_required(false);
@@ -514,9 +628,14 @@ pub fn install(w: &MainWindow) {
     let mut scroll_plan: Option<ScrollPlan> = None;
     let mut scroll_key = (0, 0, 0, 0, 0);
     let mut last_scroll_visual = None;
+    let mut layout_worker = layout_worker::Worker::default();
+    let mut layout_pending = false;
     let owner: Rc<RefCell<Option<slint::Timer>>> = Rc::new(RefCell::new(None));
     let keep = owner.clone();
-    let trace = std::env::var_os("VEY_TRACE_LYRIC_FRAMES").is_some();
+    let trace = player_trace.is_some() || std::env::var_os("VEY_TRACE_LYRIC_FRAMES").is_some();
+    let player_trace = player_trace.clone();
+    let legacy_cadence = std::env::var("VEY_LEGACY_LYRIC_CADENCE").as_deref() == Ok("1");
+    let mut next_update_ms = 0.;
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
@@ -526,14 +645,29 @@ pub fn install(w: &MainWindow) {
                 keep.borrow_mut().take();
                 return;
             };
-            if w.get_active_view() != "lyrics"
-                || w.get_player_tab() != "lyrics"
-                || w.window().is_minimized()
-            {
+            let _timer_span = crate::player_debug::begin_span(&w, "native_lyrics_timer_callback");
+            let minimized = w.window().is_minimized();
+            let visible =
+                !minimized && w.get_active_view() == "lyrics" && w.get_player_tab() == "lyrics";
+            let playing = w.get_player_state() == "playing";
+            // Only presentation time needs the faster sampling. Layout, row
+            // residency, focus and paint preparation retain their 16ms budget.
+            let interval = Duration::from_millis(if visible && playing && !legacy_cadence {
+                8
+            } else {
+                16
+            });
+            if let Some(timer) = keep.borrow().as_ref() {
+                if timer.interval() != interval {
+                    timer.set_interval(interval);
+                }
+            }
+            if minimized {
                 was_visible = false;
                 return;
             }
-            let resumed = !std::mem::replace(&mut was_visible, true);
+            let resumed = visible && !was_visible;
+            was_visible = visible;
             let explicit_seek = seek_revision != w.get_native_seek_revision();
             seek_revision = w.get_native_seek_revision();
             if resumed || explicit_seek {
@@ -541,8 +675,35 @@ pub fn install(w: &MainWindow) {
             }
             let now = origin.elapsed().as_secs_f64() * 1000.;
             let update_started = trace.then(web_time::Instant::now);
-            let playing = w.get_player_state() == "playing";
             clock.sample(w.get_position() as f64, now, playing, w.get_rate() as f64);
+            if visible
+                && playing
+                && !legacy_cadence
+                && !resumed
+                && !explicit_seek
+                && !layout_pending
+                && last_ms >= 0
+                && now < next_update_ms
+            {
+                let fill_started = trace.then(web_time::Instant::now);
+                let ms = clock.position_ms(now, (w.get_duration() * 1000.) as i64)
+                    + w.get_lyrics_offset() as i64
+                    + w.get_lyrics_effective_offset_ms() as i64;
+                w.set_lyrics_position(ms.clamp(0, i32::MAX as i64) as i32);
+                if let (Some(recorder), Some(started)) = (&player_trace, fill_started) {
+                    recorder.record(
+                        &format!("{}/{}", w.get_active_view(), w.get_player_tab()),
+                        "fill_clock_projection",
+                        started.elapsed().as_secs_f64() * 1000.,
+                    );
+                }
+                return;
+            }
+            next_update_ms = if now >= next_update_ms + 16. {
+                now + 16.
+            } else {
+                next_update_ms + 16.
+            };
             let current = w.get_lyric_lines();
             let replaced = source != current;
             if replaced {
@@ -578,7 +739,46 @@ pub fn install(w: &MainWindow) {
                 !rich,
                 fonts::revision(),
             );
-            let rebuilt = replaced || key != next_key || style_key != style;
+            let requested = replaced || key != next_key || style_key != style;
+            if requested {
+                source = current;
+                key = next_key;
+                style_key = style.clone();
+                let lyrics = document(&source, !rich);
+                timeline = Timeline::new(
+                    &lyrics
+                        .iter()
+                        .map(|l| crate::braccato::types::Lyric {
+                            start_time_ms: l.start_time_ms as i64,
+                            duration_ms: l.duration_ms as i64,
+                            ..Default::default()
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                layout_worker.request(
+                    &source,
+                    lyrics,
+                    w.get_lyrics_widget_width(),
+                    size,
+                    w.get_lyrics_secondary_gap().clamp(0., 1.5),
+                    w.get_lyrics_stage(),
+                    w.get_lyrics_timed(),
+                    &style,
+                    w.get_lyric_weight(),
+                );
+                layout_pending = true;
+                if replaced {
+                    w.set_native_render_lines(ModelRc::default());
+                    scroll.borrow_mut().resume();
+                    passive = PassiveScroll::default();
+                }
+            }
+            let ready = layout_pending.then(|| layout_worker.poll()).flatten();
+            if layout_pending && ready.is_none() {
+                return;
+            }
+            let rebuilt = ready.is_some();
+            layout_pending = false;
             let offsets_changed =
                 offset_key.is_some_and(|key| key != (w.get_lyrics_offset(), shift));
             offset_key = Some((w.get_lyrics_offset(), shift));
@@ -594,32 +794,7 @@ pub fn install(w: &MainWindow) {
                 snap_until = now + 200.;
             }
             w.set_native_scroll_snap(now < snap_until);
-            if rebuilt {
-                source = w.get_lyric_lines();
-                key = next_key;
-                style_key = style.clone();
-                let lyrics = document(&source, !rich);
-                timeline = Timeline::new(
-                    &lyrics
-                        .iter()
-                        .map(|l| crate::braccato::types::Lyric {
-                            start_time_ms: l.start_time_ms as i64,
-                            duration_ms: l.duration_ms as i64,
-                            ..Default::default()
-                        })
-                        .collect::<Vec<_>>(),
-                );
-                let (new_rows, new_offsets) = styled_layout(
-                    &source,
-                    &lyrics,
-                    w.get_lyrics_widget_width(),
-                    size,
-                    w.get_lyrics_secondary_gap().clamp(0., 1.5),
-                    w.get_lyrics_stage(),
-                    &style,
-                    w.get_lyric_weight(),
-                    w.get_lyrics_timed(),
-                );
+            if let Some((new_rows, new_offsets)) = ready {
                 prepared = new_rows
                     .iter()
                     .map(|r| vec![false; r.parts.row_count()])
@@ -632,7 +807,7 @@ pub fn install(w: &MainWindow) {
                     rows.clone(),
                     |row| row.rendered,
                 )));
-                follow = FollowIndex::new(&rows, lyrics.len());
+                follow = FollowIndex::new(&rows, source.row_count());
                 follow.set_geometry(
                     &new_offsets,
                     size,
@@ -643,7 +818,7 @@ pub fn install(w: &MainWindow) {
                 word_paint.reset();
                 previous_active.clear();
                 resident.clear();
-                roles = vec![StageRole::Queued; lyrics.len()];
+                roles = vec![StageRole::Queued; source.row_count()];
                 stage_selection = None;
                 offsets = new_offsets;
                 w.set_native_lyric_lines(rows.clone());
@@ -660,6 +835,12 @@ pub fn install(w: &MainWindow) {
                         w.get_lyrics_widget_width()
                     );
                 }
+            }
+            // Prepare a changed document while the user is still on Home or
+            // Library. Opening the player must not start whole-song shaping.
+            // Camera, masks and animated properties remain dormant offscreen.
+            if !visible {
+                return;
             }
             timeline.active_into(ms, &mut active);
             let anchor = timeline.anchor(ms, &active);
@@ -997,6 +1178,13 @@ pub fn install(w: &MainWindow) {
             }
             if let Some(started) = update_started {
                 let elapsed = started.elapsed().as_secs_f64() * 1000.;
+                if let Some(recorder) = &player_trace {
+                    recorder.record(
+                        &format!("{}/{}", w.get_active_view(), w.get_player_tab()),
+                        "lyrics_controller_update",
+                        elapsed,
+                    );
+                }
                 if elapsed > 8. {
                     eprintln!("lyric update: {elapsed:.2}ms at {ms}, rebuilt={rebuilt}");
                 }

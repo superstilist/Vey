@@ -22,6 +22,7 @@ fn from_song(s: native::YtmSong) -> Track {
         video_id: Some(s.video_id),
         clip_video_id: (!s.clip_video_id.is_empty()).then_some(s.clip_video_id),
         thumbnail_url: s.thumbnail_url,
+        catalog_metadata: None,
     }
 }
 async fn search(Query(q): Query<HashMap<String, String>>) -> Result<Json<Vec<Track>>, ApiError> {
@@ -44,6 +45,11 @@ async fn search(Query(q): Query<HashMap<String, String>>) -> Result<Json<Vec<Tra
         })
         .map_err(error)
 }
+async fn match_search(Query(q): Query<HashMap<String, String>>) -> Result<Json<Vec<Track>>, ApiError> {
+    let query = q.get("q").cloned().unwrap_or_default();
+    native::ytm_match_candidates(query, Some(24)).await
+        .map(|rows| Json(rows.into_iter().map(from_song).collect())).map_err(error)
+}
 async fn browse(Query(q): Query<HashMap<String, String>>) -> Result<Json<Vec<Track>>, ApiError> {
     if let Some(id)=q.get("id") {return native::ytm_collection_tracks(id.clone()).await.map(Json).map_err(error);}
     let rows = if q.contains_key("radio") {
@@ -64,12 +70,16 @@ async fn browse(Query(q): Query<HashMap<String, String>>) -> Result<Json<Vec<Tra
                 video_id: Some(s.video_id),
                 clip_video_id: (!s.clip_video_id.is_empty()).then_some(s.clip_video_id),
                 thumbnail_url: s.thumbnail_url,
+                catalog_metadata: None,
             })
             .collect(),
     ))
 }
 async fn home_catalog(Query(q): Query<HashMap<String, String>>) -> Result<Json<crate::discovery::Catalog>, ApiError> {
     native::ytm_home_catalog(q.get("q").cloned()).await.map(Json).map_err(error)
+}
+async fn artist_page(Query(q): Query<HashMap<String, String>>) -> Result<Json<crate::discovery::ArtistPage>, ApiError> {
+    native::ytm_artist_page(q.get("id").cloned().unwrap_or_default()).await.map(Json).map_err(error)
 }
 async fn import_playlist(
     Json(link): Json<String>,
@@ -137,8 +147,10 @@ pub fn run() -> Result<(), String> {
         });
         let app = Router::new()
             .route("/api/search", get(search))
+            .route("/api/match", get(match_search))
             .route("/api/browse", get(browse))
             .route("/api/home", get(home_catalog))
+            .route("/api/artist", get(artist_page))
             .route("/api/playlists/import", post(import_playlist))
             .route("/api/audio/{id}", get(audio))
             .route("/api/video", post(video))

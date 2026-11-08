@@ -27,6 +27,12 @@ pub struct Selection {
     pub index: usize,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtistPage {
+    pub tracks: Vec<Track>,
+    pub catalog: Catalog,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Section {
     pub key: String,
@@ -80,6 +86,7 @@ impl Item {
                 clip_video_id: (self.kind == "video").then(|| self.video_id.clone()),
                 thumbnail_url: self.thumbnail_url.clone(),
                 duration_secs: self.duration_secs,
+                catalog_metadata: None,
             })
     }
     fn artwork_track(&self) -> Track {
@@ -91,13 +98,13 @@ impl Item {
         }
     }
     pub fn collection_tracks(&self, mut tracks: Vec<Track>) -> Vec<Track> {
-        if self.kind == "album" {
+        if self.kind == "album" || self.kind == "artist" {
             for track in &mut tracks {
-                if track.album.trim().is_empty() {
+                if self.kind == "album" && track.album.trim().is_empty() {
                     track.album = self.title.clone();
                 }
                 if track.artist.trim().is_empty() {
-                    track.artist = self.artist.clone();
+                    track.artist = if self.kind == "artist" { self.title.clone() } else { self.artist.clone() };
                 }
             }
         }
@@ -205,6 +212,8 @@ fn item(value: &Value) -> Option<Item> {
     let row = value
         .get("musicTwoRowItemRenderer")
         .or_else(|| value.get("musicResponsiveListItemRenderer"))?;
+    if row.get("musicItemRendererDisplayPolicy").and_then(Value::as_str)
+        == Some("MUSIC_ITEM_RENDERER_DISPLAY_POLICY_GREY_OUT") { return None; }
     let title = row.get("title").map(text).or_else(|| {
         row.pointer("/flexColumns/0/musicResponsiveListItemFlexColumnRenderer/text")
             .map(text)
@@ -267,8 +276,10 @@ fn item(value: &Value) -> Option<Item> {
         })
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let video_id = endpoint(main_endpoint, "watchEndpoint")
-        .or_else(|| endpoint(row.get("overlay").unwrap_or(&Value::Null), "watchEndpoint"))
+    let watch = endpoint(main_endpoint, "watchEndpoint")
+        .or_else(|| endpoint(row.get("overlay").unwrap_or(&Value::Null), "watchEndpoint"));
+    let video_type = watch.and_then(|v| v.get("videoType")).and_then(Value::as_str).unwrap_or_default();
+    let video_id = watch
         .and_then(|v| v.get("videoId"))
         .and_then(Value::as_str)
         .unwrap_or_default();
@@ -283,7 +294,8 @@ fn item(value: &Value) -> Option<Item> {
             return None;
         }
     } else if crate::services::video_id(video_id) {
-        if ratio > 1.3 {
+        if video_type == "MUSIC_VIDEO_TYPE_OMV"
+            || (ratio > 1.3 && !matches!(video_type, "MUSIC_VIDEO_TYPE_ATV" | "MUSIC_VIDEO_TYPE_PODCAST_EPISODE" | "MUSIC_VIDEO_TYPE_UGC")) {
             "video"
         } else {
             "song"
@@ -504,7 +516,18 @@ pub fn compose(store: &Store) -> Vec<Section> {
                 .collect(),
         });
     }
-    let mut public = store.home_catalog.sections.clone();
+    // Vey and the public catalog remain primary. The connected YouTube Music
+    // account contributes at most one supplementary shelf per media type.
+    let mut public: Vec<_> = store.home_catalog.sections.iter().take(7).cloned().collect();
+    for kind in ["song", "video", "album", "artist"] {
+        if let Some(section) = store.personalized_home_catalog.sections.iter().find(|section| section.kind == kind) {
+            let mut section = section.clone();
+            section.items.truncate(5);
+            section.subtitle = if section.subtitle.is_empty() { "YouTube Music".into() }
+                else { format!("YouTube Music · {}", section.subtitle) };
+            public.push(section);
+        }
+    }
     let library = store.library_tracks();
     if !public.iter().any(|s| s.kind == "album") {
         let mut seen = HashSet::new();
@@ -639,7 +662,8 @@ pub fn compose(store: &Store) -> Vec<Section> {
     sections
 }
 pub fn update_art(w: &MainWindow, path: &str, art: &slint::Image) {
-    for shelf in w.get_home_shelves().iter() {
+    for shelves in [w.get_home_shelves(), w.get_catalog_shelves()] {
+      for shelf in shelves.iter() {
         if let Some(items) = shelf.items.as_any().downcast_ref::<VecModel<HomeItemRow>>() {
             for index in 0..items.row_count() {
                 let Some(mut row) = items.row_data(index) else {
@@ -651,18 +675,11 @@ pub fn update_art(w: &MainWindow, path: &str, art: &slint::Image) {
                 }
             }
         }
+      }
     }
 }
-fn sync(w: &MainWindow, store: &Store, signature: &RefCell<String>) {
-    let sections = compose(store);
-    let next = serde_json::to_string(&sections).unwrap_or_default();
-    if *signature.borrow() == next {
-        request_art(w, &sections);
-        return;
-    }
-    *signature.borrow_mut() = next;
-    let previous: HashMap<String, slint::Image> = w
-        .get_home_shelves()
+fn section_rows(sections: &[Section], old: slint::ModelRc<HomeShelfRow>) -> Vec<HomeShelfRow> {
+    let previous: HashMap<String, slint::Image> = old
         .iter()
         .flat_map(|s| {
             s.items
@@ -671,7 +688,7 @@ fn sync(w: &MainWindow, store: &Store, signature: &RefCell<String>) {
                 .collect::<Vec<_>>()
         })
         .collect();
-    let rows: Vec<_> = sections
+    sections
         .iter()
         .map(|s| HomeShelfRow {
             key: s.key.clone().into(),
@@ -703,7 +720,24 @@ fn sync(w: &MainWindow, store: &Store, signature: &RefCell<String>) {
             ))
             .into(),
         })
-        .collect();
+        .collect()
+}
+pub fn sync_artist_page(w: &MainWindow, catalog: &Catalog) {
+    let rows = section_rows(&catalog.sections, w.get_catalog_shelves());
+    w.set_catalog_shelves(Rc::new(VecModel::from(rows)).into());
+}
+pub fn request_artist_art(w: &MainWindow, catalog: &Catalog) {
+    if w.get_active_view() == "explore" { request_art(w, &catalog.sections); }
+}
+fn sync(w: &MainWindow, store: &Store, signature: &RefCell<String>) {
+    let sections = compose(store);
+    let next = serde_json::to_string(&sections).unwrap_or_default();
+    if *signature.borrow() == next {
+        if w.get_active_view() == "home" { request_art(w, &sections); }
+        return;
+    }
+    *signature.borrow_mut() = next;
+    let rows = section_rows(&sections, w.get_home_shelves());
     w.set_home_shelves(Rc::new(VecModel::from(rows)).into());
     let filters: Vec<slint::SharedString> = std::iter::once("all")
         .chain(
@@ -714,12 +748,9 @@ fn sync(w: &MainWindow, store: &Store, signature: &RefCell<String>) {
         .map(Into::into)
         .collect();
     w.set_home_filters(Rc::new(VecModel::from(filters)).into());
-    request_art(w, &sections);
+    if w.get_active_view() == "home" { request_art(w, &sections); }
 }
 fn request_art(w: &MainWindow, sections: &[Section]) {
-    if w.get_active_view() != "home" {
-        return;
-    }
     let mut requested = HashSet::new();
     for section in sections {
         for item in &section.items {
@@ -734,15 +765,33 @@ fn request_art(w: &MainWindow, sections: &[Section]) {
         }
     }
 }
-fn fetch(query: Option<String>, tx: mpsc::Sender<Result<Catalog, String>>) {
+struct HomeFetch {
+    catalog: Catalog,
+    personalized: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    connection_generation: u64,
+}
+fn fetch(query: Option<String>, tx: mpsc::Sender<Result<HomeFetch, String>>) {
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || {
+        let (generation, connection) = crate::music_accounts::home_connection();
         let result = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| e.to_string())
-            .and_then(|rt| rt.block_on(crate::native::ytm_home_catalog(query)));
-        let _ = tx.send(result);
+            .and_then(|rt| rt.block_on(async move {
+                if let Some((target, owner)) = connection {
+                    if let Ok(Ok(catalog)) = tokio::time::timeout(Duration::from_secs(30),
+                        crate::youtube_browser::home(&target, &owner)).await {
+                        return Ok(HomeFetch { catalog, personalized: true, connection_generation: generation });
+                    }
+                }
+                crate::native::ytm_home_catalog(query).await.map(|catalog|
+                    HomeFetch { catalog, personalized: false, connection_generation: generation })
+            }));
+        let _ = tx.send(Ok(result.unwrap_or_else(|_| HomeFetch {
+            catalog: Catalog::default(), personalized: false, connection_generation: generation,
+        })));
     });
     #[cfg(target_arch = "wasm32")]
     wasm_bindgen_futures::spawn_local(async move {
@@ -759,7 +808,7 @@ fn fetch(query: Option<String>, tx: mpsc::Sender<Result<Catalog, String>>) {
             if !response.status().is_success() {
                 return Err("Home catalog unavailable".into());
             }
-            response.json::<Catalog>().await.map_err(|e| e.to_string())
+            response.json::<Catalog>().await.map(|catalog| HomeFetch { catalog, personalized: false }).map_err(|e| e.to_string())
         }
         .await;
         let _ = tx.send(result);
@@ -781,7 +830,10 @@ pub fn install(w: &MainWindow, get: Rc<dyn Fn() -> Store>, apply: Rc<dyn Fn(Stor
             return;
         };
         let store = current();
-        let Some(section) = compose(&store)
+        let sections = if w.get_active_view() == "explore" {
+            store.artist_page_catalog.sections.clone()
+        } else { compose(&store) };
+        let Some(section) = sections
             .into_iter()
             .find(|s| s.key == shelf_key.as_str())
         else {
@@ -809,8 +861,6 @@ pub fn install(w: &MainWindow, get: Rc<dyn Fn() -> Store>, apply: Rc<dyn Fn(Stor
                 "".into(),
                 serde_json::to_string(item).unwrap_or_default().into(),
             );
-        } else if item.kind == "artist" {
-            w.invoke_search(item.title.clone().into());
         } else {
             w.invoke_open_discovery_collection(
                 item.browse_id.clone().into(),
@@ -824,7 +874,11 @@ pub fn install(w: &MainWindow, get: Rc<dyn Fn() -> Store>, apply: Rc<dyn Fn(Stor
         let Some(w) = weak.upgrade() else {
             return;
         };
-        if let Some(section) = compose(&current())
+        let store = current();
+        let sections = if w.get_active_view() == "explore" {
+            store.artist_page_catalog.sections.clone()
+        } else { compose(&store) };
+        if let Some(section) = sections
             .into_iter()
             .find(|s| s.key == key.as_str())
         {
@@ -876,19 +930,26 @@ pub fn install(w: &MainWindow, get: Rc<dyn Fn() -> Store>, apply: Rc<dyn Fn(Stor
             if let Ok(result) = rx.try_recv() {
                 w.set_home_catalog_loading(false);
                 match result {
-                    Ok(catalog) if !catalog.sections.is_empty() => {
+                    Ok(result) => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if result.connection_generation != crate::music_accounts::home_connection().0 {
+                            w.invoke_request_home_catalog();
+                            return;
+                        }
+                        if result.catalog.sections.is_empty() {
+                            w.set_home_catalog_failed(true);
+                            return;
+                        }
                         let mut store = current();
-                        store.remember_all(
-                            catalog
-                                .sections
-                                .iter()
-                                .flat_map(|s| s.items.iter())
-                                .filter_map(Item::track),
-                        );
-                        store.home_catalog = catalog;
+                        if result.personalized {
+                            store.personalized_home_catalog = result.catalog;
+                        } else {
+                            store.personalized_home_catalog = Catalog::default();
+                            store.home_catalog = result.catalog;
+                        }
                         apply(store);
                     }
-                    _ => w.set_home_catalog_failed(true),
+                    Err(_) => w.set_home_catalog_failed(true),
                 }
             }
             if *revision.borrow() != w.get_home_revision() {
@@ -897,8 +958,10 @@ pub fn install(w: &MainWindow, get: Rc<dyn Fn() -> Store>, apply: Rc<dyn Fn(Stor
             }
             if last_check.borrow().elapsed() > Duration::from_secs(60) {
                 *last_check.borrow_mut() = web_time::Instant::now();
+                let store = current();
+                let updated_at = if store.personalized_home_catalog.sections.is_empty() { store.home_catalog.updated_at } else { store.personalized_home_catalog.updated_at };
                 if w.get_active_view() == "home"
-                    && current().home_catalog.updated_at.saturating_add(3_600_000)
+                    && updated_at.saturating_add(3_600_000)
                         < crate::services::now_ms()
                 {
                     w.invoke_request_home_catalog();
@@ -907,7 +970,11 @@ pub fn install(w: &MainWindow, get: Rc<dyn Fn() -> Store>, apply: Rc<dyn Fn(Stor
         },
     );
     w.invoke_sync_home();
-    if get().home_catalog.updated_at.saturating_add(3_600_000) < crate::services::now_ms() {
+    #[cfg(not(target_arch = "wasm32"))]
+    let connected = crate::music_accounts::home_connection().1.is_some();
+    #[cfg(target_arch = "wasm32")]
+    let connected = false;
+    if connected || get().home_catalog.updated_at.saturating_add(3_600_000) < crate::services::now_ms() {
         w.invoke_request_home_catalog();
     }
 }
@@ -915,6 +982,24 @@ pub fn install(w: &MainWindow, get: Rc<dyn Fn() -> Store>, apply: Rc<dyn Fn(Stor
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn connected_home_is_ephemeral_and_supplements_public_catalog() {
+        let personal = Section { key: "youtube-personal".into(), title: "Personal".into(), kind: "song".into(),
+            items: vec![Item::song(&Track { path: "yt://abcdefghijk".into(), title: "Private feed".into(), ..Default::default() })], ..Default::default() };
+        let public = Section { key: "public-feed".into(), title: "Public".into(), kind: "song".into(),
+            items: vec![Item::song(&Track { path: "yt://12345678901".into(), title: "Public song".into(), ..Default::default() })], ..Default::default() };
+        let store = Store { personalized_home_catalog: Catalog { updated_at: 1, sections: vec![personal] },
+            home_catalog: Catalog { updated_at: 1, sections: vec![public] }, ..Default::default() };
+        let sections = compose(&store);
+        let personal_index = sections.iter().position(|section| section.key == "youtube-personal").unwrap();
+        let public_index = sections.iter().position(|section| section.key == "public-feed").unwrap();
+        assert!(public_index < personal_index);
+        let encoded = serde_json::to_string(&store).unwrap();
+        assert!(!encoded.contains("Private feed"));
+        assert!(encoded.contains("Public song"));
+        let restored: Store = serde_json::from_str(&encoded).unwrap();
+        assert!(restored.personalized_home_catalog.sections.is_empty());
+    }
     #[test]
     fn local_album_fallback_opens_only_its_tracks_and_keeps_existing_metadata() {
         let mut store = Store::default();

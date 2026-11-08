@@ -35,6 +35,10 @@
 
 ## Якість збірки
 
+- [x] Винести згенерований Slint UI в окремий crate, щоб повторно використовувати його при змінах контролера.
+- [x] Усунути дублікати п’яти вбудованих шрифтів; перевірити їхній вміст і Windows release `.exe`.
+- [ ] Виміряти повний та повторний build на однакових source, профілі та кеші; окремо записати cold і warm результати.
+- [ ] Виміряти розмір готових Windows ZIP, Android APK і Web bundle для тієї самої версії; не підміняти їх розміром `.exe`.
 - [ ] `cargo fmt -- --check`, targeted Rust suites, native build і WASM compile/build.
 - [ ] Для UI змін: screenshot review + browser/native input fixture; для renderer змін: GPU/software tests.
 - [ ] Для widget змін: rebuild generated bundle з source і відсутність випадкового edit generated bundle як джерела правди.

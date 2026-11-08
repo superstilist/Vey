@@ -14,6 +14,33 @@ const CASES: [&str; 4] = ["H", "HHHHH", "ШШШШШ", "(куди йти…)"];
 fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     Rc::new(VecModel::from(items)).into()
 }
+fn target_word(w: &MainWindow) -> playervf::BraccatoWord {
+    let rows = w.get_native_lyric_lines();
+    let mut parts = Vec::new();
+    let mut containing_rows = 0;
+    for row in (0..rows.row_count()).filter_map(|i| rows.row_data(i)) {
+        let matching = (0..row.parts.row_count())
+            .filter_map(|i| row.parts.row_data(i))
+            .filter(|p| p.start_ms == 1000.)
+            .collect::<Vec<_>>();
+        containing_rows += usize::from(!matching.is_empty());
+        parts.extend(matching);
+    }
+    assert_eq!(
+        containing_rows, 1,
+        "the spatial oracle requires an unwrapped cue"
+    );
+    let mut word = parts
+        .first()
+        .expect("the timed test word must be laid out")
+        .clone();
+    word.text = parts
+        .iter()
+        .map(|p| p.text.as_str())
+        .collect::<String>()
+        .into();
+    word
+}
 fn fixture(w: &MainWindow, text: &str, motion: bool) {
     let mut words = vec![];
     if motion {
@@ -81,8 +108,7 @@ fn verify(
         .collect::<Vec<_>>();
     assert!(cores.len() > 80, "need actual glyph interiors");
     let left = cores.iter().map(|p| p.0).min().unwrap() as f32;
-    let row = w.get_native_lyric_lines().row_data(0).unwrap();
-    let word = row.parts.row_data(row.parts.row_count() - 1).unwrap();
+    let word = target_word(w);
     let bytes: &[u8] = if word.font_family == "Satoshi" {
         include_bytes!("../assets/fonts/Satoshi-700.otf")
     } else {
@@ -90,14 +116,15 @@ fn verify(
     };
     let face = ttf_parser::Face::parse(bytes, 0).unwrap();
     let glyph = face.glyph_index(word.text.chars().next().unwrap()).unwrap();
+    let size = w.get_lyric_size();
     let bearing =
-        face.glyph_bounding_box(glyph).unwrap().x_min as f32 * 72. / face.units_per_em() as f32;
+        face.glyph_bounding_box(glyph).unwrap().x_min as f32 * size / face.units_per_em() as f32;
     let origin = left - bearing - 1.;
     // Use font advance and bearing, not the visible ink bounds: wide side
     // bearings would otherwise make a valid feather look prematurely lit.
     let advance = playervf::native_lyric_fonts::measure_with(
         word.text.as_str(),
-        72.,
+        size,
         word.font_family.as_str(),
         700,
     );
@@ -156,7 +183,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     w.set_lyrics_timed(true);
     w.set_lyrics_word_timed(true);
     w.set_duration(12.);
-    w.set_lyric_size(72.);
+    // Keep this single-line pixel oracle separate from wrapping: the native
+    // shaper can otherwise place the prefix and timed cue on different rows.
+    w.set_lyric_size(48.);
     w.window().set_size(slint::LogicalSize::new(1440., 900.));
     let mut style = w.get_lyric_style();
     style.glow = false;
@@ -208,8 +237,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         retries.set(0);
         if phase == 0 {
             frames.borrow_mut().push(capture(&w, case, phase));
-            let row = w.get_native_lyric_lines().row_data(0).unwrap();
-            let word = row.parts.row_data(row.parts.row_count() - 1).unwrap();
+            let word = target_word(&w);
             println!(
                 "case {}: {} / {} / {}ms / gradients={} / reduced={}",
                 case,

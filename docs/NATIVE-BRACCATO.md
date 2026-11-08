@@ -13,6 +13,46 @@ binds palette, layout, playback, seek, reduced motion and manual-scroll resume.
 Translation and romanization visibility remains controlled by display clones,
 without altering cached/exported sources.
 
+## Stable per-fill models (2026-11-06)
+
+`LyricInk` keeps its original conditional neutral Text path. A clock-dependent
+integer model previously replaced feather delegates as its length changed.
+During partial coverage, pool capacity now depends only
+on static word/glyph ramp bounds and layout width, capped at 64 cells. Normal
+narrow feathers use only the needed capacity. Playback changes pixel-aligned
+coverage and color without resizing that pool. Solid words release the partial
+body; retaining hidden pools for every viewport word regressed render time.
+Retaining hidden neutral Text during partial coverage also regressed the measured
+viewport workload, so the final change stabilizes only the per-fill repeater.
+
+Neutral Text keeps its original unclipped origin. Rendering it inside a feather
+clip changed fractional ligature rasterization at wave handoffs; the original
+unclipped run preserves the established glyph reference. Canonical cues,
+fragment offsets, wrapping, fades and reduced-motion fill are unchanged.
+
+Fresh Windows checks on the final ink code, with scale fixed explicitly:
+
+- `native_lyric_quality`: eight short/long shape cases and translucent-color
+  cases passed; neutral handoff differences were at most one pixel.
+- `native_fill_spatial --motion`: Latin/Cyrillic, punctuation, wobble and
+  reduced-motion cases passed. Its oracle now follows the 1000ms timed cue,
+  combines its fragments and keeps it unwrapped at 48px. The old oracle
+  selected the first row's prefix after a 72px cue wrapped.
+- `native_fill_continuity`: 8,129 forward pixel transitions, zero backwards
+  transitions, and visible advancement at 37 of 40 sampled cue positions.
+- `native_ink_artifacts --assert`: 256 narrow/broad, GPU, 1.25x and software
+  samples passed with no wrong solid glyph-core pixels.
+
+Logs: `target/{quality,spatial,continuity}-final-scale1-1106.log` and
+`target/ink-final-{scale1-narrow,scale1-broad,scale125,scale1-software}-1106.log`.
+
+These are glyph/coverage checks. See `docs/PERFORMANCE.md` for separate timing
+measurements; sampled cue screenshots are not an FPS measurement.
+The native host now samples visible playing fill time every 8ms through a light
+pass, retaining a 16ms deadline for full processing. Same-executable audio runs
+and the remaining frame-pacing limits are recorded there. Final-source 2x,
+retarget, paused-seek and continuity fixtures passed after this host change.
+
 ## Sharp-letter artifact follow-up (2026-10-29)
 
 The filled-glow change below did not resolve the reported sharp-letter artifacts.

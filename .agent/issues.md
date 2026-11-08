@@ -12,7 +12,7 @@ evidence; **documentation** = inconsistent descriptions. Suggested priorities in
 | I-01 | Reported tracks recovered 2026-10-21 | Android media URLs rejected ranges beyond 1 MiB. Public visionOS resolution now cached both reported tracks completely and decoded their full durations. Native load cancellation and range/cache validation also implemented. Audible listening and broader catalog/device acceptance remain separate. | `docs/PLAYBACK-RECOVERY.md`; `src/native.rs`, `src/app.rs`, `src/server.rs` audio handler |
 | I-02 | Implemented adapters; platform acceptance pending | Muted video uses browser video, Android TextureView or desktop FFmpeg frames. FFmpeg must be installed for desktop clips; live streams and device playback need separate runtime evidence. | `src/video.rs`, `src/video_linux.rs` |
 | I-03 | Partially implemented; device acceptance pending | Since 0.1.5, device scanning requests audio permission and reads MediaStore (`is_music != 0` since 2026-11-02); Android add-source starts device discovery. Document picker/save stubs still limit explicit selection and import/export; manual paths remain available. | `src/android.rs`, `src/native.rs`, `src/dialogs.rs`; `docs/ANDROID-FIXES.md` |
-| I-04 | External-browser verification; device acceptance pending | User-initiated lyric authentication uses a system browser and one-use loopback callback. Silent renewal is unavailable; Android device and live provider verification remain unverified. | `src/challenge.rs`, `src/lyrics_service.rs` |
+| I-04 | Embedded Windows flow implemented; runtime acceptance pending | Windows opens the provider Turnstile page in an opaque Wry child over the lyrics viewport, exchanges a user-completed token for a locally cached JWT and retries once. System browser is a fallback on WebView failure or user request; other native targets retain their existing browser flow. No CAPTCHA bypass. Real challenge completion and non-Windows runtime acceptance remain unverified. | `src/challenge.rs`, `src/lyrics_service.rs`, `src/app.rs`, `ui/main.slint`, `assets/lyrics-challenge.html` |
 | I-05 | Source-confirmed browser gap | Selected local files lack real tag/artwork extraction; title is filename, artist unknown, album/artwork empty. | `web/bridge.js` file picker; `docs/PARITY.md` |
 | I-06 | Browser session limitation | Local object URLs do not survive reload; files need reselection even when likes/playlists persist. | `web/bridge.js`; `README.md` |
 | I-07 | Reported feature backlog | Public detail pages, continuation UX, download progress/cancellation, original shortcuts/context menus and exhaustive settings parity unfinished. | `docs/PARITY.md`; audit callbacks in `src/app.rs` and `src/web.rs` before implementation |
@@ -22,6 +22,31 @@ evidence; **documentation** = inconsistent descriptions. Suggested priorities in
 | I-11 | Unverified Linux runtime | Prior local WSL failed because its disk was missing; local runtime and current CI execution are not established. | `docs/PARITY.md`, `.github/workflows/rust.yml` |
 | I-12 | Documented accessibility limitation | Browser Slint canvas shell lacks screen-reader support; DOM lyric/editor accessibility does not cover the shell. | `README.md` |
 | I-18 | Observed Windows software-renderer fixture failure, 2026-10-29 | `navigation_transition` failed its static stage-corner pixel assertion before the first route change under `SLINT_BACKEND=winit-software`; the GPU fixture passed. Software clipping conformance remains open. | `examples/navigation_transition.rs::check_corners`; `docs/PERFORMANCE.md` |
+| I-19 | Native animation stutter partially addressed, 2026-11-06 | Layout/ambient work uses bounded workers. Ink capacity no longer replaces delegates during fill. A light 8ms clock pass retains 16ms housekeeping; same-executable audio runs reduced repeated fill-clock frames from about 60% to 27–28%. 41 lyric tests and 256 glyph-core samples pass. Render spikes remain, up to 94ms after player return in the new runs; general frame pacing stays open. | `src/native_lyrics.rs`, `src/native_lyric_layout.rs`, `src/ambient_native.rs`, vendored `LyricInk`; `docs/PERFORMANCE.md` |
+
+2026-11-06 follow-up: the 15-second account catalog check repeatedly resolved
+local identities by scanning the whole library on the UI thread. Account
+snapshot/catalog preparation now uses an index; an isolated 560-track fixture
+reduced that lookup from 510 ms to 0.58 ms. `account_timer_callback` now makes
+the full timer visible in diagnostics. A fresh real-playback trace is still
+needed to confirm the periodic stalls are gone; unrelated render spikes remain
+open. See `docs/PLAYER-TIMING-DEBUG.md`.
+
+Later 2026-11-06 follow-up: native account preparation, cloud-restore merging,
+playlist-import merging, account/session writes, backup/migration IO, and
+local-file existence checks moved to workers. Library projection no longer
+queries the filesystem. An isolated live catalog run measured account timer
+p95 0.002 ms, maximum 0.868 ms over 441 samples; it did not include playback.
+Startup store loading and UI model application remain on the main thread, and
+the browser's preparation is not worker-backed. Real playback, restoration
+and network-drive acceptance remain open.
+The native audio-worker play/pause/seek/volume fixture passed with silent audio;
+it does not exercise the complete UI selection path.
+
+2026-11-04: a new `navigation_transition` run with the default backend also
+failed static corner equality before motion, with a one-level RGB difference.
+The actual renderer was not identified; see `docs/PERFORMANCE.md`. This does
+not establish whether the clipping itself is wrong or the assertion is too strict.
 
 ## Already addressed: retain regression coverage
 
@@ -122,9 +147,14 @@ These are historical fixes, not newly discovered open bugs:
   input. Pixel checks cover focused 84-pixel and narrow 64-pixel controls as
   well as the wide settings slider; do not restore a border on the wrapper.
 
-- Artwork-loading UI freeze: bounded decoding/workers and individual model-row
-  updates replaced repeated full-list rebuild/PNG reload. `src/artwork.rs`,
-  `src/app.rs`, `docs/VERIFICATION.md`.
+- Artwork-loading UI freeze: bounded decoding/workers and row-indexed models
+  already existed, but each completed cover still rebuilt the sidebar playlist
+  list and the whole queue. Cover completion now patches matching rows in place;
+  per-track download progress no longer scans every page, and the playlist
+  lookup is indexed once per full refresh. Windows release smoke on 2026-11-05
+  opened a populated Library and Playlist after rapid route switches with covers
+  visible. This was one no-playback session; audio soak and Android runtime remain
+  unverified. `src/artwork.rs`, `src/app.rs`, `docs/PERFORMANCE.md`.
 - Auth challenge blocked by WebView2 data navigation and large IPC output:
   exact bundled-host navigation handling and output draining were added.
   `src/challenge.rs`, `src/lyrics_service.rs`, `README.md`.

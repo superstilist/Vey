@@ -395,6 +395,45 @@ struct Remote {
     id: String,
     name: String,
 }
+
+/// Read a bounded, normalized Home feed from the already verified browser tab.
+/// Authentication and raw YouTube responses remain inside that tab.
+pub async fn home(target: &str, owner: &str) -> Result<crate::discovery::Catalog, String> {
+    if target.is_empty() || owner.is_empty() {
+        return Err("Спочатку підключіть YouTube Music через браузер".into());
+    }
+    let endpoint = endpoint(&profile()).await?;
+    let page = targets(&endpoint).await?.into_iter()
+        .find(|page| page.id == target && page.kind == "page")
+        .ok_or("Вкладку YouTube Music закрито. Натисніть Підключити знову.")?;
+    if !music_origin(&page.url) { return Err(script_error("wrong_origin")); }
+    let mut browser = Cdp::open(&websocket(&page.websocket, endpoint.port, "page")?).await?;
+    let result = browser.evaluate(json!({"operation":"home","expectedOwner":owner})).await?;
+    let mut catalog: crate::discovery::Catalog = serde_json::from_value(result["catalog"].clone())
+        .map_err(|_| "Некоректні рекомендації YouTube Music")?;
+    catalog.sections.truncate(8);
+    for section in &mut catalog.sections {
+        section.items.truncate(10);
+        let section_kind = section.kind.clone();
+        section.items.retain(|item| {
+            if item.kind != section_kind || item.title.trim().is_empty() || item.title.len() > 2048 || item.subtitle.len() > 2048 { return false; }
+            if !item.thumbnail_url.is_empty() && !reqwest::Url::parse(&item.thumbnail_url).ok()
+                .is_some_and(|url| url.scheme() == "https" && url.username().is_empty() && url.password().is_none()) { return false; }
+            match item.kind.as_str() {
+                "song" | "video" => crate::services::video_id(&item.video_id)
+                    && item.path == format!("yt://{}", item.video_id) && item.key == item.path,
+                "album" | "artist" | "playlist" => !item.browse_id.is_empty() && item.browse_id.len() <= 200
+                    && item.browse_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                    && item.path == format!("catalog://{}", item.browse_id) && item.key == item.path,
+                _ => false,
+            }
+        });
+    }
+    catalog.sections.retain(|section| !section.items.is_empty());
+    if catalog.sections.is_empty() { return Err("YouTube Music не повернув рекомендацій".into()); }
+    catalog.updated_at = crate::services::now_ms();
+    Ok(catalog)
+}
 pub async fn pull(
     target: &str,
     owner: &str,

@@ -13,7 +13,7 @@ use std::{
     rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, OnceLock, RwLock,
     },
     time::Duration,
 };
@@ -32,6 +32,22 @@ struct Connection {
 #[serde(default)]
 struct Sessions {
     youtube: Connection,
+}
+
+// Only the Vey-owned browser target and expected owner cross into the Home
+// fetch worker. Bump the generation on every connection change so a late
+// response from an old account cannot replace the current feed.
+static HOME_CONNECTION: OnceLock<RwLock<(u64, Option<(String, String)>)>> = OnceLock::new();
+pub(crate) fn home_connection() -> (u64, Option<(String, String)>) {
+    HOME_CONNECTION.get_or_init(|| RwLock::new((0, None))).read()
+        .map(|value| value.clone()).unwrap_or_default()
+}
+fn set_home_connection(connection: &Connection) {
+    if let Ok(mut value) = HOME_CONNECTION.get_or_init(|| RwLock::new((0, None))).write() {
+        value.0 = value.0.wrapping_add(1);
+        value.1 = (!connection.browser_target.is_empty() && !connection.owner.is_empty())
+            .then(|| (connection.browser_target.clone(), connection.owner.clone()));
+    }
 }
 
 fn save(sessions: &Sessions) -> Result<(), String> {
@@ -55,6 +71,35 @@ fn save(sessions: &Sessions) -> Result<(), String> {
     drop(file);
     std::fs::rename(path, dir.join("music-accounts.json"))
         .map_err(|_| "Не вдалося оновити підключення".into())
+}
+
+struct SessionWriter {
+    sender: Option<std::sync::mpsc::Sender<Sessions>>,
+    errors: std::sync::mpsc::Receiver<String>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+impl SessionWriter {
+    fn new() -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel::<Sessions>();
+        let (error_tx, errors) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            while let Ok(mut sessions) = receiver.recv() {
+                while let Ok(newer) = receiver.try_recv() { sessions = newer; }
+                if let Err(error) = save(&sessions) { let _ = error_tx.send(error); }
+            }
+        });
+        Self { sender: Some(sender), errors, worker: Some(worker) }
+    }
+    fn request(&self, sessions: &Sessions) -> Result<(), String> {
+        self.sender.as_ref().ok_or("Збереження підключень зупинено")?
+            .send(sessions.clone()).map_err(|_| "Не вдалося зберегти підключення".into())
+    }
+}
+impl Drop for SessionWriter {
+    fn drop(&mut self) {
+        self.sender.take();
+        if let Some(worker) = self.worker.take() { let _ = worker.join(); }
+    }
 }
 
 /// Read the current YTM browser connection and remove the retired Spotify OAuth
@@ -116,12 +161,45 @@ enum Job {
     Pull(Option<String>),
 }
 
+#[derive(Clone)]
 struct Output {
     connection: Connection,
     playlists: Vec<ImportedPlaylist>,
     errors: Vec<String>,
     connected: bool,
     provider_name: String,
+}
+
+enum WorkResult {
+    Fetched(Result<Output, String>),
+    Prepared {
+        original: Output,
+        output: Output,
+        store: Store,
+        store_revision: u64,
+        changed: bool,
+        imported_count: usize,
+        track_count: usize,
+    },
+}
+
+fn prepare_import(mut store: Store, original: Output, store_revision: u64) -> WorkResult {
+    let mut output = original.clone();
+    let track_count = output.playlists.iter().map(|playlist| playlist.tracks.len()).sum();
+    let mut imported_count = 0;
+    let mut changed = false;
+    for mut playlist in output.playlists.iter().cloned() {
+        import::reuse_legacy_spotify_identity(&store, &mut playlist);
+        match import::apply(&mut store, &playlist, output.connection.baselines.get(&playlist.id).map(String::as_str)) {
+            Ok(hash) => {
+                output.connection.baselines.insert(playlist.id, hash);
+                imported_count += 1;
+                changed = true;
+            }
+            Err(error) => output.errors.push(error),
+        }
+    }
+    WorkResult::Prepared { original, output, store, store_revision, changed, imported_count, track_count }
 }
 
 fn cancelled(cancel: &AtomicBool) -> Result<(), String> {
@@ -170,12 +248,13 @@ async fn work(connection: Connection, job: Job, cancel: Arc<AtomicBool>) -> Resu
         }
         Job::Connect => {
             let signed = crate::youtube_browser::connect(&cancel).await?;
+            let auto = signed.identity.owner == connection.owner && connection.auto;
             Ok(Output {
                 connection: Connection {
                     browser_target: signed.target,
                     owner: signed.identity.owner,
                     label: signed.identity.label,
-                    auto: true,
+                    auto,
                     ..Default::default()
                 },
                 playlists: vec![],
@@ -207,7 +286,9 @@ pub fn install(
     w: &MainWindow,
     get: Rc<dyn Fn() -> Store>,
     apply: Rc<dyn Fn(Store)>,
+    store_revision: Rc<dyn Fn() -> u64>,
     runtime: Arc<tokio::runtime::Runtime>,
+    on_connection_change: Rc<dyn Fn()>,
 ) -> slint::Timer {
     struct State {
         sessions: Sessions,
@@ -220,6 +301,7 @@ pub fn install(
     }
 
     let (sessions, migration_status) = load();
+    set_home_connection(&sessions.youtube);
     w.set_music_supported(!cfg!(target_os = "android"));
     w.set_music_auto_sync(sessions.youtube.auto);
     w.set_youtube_account(sessions.youtube.label.clone().into());
@@ -235,20 +317,34 @@ pub fn install(
         pending_sync: false,
         task: None,
     }));
+    let writer = Rc::new(SessionWriter::new());
     let (tx, rx) = std::sync::mpsc::channel();
+    let prepare_tx = tx.clone();
+    let prepare = {
+        let runtime = runtime.clone();
+        Rc::new(move |generation, revision, store, output| {
+            let tx = prepare_tx.clone();
+            runtime.spawn_blocking(move || {
+                let prepared = prepare_import(store, output, revision);
+                let _ = tx.send((generation, prepared));
+            })
+        })
+    };
     let send = {
         let runtime = runtime.clone();
         Rc::new(move |generation, connection, job, cancel| {
             let tx = tx.clone();
             runtime.spawn(async move {
                 let result = work(connection, job, cancel).await;
-                let _ = tx.send((generation, result));
+                let _ = tx.send((generation, WorkResult::Fetched(result)));
             })
         })
     };
     let weak = w.as_weak();
     let shared = state.clone();
     let dispatch = send.clone();
+    let command_writer = writer.clone();
+    let connection_changed = on_connection_change.clone();
     w.on_music_command(move |command| {
         let Some(ui) = weak.upgrade() else {
             return;
@@ -277,8 +373,10 @@ pub fn install(
             ui.set_music_busy(false);
             if command == "disconnect" {
                 state.sessions.youtube = Connection::default();
+                set_home_connection(&state.sessions.youtube);
+                connection_changed();
                 ui.set_youtube_account("".into());
-                if let Err(error) = save(&state.sessions) {
+                if let Err(error) = command_writer.request(&state.sessions) {
                     ui.set_music_status(error.into());
                     return;
                 }
@@ -296,7 +394,7 @@ pub fn install(
         if command == "auto" {
             state.sessions.youtube.auto = ui.get_music_auto_sync();
             state.next = now_ms() + 900000;
-            if let Err(error) = save(&state.sessions) {
+            if let Err(error) = command_writer.request(&state.sessions) {
                 ui.set_music_status(error.into());
             }
             return;
@@ -368,57 +466,51 @@ pub fn install(
             let Some(ui) = weak.upgrade() else {
                 return;
             };
+            if let Ok(error) = writer.errors.try_recv() { ui.set_music_status(error.into()); }
             let mut state = state.borrow_mut();
             while let Ok((generation, result)) = rx.try_recv() {
                 if generation != state.generation {
                     continue;
                 }
-                state.busy = false;
-                ui.set_music_busy(false);
                 match result {
-                    Ok(mut output) => {
-                        if output.connected && output.connection.auto {
-                            state.pending_sync = true;
-                        }
+                    WorkResult::Fetched(Err(error)) => {
+                        state.busy = false;
+                        state.task = None;
+                        ui.set_music_busy(false);
+                        ui.set_music_status(error.into());
+                    }
+                    WorkResult::Fetched(Ok(mut output)) => {
                         if output.connection.owner == state.sessions.youtube.owner
                             && output.connection.baselines.is_empty()
                         {
                             output.connection.baselines =
                                 state.sessions.youtube.baselines.clone();
                         }
-                        let provider_name = output.provider_name.clone();
-                        let mut imported_count = 0usize;
-                        let track_count = output
-                            .playlists
-                            .iter()
-                            .map(|playlist| playlist.tracks.len())
-                            .sum::<usize>();
-                        let mut store = get();
-                        let mut changed = false;
-                        for mut playlist in output.playlists {
-                            import::reuse_legacy_spotify_identity(&store, &mut playlist);
-                            match import::apply(
-                                &mut store,
-                                &playlist,
-                                output
-                                    .connection
-                                    .baselines
-                                    .get(&playlist.id)
-                                    .map(String::as_str),
-                            ) {
-                                Ok(hash) => {
-                                    output.connection.baselines.insert(playlist.id, hash);
-                                    imported_count += 1;
-                                    changed = true;
-                                }
-                                Err(error) => output.errors.push(error),
-                            }
+                        state.task = Some(prepare(generation, store_revision(), get(), output));
+                    }
+                    WorkResult::Prepared { original, mut output, store, store_revision: base_revision, changed, imported_count, track_count } => {
+                        if store_revision() != base_revision {
+                            // Rebase the same fetched playlists on the latest store.
+                            // Never replace edits made while preparation was running.
+                            state.task = Some(prepare(generation, store_revision(), get(), original));
+                            continue;
                         }
+                        state.busy = false;
+                        state.task = None;
+                        ui.set_music_busy(false);
+                        if output.connected && output.connection.auto {
+                            state.pending_sync = true;
+                        }
+                        let provider_name = output.provider_name.clone();
                         if changed {
                             apply(store);
                         }
                         state.sessions.youtube = output.connection;
-                        if let Err(error) = save(&state.sessions) {
+                        if output.connected {
+                            set_home_connection(&state.sessions.youtube);
+                            on_connection_change();
+                        }
+                        if let Err(error) = writer.request(&state.sessions) {
                             output.errors.push(error);
                         }
                         ui.set_youtube_account(state.sessions.youtube.label.clone().into());
@@ -429,7 +521,7 @@ pub fn install(
                                 output.errors.join(" · ")
                             )
                         } else if output.connected {
-                            "YouTube Music підключено. Натисніть Синхронізувати, щоб імпортувати плейлісти.".into()
+                            "YouTube Music підключено: його добірки доповнюють Головну. Синхронізація плейлістів вмикається окремо.".into()
                         } else if imported_count > 0 {
                             format!("{provider_name} · імпортовано плейлістів: {imported_count}; треків: {track_count}.")
                         } else {
@@ -437,7 +529,6 @@ pub fn install(
                         };
                         ui.set_music_status(message.chars().take(2000).collect::<String>().into());
                     }
-                    Err(error) => ui.set_music_status(error.into()),
                 }
             }
             if !state.busy && now_ms() >= state.next {
@@ -462,4 +553,33 @@ pub fn install(
         },
     );
     timer
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::Track;
+
+    #[test]
+    fn playlist_preparation_can_rebase_on_newer_library_without_losing_edits() {
+        let source = Output {
+            connection: Connection::default(),
+            playlists: vec![ImportedPlaylist { id: "youtube-fixture".into(), name: "Imported".into(),
+                tracks: vec![Track { path: "yt://abcdefghijk".into(), title: "Song".into(), ..Default::default() }] }],
+            errors: Vec::new(), connected: false, provider_name: "YouTube Music".into(),
+        };
+        let WorkResult::Prepared { original, store: first, changed, imported_count, store_revision, .. } =
+            prepare_import(Store::default(), source, 1) else { panic!("prepared output expected") };
+        assert!(changed);
+        assert_eq!((imported_count, store_revision), (1, 1));
+        assert_eq!(first.playlists.len(), 1);
+        let local = Track { path: "C:/Music/new.flac".into(), title: "New local song".into(), ..Default::default() };
+        let newer = Store { tracks: vec![local.clone()], ..Default::default() };
+        let WorkResult::Prepared { store: rebased, changed, store_revision, .. } =
+            prepare_import(newer, original, 2) else { panic!("prepared output expected") };
+        assert!(changed);
+        assert_eq!(store_revision, 2);
+        assert!(rebased.tracks.iter().any(|track| track.path == local.path));
+        assert_eq!(rebased.playlists[0].tracks, ["yt://abcdefghijk"]);
+    }
 }

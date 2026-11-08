@@ -47,6 +47,11 @@ has no account connection; it is a public playlist import source only.
 YouTube Music has an automatic pull switch. When enabled, it pulls after
 login/startup and every 15 minutes while Vey is running. Vey's own automatic
 cloud sync is a separate switch. Nothing writes back to YouTube or Spotify.
+Automatic playlist pulls are off for a new connection; reconnecting the same
+account retains the user's existing preference.
+The connected account also adds supplemental YouTube Music Home shelves on
+desktop. Vey and Blueberry remain the main recommendation sources; connected
+Home data stays in memory on this device and is not uploaded to Blueberry.
 Disconnecting YouTube retains imported playlists. Cancel invalidates the result
 and aborts the native request task.
 
@@ -159,9 +164,9 @@ Six Home compositions are available with diagram previews: Editorial, Gallery,
 Compact, Spotlight, Library and Discovery. A random option changes composition
 on Home entry, never on a playback tick. The selection persists per device.
 
-Home also loads a live YouTube Music recommendation shelf. It combines the
-current song, recent history and liked tracks as radio seeds; local tracks first
-resolve through the public catalog by title and artist. Shared results rank
+Home combines verified Blueberry catalog candidates and public YouTube Music
+radio using the current song, recent history and liked tracks as seeds. Local
+seeds require an unambiguous title, artist and duration match. Shared results rank
 higher, while the 12 most recent plays and liked tracks are filtered out and
 repeated artists are limited on the first screen. If personalized radio cannot
 return usable songs, Home shows public YouTube Music picks. Selecting a song

@@ -63,6 +63,7 @@ struct WebApp {
     audio: web_sys::HtmlAudioElement,
     alternatives: Vec<LyricsAlternative>,
     enrichment_attempts: RefCell<HashSet<String>>,
+    kugou_supplement_attempts: HashSet<String>,
     self_ref: std::rc::Weak<RefCell<WebApp>>,
     artwork: HashMap<String, slint::Image>,
     artwork_pending: HashSet<String>,
@@ -161,7 +162,6 @@ fn refresh_queue_view(w: &MainWindow, a: &WebApp) {
 }
 fn refresh(w: &MainWindow, a: &mut WebApp) {
     w.set_home_revision(w.get_home_revision().wrapping_add(1));
-    refresh_playlist_rows(w, a);
     a.visible = match w.get_active_view().as_str() {
         "home" => {
             if a.store.history.is_empty() {
@@ -218,26 +218,34 @@ fn refresh(w: &MainWindow, a: &mut WebApp) {
     w.set_library_selected_count(a.library_view.selected.len() as i32);
     w.set_library_scanning(false);
     refresh_queue_view(w, a);
-    let selected_tracks: Vec<_> = a.library.iter().filter(|track| a.library_view.selected.contains(&a.store.identity_key(track))).collect();
-    w.set_library_selection_all_liked(!selected_tracks.is_empty() && selected_tracks.iter().all(|track| a.store.is_liked(track)));
-    let collection_source = if a.library_view.filter == LibraryFilter::Excluded {
-        a.store.excluded_library_tracks()
+    let selected_tracks: Vec<_> = if a.library_view.selected.is_empty() {
+        Vec::new()
     } else {
-        a.library.clone()
+        a.library.iter().filter(|track| a.library_view.selected.contains(&a.store.identity_key(track))).collect()
     };
-    let collections = a.library_view.collections(&a.store, &collection_source, |track| {
-        !file_url(&track.path).is_empty()
-            || a.store.downloads.contains_key(&track.path)
-            || a.store.downloads.contains_key(&a.store.identity_key(track))
-    });
-    w.set_library_collections(model(collections.iter().map(|collection| LibraryCollectionRow {
-        kind: collection.kind.clone().into(),
-        key: collection.key.clone().into(),
-        title: collection.title.clone().into(),
-        subtitle: if collection.kind == "playlist" { String::new() } else { collection.subtitle.clone() }.into(),
-        count: collection.track_count.to_string().into(),
-        art: a.artwork.get(&collection.representative.path).cloned().unwrap_or_default(),
-    }).collect()));
+    w.set_library_selection_all_liked(!selected_tracks.is_empty() && selected_tracks.iter().all(|track| a.store.is_liked(track)));
+    if w.get_active_view() == "library" && matches!(a.library_view.category, LibraryCategory::Albums | LibraryCategory::Artists | LibraryCategory::Playlists) {
+        let collection_source = if a.library_view.filter == LibraryFilter::Excluded {
+            a.store.excluded_library_tracks()
+        } else {
+            a.library.clone()
+        };
+        let collections = a.library_view.collections(&a.store, &collection_source, |track| {
+            !file_url(&track.path).is_empty()
+                || a.store.downloads.contains_key(&track.path)
+                || a.store.downloads.contains_key(&a.store.identity_key(track))
+        });
+        w.set_library_collections(model(collections.iter().map(|collection| LibraryCollectionRow {
+            kind: collection.kind.clone().into(),
+            key: collection.key.clone().into(),
+            title: collection.title.clone().into(),
+            subtitle: if collection.kind == "playlist" { String::new() } else { collection.subtitle.clone() }.into(),
+            count: collection.track_count.to_string().into(),
+            art: a.artwork.get(&collection.representative.path).cloned().unwrap_or_default(),
+        }).collect()));
+    } else if w.get_active_view() == "library" {
+        w.set_library_collections(model(Vec::new()));
+    }
     if matches!(w.get_active_view().as_str(), "search" | "explore") {
         a.page_results
             .insert(w.get_active_view().to_string(), a.visible.clone());
@@ -612,19 +620,31 @@ fn request_lyrics_with_refresh(w: &MainWindow, a: &Rc<RefCell<WebApp>>, refresh:
         state.lyric_generation += 1;
         state.lyric_generation
     };
+    let mut provider = a.borrow().store.lyrics_request_provider(&track);
+    let mut supplement = false;
     let cached = { a.borrow().store.cached_lyrics(&track.path) };
-    if let Some(alts) = cached.filter(|_| !refresh) {
-        a.borrow_mut().alternatives = alts;
+    if let Some(alts) = cached.filter(|_| !refresh && !matches!(provider.as_str(), "betterlyrics" | "kugou")) {
+        let should_supplement = provider == "auto" && crate::braccato::providers::should_supplement_kugou(&alts);
+        let mut state = a.borrow_mut();
+        state.alternatives = alts;
+        if should_supplement {
+            if state.kugou_supplement_attempts.len() >= 1024 {
+                state.kugou_supplement_attempts.clear();
+            }
+            let identity = state.store.identity_key(&track);
+            supplement = state.kugou_supplement_attempts.insert(identity);
+        }
+        drop(state);
         show_preferred_lyrics(w, &a.borrow());
-        return;
+        if !supplement { return; }
+        provider = "kugou".into();
     }
-    let provider = a.borrow().store.lyrics_request_provider(&track);
     let weak = w.as_weak();
     let state = a.clone();
     spawn_local(async move {
         let result = reqwest::Client::new()
             .post(api("/api/lyrics"))
-            .query(&[("provider", provider), ("refresh", refresh.to_string())])
+            .query(&[("provider", provider), ("refresh", (refresh || supplement).to_string())])
             .json(&track)
             .send()
             .await;
@@ -644,16 +664,19 @@ fn request_lyrics_with_refresh(w: &MainWindow, a: &Rc<RefCell<WebApp>>, refresh:
                             if a.current.as_ref().map(|t| &t.path) == Some(&track.path)
                                 && a.lyric_generation == generation
                             {
+                                let alts = crate::braccato::providers::merge_refreshed_alternatives(alts, &a.alternatives);
                                 a.store.cache_lyrics(track.path.clone(), alts.clone());
                                 a.alternatives = alts;
                                 save(&a);
                                 show_preferred_lyrics(&w, &a);
                             }
                         }
-                        Err(_) => w.set_lyrics_status("Помилка формату слів".into()),
+                        Err(_) if !supplement => w.set_lyrics_status("Помилка формату слів".into()),
+                        Err(_) => {},
                     }
                 }
-                _ => w.set_lyrics_status("Слова недоступні. Можна вставити власні.".into()),
+                _ if !supplement => w.set_lyrics_status("Слова недоступні. Можна вставити власні.".into()),
+                _ => {},
             }
         }
     });
@@ -791,7 +814,6 @@ fn search(w: &MainWindow, a: &Rc<RefCell<WebApp>>, query: Option<String>, radio:
                     } else {
                         a.visible = crate::services::deduplicate_tracks(rows.clone());
                     }
-                    a.store.remember_all(rows);
                     refresh(&w, &mut a);
                     w.set_status("".into());
                 }
@@ -823,20 +845,17 @@ fn request_home_recommendations(w: &MainWindow, state: &Rc<RefCell<WebApp>>) {
     let shared = state.clone();
     spawn_local(async move {
         let result = async {
+            let blueberry = crate::home::blueberry_candidates().await;
             let resolved = join_all(profile.seeds.iter().cloned().map(|track| async move {
-                if let Some(id) = track.video_id.as_deref().filter(|id| !id.is_empty()) {
+                if let Some(id) = crate::services::track_video_id(&track) {
                     return Some(id.to_string());
                 }
                 let query = crate::home::recommendation_query(&track)?;
-                let search_url = format!("/api/search?q={}", js_sys::encode_uri_component(&query));
+                let search_url = format!("/api/match?q={}", js_sys::encode_uri_component(&query));
                 let response = reqwest::get(api(&search_url)).await.ok()?;
                 let response = response.error_for_status().ok()?;
-                response
-                    .json::<Vec<Track>>()
-                    .await
-                    .ok()?
-                    .into_iter()
-                    .find_map(|song| song.video_id.filter(|id| !id.is_empty()))
+                let candidates = response.json::<Vec<Track>>().await.ok()?;
+                crate::home::select_public_seed(&track, candidates)
             }))
             .await;
             let mut seen_seeds = HashSet::new();
@@ -846,7 +865,7 @@ fn request_home_recommendations(w: &MainWindow, state: &Rc<RefCell<WebApp>>) {
                 .filter(|id| seen_seeds.insert(id.clone()))
                 .collect();
 
-            let batches = join_all(seed_ids.into_iter().map(|id| async move {
+            let mut batches = join_all(seed_ids.into_iter().map(|id| async move {
                 let response = reqwest::get(api(&format!("/api/browse?radio=1&v={id}")))
                     .await
                     .ok()?
@@ -859,9 +878,10 @@ fn request_home_recommendations(w: &MainWindow, state: &Rc<RefCell<WebApp>>) {
             .flatten()
             .collect::<Vec<_>>();
 
+            if !blueberry.is_empty() { batches.insert(0, blueberry); }
             let mut tracks = crate::home::rank_recommendations(batches, &profile, 12);
-            let personalized = !tracks.is_empty();
-            if !personalized {
+            let personalized = !profile.seeds.is_empty() && !tracks.is_empty();
+            if tracks.is_empty() {
                 let response = reqwest::get(api("/api/browse?radio=1"))
                     .await
                     .map_err(|error| error.to_string())?
@@ -974,6 +994,7 @@ pub fn run() -> Result<(), JsValue> {
         audio: web_sys::HtmlAudioElement::new()?,
         alternatives: vec![],
         enrichment_attempts: RefCell::default(),
+        kugou_supplement_attempts: HashSet::new(),
         self_ref: Default::default(),
         artwork: HashMap::new(),
         artwork_pending: HashSet::new(),
@@ -1135,6 +1156,18 @@ pub fn run() -> Result<(), JsValue> {
         let Ok(context) = serde_json::from_str::<crate::discovery::Item>(&json) else {
             return;
         };
+        if ui.get_active_view() == "explore" && ui.get_catalog_kind() == "artist" && !ui.get_catalog_current_id().is_empty() {
+            ui.set_catalog_parent_id(ui.get_catalog_current_id());
+            ui.set_catalog_parent_json(ui.get_catalog_current_json());
+        } else {
+            ui.set_catalog_parent_id("".into());
+            ui.set_catalog_parent_json("".into());
+        }
+        ui.set_catalog_current_id(id.clone());
+        ui.set_catalog_current_json(json.clone());
+        ui.set_catalog_from_home(true);
+        ui.set_catalog_shelves(slint::ModelRc::default());
+        state.borrow_mut().store.artist_page_catalog = crate::discovery::Catalog::default();
         if id.is_empty() {
             let mut app = state.borrow_mut();
             if let Some(tracks) = context.local_collection(&app.store) {
@@ -1152,6 +1185,10 @@ pub fn run() -> Result<(), JsValue> {
             return;
         }
         ui.set_catalog_title(context.title.clone().into());
+        ui.set_catalog_kind(if context.kind == "artist" || context.kind == "album" { context.kind.clone() } else { String::new() }.into());
+        ui.set_catalog_subtitle(if context.kind == "album" { context.artist.clone() } else { String::new() }.into());
+        ui.set_catalog_track_count(0);
+        ui.set_catalog_art(state.borrow().artwork.get(&context.path).cloned().unwrap_or_default());
         ui.set_active_view("explore".into());
         let generation = {
             let mut app = state.borrow_mut();
@@ -1165,19 +1202,23 @@ pub fn run() -> Result<(), JsValue> {
         let shared = state.clone();
         spawn_local(async move {
             let result = async {
+                let artist = context.kind == "artist" && id.starts_with("UC");
                 let response = reqwest::get(api(&format!(
-                    "/api/browse?id={}",
+                    "{}?id={}", if artist { "/api/artist" } else { "/api/browse" },
                     js_sys::encode_uri_component(&id)
                 )))
                 .await
                 .map_err(|e| e.to_string())?
                 .error_for_status()
                 .map_err(|e| e.to_string())?;
-                response
-                    .json::<Vec<Track>>()
-                    .await
-                    .map(|tracks| context.collection_tracks(tracks))
-                    .map_err(|e| e.to_string())
+                let mut page = if artist {
+                    response.json::<crate::discovery::ArtistPage>().await.map_err(|e| e.to_string())?
+                } else {
+                    let tracks = response.json::<Vec<Track>>().await.map_err(|e| e.to_string())?;
+                    crate::discovery::ArtistPage { tracks, ..Default::default() }
+                };
+                page.tracks = context.collection_tracks(page.tracks);
+                Ok::<_, String>(page)
             }
             .await;
             if let Some(ui) = weak.upgrade() {
@@ -1186,13 +1227,16 @@ pub fn run() -> Result<(), JsValue> {
                     return;
                 }
                 match result {
-                    Ok(tracks) => {
-                        app.visible = tracks;
-                        let found = app.visible.clone();
-                        app.store.remember_all(found);
-                        save(&app);
+                    Ok(page) => {
+                        let catalog = page.catalog;
+                        app.visible = page.tracks;
+                        ui.set_catalog_track_count(app.visible.len() as i32);
+                        app.store.artist_page_catalog = catalog.clone();
+                        crate::discovery::sync_artist_page(&ui, &catalog);
                         refresh(&ui, &mut app);
                         ui.set_status("".into());
+                        drop(app);
+                        crate::discovery::request_artist_art(&ui, &catalog);
                     }
                     Err(_) => {
                         ui.set_status("Не вдалося завантажити добірки. Спробуйте ще раз.".into())
@@ -1469,6 +1513,9 @@ pub fn run() -> Result<(), JsValue> {
             .find(|collection| collection.kind == kind.as_str() && collection.key == key.as_str())
         else { return; };
         a.visible = collection.tracks.clone();
+        ui.set_catalog_from_home(false);
+        ui.set_catalog_parent_id("".into());
+        ui.set_catalog_parent_json("".into());
         ui.set_catalog_title(collection.title.clone().into());
         ui.set_catalog_kind(collection.kind.clone().into());
         ui.set_catalog_subtitle(collection.subtitle.clone().into());
@@ -2206,13 +2253,6 @@ pub fn run() -> Result<(), JsValue> {
         Rc::new(move |next: Store| {
             if let Some(ui) = weak.upgrade() {
                 let mut app = state.borrow_mut();
-                app.store.remember_all(
-                    next.home_catalog
-                        .sections
-                        .iter()
-                        .flat_map(|s| s.items.iter())
-                        .filter_map(crate::discovery::Item::track),
-                );
                 app.store.home_catalog = next.home_catalog;
                 save(&app);
                 refresh(&ui, &mut app);

@@ -23,6 +23,36 @@ and the player's scrollable track menu (the … button). The default source,
 reduced motion, duet stage and passive scrolling are under **Advanced**; display
 toggles, romanization spacing and translation language remain immediately visible.
 
+The current Better Lyrics source uses `https://api.betterlyrics.org/getLyrics`
+with song, artist, album, duration and an optional YouTube ID. It runs alongside
+Unison, LRCLIB and the legacy Dacubeking source in automatic mode. Select
+**Better Lyrics** under Advanced to explicitly request it and bypass older lyric
+cache and local sidecars. On a missing TTML cache entry it also tries the QQ and
+Kugou endpoints, preserving their word/line timing. Cache hits do not require a
+key; uncached requests may return 401 when the service requires an API key.
+The legacy Turnstile JWT is not sent to this API. See the [API reference](https://docs.betterlyrics.org/reference/get-lyrics)
+and [authentication policy](https://docs.betterlyrics.org/docs/authentication).
+
+Vey also supports a direct KuGou lookup based on the public protocol used by
+[Metrolist](https://github.com/MetrolistGroup/Metrolist/blob/main/app/src/main/kotlin/com/metrolist/kugou/KuGou.kt).
+Automatic mode matches title and artist and, when known, duration within eight
+seconds before fetching LRC. Existing line/plain cache results appear immediately;
+the app tries KuGou once per song per session and adds a result in the background.
+User-supplied lyrics and already word/syllable-timed caches are not supplemented.
+KuGou LRC is line-synced and is not promoted to word timing.
+
+Selecting **Dacubeking**, clicking **Refresh lyrics** in automatic mode, or
+using the player Lyrics access action can open the official Turnstile challenge
+when no valid JWT is saved. Windows Vey embeds it over the lyrics panel; the
+system browser opens only if WebView initialization fails or the user chooses
+the fallback after the page fails to load. Other native platforms still use
+the system-browser flow. Vey exchanges the returned one-use token for a JWT,
+stores it locally and retries that lyric request. Normal song startup never
+opens a challenge, and duplicate refreshes reuse the in-flight challenge. A
+Better Lyrics `401` is unrelated: that separate API requires its own cache/API
+key and does not accept the Dacubeking JWT. Vey does not solve CAPTCHA or
+manufacture a token. The browser edition shows the challenge in its in-page frame.
+
 - **Romanization** and **Translation** independently control display, default on.
 - **Spacing** adjusts the gap between a lyric and its romanization/translation
   from 0% to 150% of the lyric font size. The default is 65%; the setting is

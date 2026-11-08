@@ -7,9 +7,15 @@ tree; they are not proof that a target was built or run today.
 ## Home discovery
 
 `src/discovery.rs` composes shared native/WASM Home shelves from local history,
-playlists, the private recommendation snapshot and a bounded YouTube Music
-catalog (`Store.home_catalog`, local cache only). `ui/home-feed.slint` retains
-album/playlist browse targets, artist search and real video IDs with 16:9 cards.
+playlists, the private recommendation snapshot, Blueberry candidates and a
+bounded YouTube Music catalog (`Store.home_catalog`, local cache only). A
+connected desktop YouTube Music session contributes at most one additional
+shelf per media kind, with five cards per shelf; its normalized feed remains in memory and is never sent
+to the account catalog. Home, search and collection browse stay view-only; played
+and explicitly saved tracks follow the normal library sync path.
+Blueberry's library sync excludes unplayed recommendation snapshots from shared
+catalog submissions. `ui/home-feed.slint` retains album, playlist and artist
+browse targets and real video IDs with 16:9 cards.
 Actions carry both shelf and item identity so repeated cards select the correct
 queue and video mode. `/api/home` uses the native catalog service for Web;
 failed refreshes preserve the cache and artwork uses existing bounded workers.
@@ -37,14 +43,35 @@ and actions in `web/bridge.js`; HTMLAudioElement remains the audio output path.
 
 Page track models use `src/track_model.rs`: path-indexed cover/like updates,
 deduplicated mounted aliases and retained delegates for unchanged rows/small
-structural edits. Bulk catalog merges and playlist resolution use the indexed
+structural edits. `TrackModel::as_any` exposes the concrete model through
+Slint's `ModelRc` so mounted rows can receive asynchronous updates. Bulk catalog merges and playlist resolution use the indexed
 Store methods in `src/services.rs`. Browser saves coalesce for 200ms and flush
 on pagehide/hidden visibility; serialization remains on the browser thread.
+Native/Web refresh library collection cards only when the collection category
+is visible. Native projects collections on a bounded/coalesced worker, rejects
+stale generations, and applies rows and textures on the UI thread. Web still
+projects collections on the browser thread. Navigating back rebuilds them from
+the current store.
+Native cover-completion events patch matching mounted rows and existing sidebar,
+playlist-destination and queue models in place. They must not rebuild the full
+playlist/sidebar or queue model per image. Download progress also updates the
+changed track path only. Native page rows are built when a route is opened;
+hidden pages refresh from the current store on entry. System media position is
+published at most once per second, with playback-state changes and seeks sent
+immediately.
+Library projection uses scanned local-track membership instead of filesystem
+checks on the UI thread. Missing download mappings are pruned by the scan worker;
+until that scan finishes, a removed local file can still appear in the library.
+Playback and download selection check local paths on a blocking worker and
+discard stale download progress/completion by generation.
 Measurement scope and reproduction: `docs/PERFORMANCE.md`.
 
 `src/main.rs` dispatches helper/server/auth modes or calls `playervf::run()`.
-`src/lib.rs` includes compiled Slint modules and gates native, WASM and Android
-modules. `build.rs` compiles `ui/main.slint`; changes to shared UI properties
+`src/lib.rs` re-exports the independently compiled `crates/vey-ui` Slint types
+and gates native, WASM and Android modules. `crates/vey-ui/build.rs` compiles
+`ui/main.slint`; root `build.rs` builds the Android bridge. Slint's generated
+embedded font resources are shared with native lyric shaping, with a build-time
+format check. Changes to shared UI properties
 must be reflected in native callbacks, WASM callbacks and screenshot fixtures.
 The `braccato` library path in `build.rs` points at
 `third-party/braccato-rust/crates/slint/ui`, so a UI file added there is part of
@@ -66,9 +93,14 @@ requests -> bounded decoding/cache -> UI model rows. Playback selection -> queue
 and current track -> native audio or public YTM stream resolution -> playback
 status -> controls and synchronized lyric host. Keep blocking decoding, tag I/O,
 network and disk writes away from the UI thread.
-Artwork uses two background slots plus one reserved current-track slot; queued
-offscreen work is replaced on view refresh. Native cover cache writes happen
+Artwork uses four background slots plus one reserved current-track slot. A
+refresh retains queued covers belonging to the active page and drops stale
+offscreen work; transient failures retry once. Native cover cache writes happen
 after display; repaired cache files remain separate from user-selected covers.
+When a local file has no embedded/folder cover or video ID, the artwork worker
+can resolve a YTM cover with exact normalized title/artist matching, an 8-second
+lookup cap, and duration-based version selection; successful images update
+mounted rows and cache by local identity.
 
 ## Library and playback management
 
@@ -121,10 +153,36 @@ static only; application backend uses port 4173. Do not confuse those hosts.
 
 ## YouTube Music catalog decoder
 
+The Blueberry Worker accepts only standard, version-free Vey recordings; the
+client and Worker both exclude remix, live, cover, karaoke and other alternate
+recording labels. Provider lyric documents stay staged until an unambiguous
+MusicBrainz artist/title/duration match passes. All provider lyric variants for
+an accepted standard recording remain available.
+With native account auto-sync enabled, Vey searches YouTube Music in the
+background for local files lacking an identity. It links only a single audio
+song with matching title, artist and duration within five seconds and a
+resolvable audio stream; ambiguous matches stay local. Failed lookups retry
+later, and local playback keeps the file path while account sync uses the
+discovered YouTube ID. Local tracks and cached lyrics enter the shared catalog
+only after they have a public YouTube identity. A confirmed match carries the
+parsed YouTube Music title, artist, album, duration and the preferred square,
+highest-resolution artwork URL when available, plus canonical Music URL and
+any paired clip ID. Its stable local catalog key lets Blueberry upgrade the
+existing Vey row and move staged lyric documents to the public video identity
+without creating a second song.
+Its administrator-only OpenAI-compatible gateway and review queue are configured
+in Blueberry's AI Router & Catalog panel. MusicBrainz matching requires matching
+identity and duration before release metadata is written. AI reviews
+require an administrator-configured OpenCode API key and an API-accessible model;
+the default `beam-free` may be restricted to the OpenCode client.
+
 `third-party/yt-rust/` is a relative native-only Cargo dependency copied from
 the supplied local yt-rust project. `src/native.rs::parse_ytm_songs` merges its
 normalized search metadata with the host's renderer ordering, availability,
-cover and clip hints; suggestions retain host highlighting/history fields.
+cover and clip hints; matched clip IDs stay attached to their audio-song row,
+the paired video shelf row is hidden, and catalog sync sends it only as the
+song's additional `clipVideoId` link. Suggestions retain host
+highlighting/history fields.
 Native and same-origin browser search share this path. Public transport,
 browse/radio and audio/video resolution remain Vey services. No session provider
 or account-data integration is enabled in that parser. YouTube account access is
@@ -142,12 +200,13 @@ publish complete cache files. Live reproduction and recovery: `docs/PLAYBACK-REC
 
 Home recommendations use a separate retained track model. They build a bounded
 profile from the current song, recent history, liked tracks and playlists; local tracks
-first resolve a catalog match by title and artist. Native and browser request
-several public YouTube Music radio batches concurrently, rank shared results
+first resolve an unambiguous song match by title, artist and duration. Native and
+browser rank verified Blueberry catalog candidates first alongside several
+public YouTube Music radio batches, rank shared results
 higher, avoid the 12 most recent plays and liked tracks, and cap repeated artists
 on the first screen. With no usable personalized results, they fall back to the
 YouTube Music home browse. Native uses `ytm_recommendations`; browser uses the
-same-origin `/api/search` and `/api/browse?radio=1` endpoints. Selecting a row
+same-origin `/api/match` and `/api/browse?radio=1` endpoints. Selecting a row
 plays it and keeps the returned radio batch as the queue.
 Native and Web rank candidates through the same local Rust profile, using play
 frequency/recency, completions, early skips, likes, dislikes and playlist adds.
@@ -185,6 +244,8 @@ See `docs/DOWNLOADS-ARTWORK.md` for supported formats and validation limits.
 using source fingerprints and provider/format/sync fallback matching. Native and
 browser controllers restore choices after cache/fetch; unavailable choices remain
 saved. Known permanent YTM copies share their public track's choice key.
+Automatic provider results prioritize Unison; distinct provider documents are
+retained, and cached tracks refresh providers in the background once per session.
 `Settings.lyrics_romanization`/`lyrics_translation` filter a display clone via
 `braccato::visible_layers`, leaving cached/exported source and timings intact.
 Native secondary lyric rows reserve 1.15× lyric-size plus the saved, adjustable
@@ -237,13 +298,20 @@ make an upstream comparison identical. See `src/braccato/README.md` for others.
 Vey imports its Slint LyricsView through build.rs; src/native_lyrics.rs adapts
 canonical display rows, clocks, source-index seeks and bounded glyph preparation.
 ui/native-lyrics.slint binds the native component to the player surface.
+Whole-song native wrapping/shaping uses a single bounded worker in
+`src/native_lyric_layout.rs`. Requests retain only the latest pending layout;
+generation checks reject stale resize/song results. Only owned strings, numbers
+and cue data cross threads; Slint models are reconstructed on their owning thread.
+Native ambient blur/color preparation and frame composition also use one bounded
+worker; the UI uploads completed pixels and never waits for a frame job.
 The adapter suppresses upstream demo line-word staggering: line cues stay line
 cues. Timed romanization, backing vocals and syllables retain source timestamps.
 See docs/NATIVE-BRACCATO.md and third-party/BRACCATO-RUST-UPSTREAM.md.
 
 `tools/braccato-widget/build.mjs` still bundles the preserved JavaScript snapshot
 for web/braccato/. Browser-only src/lyrics_widget.rs bridges the iframe. Windows
-lyrics render with Slint; native video and browser-based authentication remain separate.
+lyrics render with Slint; native video remains separate, and lyric authentication
+uses an embedded child over the lyrics viewport with a system-browser fallback.
 JWTs never belong in rendering documents. Braccato remains the rendering engine. Native
 themes map supported CSS/RICS declarations to typed controls in src/themes.rs;
 arbitrary CSS selectors/DOM behavior remain browser-only.
@@ -327,8 +395,8 @@ switch `VEY_LEGACY_LYRIC_SCROLL=1` restores the previous ease-restart path for
 A/B checks. `examples/native_line_flow.rs` samples the real window and asserts
 retained velocity, prompt launch and exact settling.
 The default glow is 6px at 31% opacity. Atlases crossfade two radii, or four
-for broader custom glow. Normal fill paints base/highlight in one shaped text
-run; subtle whole-word wobble is enabled, while letter waves remain opt-in.
+for broader custom glow. Normal fill preserves a shared shaping origin for
+base/highlight; subtle whole-word wobble is enabled, while letter waves remain opt-in.
 Layout-only motion intervals/origins keep syllables together and defer wrapped
 continuations until their fill entry. Motion settles within the actual cue;
 duration/strength CSS and reduced motion remain supported. Letter waves work
@@ -363,7 +431,19 @@ solid text through fixed physical-pixel fill clips. GPU ink keeps one local
 composition path at empty, partial and completed coverage before word/letter/
 line transforms, preventing gradient glyph artifacts and clip seams. The old
 gradient brush is available only in the isolated diagnostic probe. Reduced
-motion retains timed fill.
+motion retains timed fill. Native stable ink keeps the original conditional
+neutral Text path and uses a fixed-size pool only during partial coverage, bounded to 64 cells.
+Capacity comes from static word/glyph ramp width, not the playback clock;
+the repeater does not resize within a cue. Retaining hidden pools on every
+unsung/completed word regressed frame time, so solid words keep only neutral ink.
+Keep neutral Text outside the feather's clips: moving it into a clip changes
+fractional ligature rasterization at letter-wave handoffs.
+Visible playing lyrics sample presentation time every 8ms, with full layout,
+row residency, focus and paint preparation limited by a 16ms deadline. The
+intermediate pass only projects the existing playback clock and updates fill
+time. Entry and explicit seeks bypass that deadline. Hidden/paused polling
+remains 16ms; minimized windows suspend work. `VEY_LEGACY_LYRIC_CADENCE=1`
+restores the original 16ms cadence for matched diagnostics.
 The native host windows row delegates around the actual viewport, retaining
 exact omitted-row height as top/bottom spacers. A filtered notifying model
 adds/removes boundary rows and preserves overlapping delegates. Nearby sharp bodies survive
@@ -379,8 +459,10 @@ Font revisions invalidate layout/glyph caches; missing glyphs fall back to Noto.
 Font files stay local; settings do not contain paths.
 Native lyric changes no longer serialize an unused browser document. Desktop
 video decodes through FFmpeg into Slint frames; Android uses a TextureView.
-Lyrics verification opens the system browser and returns through an ephemeral
-loopback callback. Silent automatic challenges are unavailable.
+On Windows, lyrics verification uses an opaque Wry/WebView2 child over the lyrics
+viewport and returns the one-use token through validated IPC. WebView startup or
+loading failure can fall back to the existing ephemeral loopback/system-browser
+flow. Other native targets keep that flow; silent automatic challenges are unavailable.
 
 Slint directly composites native lyrics and the shared Rust ambient texture.
 `src/ambient_native.rs` is the bounded native backdrop for platforms without the
@@ -398,11 +480,13 @@ Texture transitions use one-second smootherstep fades. Palette transitions use
 one second by default or the applied profile's duration. The
 native lyric component shares the Slint surface and artwork without a child HWND. See `docs/APPEARANCE.md`.
 Desktop page surfaces stay mounted in a compass grid; one interruptible camera
-moves content and lyric host together. Mobile Player is a retained-page overlay.
-Reduced motion bypasses travel. Details: `docs/PAGE-MOTION.md`.
+moves content and lyric host together. Route surfaces cache only while moving or
+warming; settled pages paint live so asynchronous artwork updates are immediate.
+Mobile Player is a retained-page overlay. The persisted reduced-motion switch
+bypasses travel and shared decorative animation. Details: `docs/PAGE-MOTION.md`.
 `src/navigation_fx.rs` keeps the two-snapshot blur worker behind the native
 `VEY_LEGACY_NAVIGATION_CAPTURE=1` diagnostic switch. Normal native/WASM travel
-uses live cached page surfaces without readbacks. `ui/navigation-streaks.slint` follows
+uses live page surfaces, cached during travel, without readbacks. `ui/navigation-streaks.slint` follows
 the same camera vector. The shared
 stage radius drives Slint, DOM and Windows clipping. No snapshot/blur runs per frame.
 
@@ -451,11 +535,24 @@ backups before reviewed metadata writes; restore must remain available.
 
 Lyrics auth is separate from Google sign-in. `src/lyrics_service.rs` implements
 token cache, exchange and provider requests; `src/challenge.rs` opens the system
-browser for a user-initiated challenge and receives a bounded loopback callback.
-Cached tokens and public-provider fallback remain available. `/verify-turnstile` exchange accepts a JWT/token response. `/v2/lyrics`
-form fields are videoId, song, artist, album, duration, alwaysFetchMetadata=false,
-token. Preserve expected Origin/Referer and cookie-aware transport. Concurrent
-refresh is shared; documented failure cooldown is 30 seconds. Never print tokens.
+browser for the provider's Turnstile challenge and receives a bounded loopback callback.
+Selecting Dacubeking explicitly, refreshing automatic lyrics, or using the
+player Lyrics access action can start this user-completed challenge when a
+valid JWT is missing or rejected; the JWT is stored locally and that request is
+retried once. Normal song startup and server requests never open a challenge.
+Duplicate refreshes share one in-flight native challenge. Windows Vey embeds the
+provider page in an opaque child over the lyrics viewport; other native targets
+use the system-browser loopback flow and web embeds the provider frame.
+`/verify-turnstile` exchange accepts a JWT/token response. `/v2/lyrics` form
+fields are videoId, song, artist, album, duration, alwaysFetchMetadata=false,
+token. Preserve expected Origin/Referer and cookie-aware transport. Never print
+tokens.
+The separate current Better Lyrics `getLyrics` API is cache-first and does not
+use that JWT. Auto mode queries it alongside the legacy and public providers;
+explicit `betterlyrics` requests bypass old cached lyrics and local sidecars.
+Direct KuGou matching uses title, artist and duration before fetching LRC;
+existing plain/line caches are shown immediately and can be supplemented once
+per song per session without replacing user-supplied or richer timed lyrics.
 
 ## Build/packaging boundaries
 
@@ -494,10 +591,11 @@ Native lyric requests start on track selection independently of audio loading.
 `lyrics_service::fetch_with_progress` publishes normalized alternatives as each
 provider completes, then caches the final quality order. Track generations and
 one cancellable lyric task suppress stale/duplicate requests; explicit imports
-cancel pending requests. Shared auth renewal outlives track cancellation. Cache-write failures must not hide fetched lyrics.
+cancel pending requests. Cache-write failures must not hide fetched lyrics.
 
-Search input stays mounted with stable clear-action geometry. Native verification
-does not create a browser child window inside the Slint application.
+Search input stays mounted with stable clear-action geometry. Windows lyric
+verification places a Wry child over the lyrics viewport; other native targets
+use the system-browser callback flow.
 
 ## Vey account sync
 
@@ -513,9 +611,18 @@ The Cloudflare D1/R2 implementation lives in the separate `blueberry_melody` rep
 Playlist metadata (`author`, `updatedAt`, `isPublic`, `sourcePlaylistId`) travels
 inside the revisioned cloud library and preserves entry order/repeats. The
 recommendation profile and listening history stay private to the account.
-Authenticated catalog imports send public track metadata and available lyric
-layers to Blueberry's shared, YouTube-ID-keyed queue; audio and cover media are
-stored as stable HTTPS URLs only, with no local paths or listening history.
+Authenticated catalog imports send track metadata and valid cached lyric
+alternatives, including provider and structured timing, to Blueberry's shared,
+catalog, using YouTube IDs or anonymous metadata-derived local keys. Direct temporary stream URLs are not persisted; its
+audio resolver uses the stable public video ID. Recording labels are inferred
+only from explicit version tags; unknown release types remain unknown. The
+server needs its 0026/0027 migrations and catalog protocol v2/local capability; the client does not
+acknowledge enhanced payloads against an older server. No local paths or
+listening history enter the shared catalog. Native periodic preparation, cloud
+restore merging, playlist-import merging and account/session writes run on
+workers. A store revision guard rejects a stale cloud restore and rebases a
+stale playlist import. Web preparation still runs on the browser thread, and
+native restore still applies UI models there.
 Blueberry playlist profiles expose only explicitly public playlists.
 
 Vey uses its own RFC 8628 OAuth device grant via the system browser. The default

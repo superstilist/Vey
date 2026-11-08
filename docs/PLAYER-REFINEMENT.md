@@ -44,8 +44,9 @@ of successful search or a fixture playback pass.
 
 The Android bridge hosts the same bundled official challenge document used on
 Windows. It exchanges challenge tokens through the existing Rust service;
-Java never persists JWTs. Refresh coordination, expiry validation, the one-time
-401 retry, response parsing and provider fallbacks remain shared Rust behavior.
+Java never persists JWTs. Expiry validation, response parsing and provider
+fallbacks remain shared Rust behavior. Silent JWT renewal is unavailable; a
+rejected token requires user-initiated verification.
 JWT input normalization accepts direct tokens, Bearer values and JSON exchange
 envelopes. Credentials stay in the separate auth cache and outside backups.
 

@@ -148,7 +148,7 @@ Full feature and visual parity with the original application is unfinished.
 | Rich lyrics | Real word/syllable timing, translations, romanization, backing vocals, instrumental gaps, scroll/stage, reduced motion | Native Rust Braccato provides sweep/glow/waves; arbitrary browser CSS remains browser-only |
 | Native lyric scroll | Prepared destinations, eased rest launch, retained-velocity retargets and stable first wrapped row (0.1.28) | Windows GPU/software fixtures; other platforms not re-measured |
 | Native lyric ink/letters | Shaped kerning/ligature/mark clusters, shared Text origin, neutral cue-bounded waves and physical-pixel feather (0.1.30) | Windows GPU/software at 1x/1.25x; imported-font/device limits remain in `docs/NATIVE-BRACCATO.md` |
-| Authentication | Lyric-provider Turnstile exchange, separate JWT cache, startup prewarm, renewal/retry | Google sign-in is a separate system-browser action |
+| Authentication | Lyric-provider Turnstile exchange and separate JWT cache; Windows embeds the challenge over the lyrics panel with a system-browser fallback | Real Turnstile completion and non-Windows native flows still need runtime acceptance; Google sign-in remains separate |
 | Metadata tools | Review a YTM match, write local tags, create/list/restore tag backups | Format support is bounded by tag-writing implementation |
 | Appearance | Dynamic, fixed, or background-only colors; six fixed hues; smooth palette changes; borderless player surfaces | Settings persist across native/browser state and backups; see `docs/APPEARANCE.md` |
 | Player themes | 20 offline styles, whole-player profiles, independent Braccato preview, CSS/RICS roles and lyrics-only opt-out | Native GPU/software, 360px and browser fixtures; native ports and supported scope in `docs/LYRIC-THEMES.md` |
@@ -229,7 +229,33 @@ and coalesced browser saves reduce controller work. Rapid browser track changes
 suppress obsolete play errors. Windows release/WASM builds and targeted checks
 are recorded with measured workloads and runtime boundaries in `docs/PERFORMANCE.md`.
 
+### Native UI burst follow-up (2026-11-05)
+
+Cover arrivals previously rebuilt the complete playlist/sidebar model and queue
+for each image, while download progress walked every mounted row. Those events
+now patch matching retained rows. Full playlist lookup is indexed per refresh,
+hidden route models are built on entry, and desktop media progress is coalesced
+to one update per second (state changes/seeks remain immediate). A fresh Windows
+release build launched successfully; a populated library opened, seven rapid
+Home/Library/Liked/Playlist switches completed in 1.94s, and the first playlist
+open showed its collage and track covers. No audio playback or Android device
+runtime was part of this smoke check; see `docs/PERFORMANCE.md`.
+
 ### Native lyric renderer (0.1.17–0.1.27, 2026-10-26/27)
+
+2026-11-06 follow-up: partial ink uses static pool capacity instead of replacing
+clock-dependent delegates. A light 8ms presentation pass keeps full processing
+at 16ms. Four same-executable Windows audio runs reduced repeated clock frames
+from about 60% to 27–28%; 41 lyric tests and 256 glyph-core samples passed.
+Release executable rebuilt. Render spikes remain (I-19), and heartbeat p95
+did not improve. Scope and measurements: `docs/PERFORMANCE.md`.
+
+2026-11-05 follow-up: whole-song layout and ambient CPU rendering use bounded
+workers with stale-layout rejection. 41 lyric and three ambient tests passed;
+Windows release and a 45-second native audio/render diagnostic completed.
+A normal isolated-profile app session exercised play, lyrics, Library, return
+and pause through 25 seconds with Roboto 900 and animations enabled. Drawing
+spikes remain (I-19); measurements and limits are in `docs/PERFORMANCE.md`.
 
 Every entry below was measured on the local Windows release fixtures and is
 recorded with its exact workload in `docs/NATIVE-BRACCATO.md`.
