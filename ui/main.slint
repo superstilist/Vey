@@ -312,6 +312,8 @@ export component MainWindow inherits Window {
     in-out property <bool> current-disliked;
     in-out property <bool> current-downloaded;
     in-out property <bool> current-downloading;
+    private property <string> offline-download-label: root.current-downloaded ? I18n.tr("Доступно локально") : root.current-downloading ? (root.current-download-progress >= 0 ? root.current-download-progress + "% · " : "") + I18n.tr("Скасувати") : I18n.tr("Завантажити пісню на пристрій");
+    private property <image> offline-download-icon: root.current-downloaded ? @image-url("../assets/icons/Downloaded.svg") : root.current-downloading ? @image-url("../assets/icons/X.svg") : @image-url("../assets/icons/Download.svg");
     in-out property <int> current-download-progress: -1;
     in-out property <bool> current-local;
     in-out property <bool> native-file-tools;
@@ -2243,6 +2245,12 @@ export component MainWindow inherits Window {
                     outlined: true;
                     clicked => { root.player-tab = "lyrics"; root.expanded-player = true; }
                 }
+                if root.current-video-id != "": Action {
+                    icon: root.offline-download-icon;
+                    label: root.offline-download-label;
+                    selected: root.current-downloaded || root.current-downloading;
+                    clicked => { if !root.current-downloaded { root.download(-1); } }
+                }
                 Action {
                     icon: @image-url("../assets/icons/Settings.svg");
                     label: I18n.tr("Інструменти слів пісні");
@@ -2754,7 +2762,8 @@ export component MainWindow inherits Window {
 
         }
         if !root.mobile && (root.immersive || root.expanded-active): HorizontalLayout {
-            x: parent.width - self.width - 16px; y: 12px; width: 116px; height: 40px; spacing: 4px;
+            x: parent.width - self.width - 16px; y: 12px; width: root.current-video-id != "" ? 156px : 116px; height: 40px; spacing: 4px;
+            if root.current-video-id != "": Action { icon: root.offline-download-icon; label: root.offline-download-label; selected: root.current-downloaded || root.current-downloading; clicked => { if !root.current-downloaded { root.download(-1); } } }
             Action { icon: @image-url("../assets/icons/Settings.svg"); label: I18n.tr("Інструменти слів пісні"); selected: root.player-tools; clicked => { root.player-tools = !root.player-tools; } }
             Action { icon: @image-url("../assets/icons/MonitorPlay.svg"); label: root.immersive ? I18n.tr("Звичайний вигляд") : I18n.tr("Режим фокусування"); selected: root.immersive; clicked => { if root.immersive { root.focus-player = false; root.expanded-player = false; } else { root.player-tab = "lyrics"; root.focus-player = true; } } }
             Action { icon: @image-url("../assets/icons/ChevronDown.svg"); label: I18n.tr("Згорнути програвач"); clicked => { root.close-player(); } }

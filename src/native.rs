@@ -5038,8 +5038,14 @@ async fn ytm_download_track_with_cover_inner(
         Err(_) if url != fallback => crate::media_library::fetch_cover(&fallback).await?,
         Err(error) => return Err(error),
     };
-    let dir = PathBuf::from(get_system_music_folder().ok_or("Music directory unavailable")?)
-        .join("YouTube Music");
+    #[cfg(target_os = "android")]
+    let music_dir = std::env::var_os("PLAYERVF_MUSIC_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::storage::data_dir().join("Music"));
+    #[cfg(not(target_os = "android"))]
+    let music_dir =
+        PathBuf::from(get_system_music_folder().ok_or("Music directory unavailable")?);
+    let dir = music_dir.join("YouTube Music");
     tokio::task::spawn_blocking(move || {
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let stem = sanitize_filename(&if artist.is_empty() {

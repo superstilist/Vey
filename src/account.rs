@@ -243,20 +243,10 @@ fn catalog_candidates(
 
     let identities = CloudIdentities::new(store);
     let mut tracks = store.tracks.clone();
+    // Only explicit library entries and actual listening history are eligible.
+    // Orphaned lyric cache entries can come from search/recommendation previews;
+    // never promote those into shared catalog submissions.
     tracks.extend(store.history.iter().map(|event| event.track.clone()));
-    // Suggestions are private ranking output, not library submissions.
-    // Cached tracks can outlive history. Only recover those with actual
-    // title/artist metadata; never infer a song from its local filename.
-    let known = tracks.iter().map(|track| track.path.clone()).collect::<HashSet<_>>();
-    for path in store.lyrics_cache.keys().filter(|path| !known.contains(*path)) {
-        if let Some(lyrics) = store.cached_lyrics(path).unwrap_or_default().into_iter()
-            .map(|alternative| alternative.lyrics)
-            .find(|lyrics| lyrics.title.as_ref().is_some_and(|s| !s.trim().is_empty())
-                && lyrics.artist.as_ref().is_some_and(|s| !s.trim().is_empty())) {
-            tracks.push(Track { path: path.clone(), title: lyrics.title.unwrap_or_default(),
-                artist: lyrics.artist.unwrap_or_default(), album: lyrics.album.unwrap_or_default(), ..Default::default() });
-        }
-    }
     // A local file and its public track may each have different providers.
     let mut local_by_identity = BTreeMap::<String, Vec<&str>>::new();
     for track in &tracks {
@@ -331,7 +321,12 @@ fn catalog_candidates(
             for path in std::iter::once(track.path.as_str()).chain(
                 local_by_identity.get(&id).into_iter().flatten().copied()
             ) {
-                for alternative in store.cached_lyrics(path).unwrap_or_default() {
+                for alternative in store.cached_lyrics(path).unwrap_or_default().into_iter()
+                    .filter(|alternative| alternative.lyrics.lines.iter().any(|line| {
+                        !line.text.trim().is_empty()
+                            || line.parts.iter().any(|part| !part.text.trim().is_empty())
+                    }))
+                {
                     if let Ok(key) = serde_json::to_string(&alternative) {
                         if seen.insert(key) { alternatives.push(alternative); }
                     }
@@ -2482,7 +2477,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_recovers_orphaned_public_cache_only_with_real_song_metadata() {
+    fn catalog_does_not_submit_orphaned_lyrics_even_with_song_metadata() {
         let mut store = Store::default();
         let lyrics = |title: Option<&str>, artist: Option<&str>| crate::lyrics::LyricsAlternative {
             provider: "fixture".into(), format: "plain".into(), sync_type: crate::lyrics::LyricsSyncType::Plain,
@@ -2493,10 +2488,7 @@ mod tests {
         store.cache_lyrics("C:/private/two.mp3".into(), vec![lyrics(None, None)]);
         store.cache_lyrics("yt://abcdefghijk".into(), vec![lyrics(Some("Song"), Some("Artist"))]);
         let items = catalog_candidates(&snapshot(&store), &BTreeMap::new());
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].0, "yt://abcdefghijk");
-        assert_eq!(items[0].2.lyrics_variants.len(), 1);
-        assert!(!serde_json::to_string(&items[0].2).unwrap().contains("C:/private"));
+        assert!(items.is_empty());
     }
 
     #[cfg(not(target_arch = "wasm32"))]

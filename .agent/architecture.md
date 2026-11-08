@@ -224,6 +224,8 @@ geometry callbacks across these layouts.
 `Store.downloads` maps public track keys to permanent local paths. Native download
 completion registers a file source and local track; selections prefer that file
 before stream resolution. Streaming cache files do not count as downloads.
+The Now Playing download button uses the same native worker and file registration
+as the track tools. Android stores downloads in Vey's persistent app directory.
 Download marks and artwork update all mounted page models. Missing file mappings
 are pruned on startup/scan. `src/media_library.rs` stages audio/tag/cover writes
 before publication; cover replacement backs up removed front images. Native

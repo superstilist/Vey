@@ -1,28 +1,11 @@
 # Vey 0.1.48
 
-## Current source change, not yet released — Spotify playlist import (2026-11-04)
+- Download the current track directly from the player for offline listening. Vey shows when a track is available locally and lets you cancel an active download.
+- Player and library navigation, artwork loading, and synchronized lyric rendering have been refined.
+- Public Spotify playlist links can be imported by matching tracks to YouTube Music.
+- Cached lyrics from search and recommendation previews no longer make tracks eligible for shared catalog submission on their own.
 
-The working tree removes Spotify account/OAuth connection and keeps public
-playlist URL import only. Accepted tracks are matched to YouTube Music and
-stored as `yt://` identities; private playlists, Spotify account sync and Spotify
-audio playback are out of scope. A response with 100 rows is rejected because
-the public embed does not report whether it was truncated. This change still
-needs a new build/package and fresh desktop, Web and Android acceptance before
-it can be described as released.
-
-## Smoother page travel and artwork loading, 2026-11-03
-
-Removes per-frame decorative path geometry during page transitions and keeps
-the existing camera animation, route timing and reduced-motion behavior.
-Offscreen page warming starts after a three-second startup grace period.
-Native and Web artwork queues now limit background decoding to two covers,
-with a reserved current-track slot, to avoid texture-upload bursts while pages
-move. Web cover decoding uses the browser's asynchronous image pipeline and
-retains the bounded CacheStorage cache.
-
-Windows x64 package. Device-wide animation smoothness and playback have not
-been established by this build; check the release profile figures in
-`PERFORMANCE.md` for the local benchmark scope.
+Packages: Windows x64 ZIP and Android ARM64 / x86_64 APKs (Android 8.0+). SHA-256 checksums are provided separately.
 
 # Vey 0.1.47
 

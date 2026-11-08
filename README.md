@@ -51,9 +51,10 @@ improvements remain included. See [release notes](docs/RELEASE.md),
 [lyric controls](docs/LYRICS-PREFERENCES.md), [theme presets](docs/LYRIC-THEMES.md)
 and [account/import setup](docs/MUSIC-ACCOUNTS.md).
 
-The latest published GitHub release is 0.1.16, with Windows x64 ZIP, Linux x64
-tar.gz/.deb, Android ARM64/x86_64 APKs and a Web ZIP. Version 0.1.40 is the local
-Windows x64 portable build. Linux targets Mint 22/Ubuntu 24.04+ (glibc 2.39). See
+Vey 0.1.48 provides a Windows x64 ZIP and Android ARM64/x86_64 APKs. See
+[GitHub Releases](https://github.com/superstilist/Vey/releases) for downloads,
+including earlier Linux, macOS and Web builds. Linux targets Mint 22/Ubuntu 24.04+
+(glibc 2.39). See
 [Linux packaging](docs/LINUX-RELEASE.md) and
 [Web startup](docs/WEB-RELEASE.md); the Web online features need the Vey backend.
 

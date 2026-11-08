@@ -30,11 +30,13 @@ duration and action alignment to page lists, compact home rows and player queue.
 Album columns appear in wide lists; compact rows include the album below the
 title. Active rows compare track keys rather than potentially duplicate titles.
 
-## Native desktop
+## Windows and Android
 
+- Open Now Playing and tap the download icon to save the current online track.
+  The same button cancels an active download and shows a check once the track
+  is available locally. Android saves files in Vey's app storage.
 - Download completion registers both the public track and its local file,
-  adds the file as a library source, and persists their association. Repeated
-  clicks during a download are ignored. The player prefers the saved file
+  adds the file as a library source, and persists their association. The player prefers the saved file
   when the public track is selected again, including without network access.
 - Downloads include title, artist, album and an embedded JPEG front cover.
   The catalog thumbnail is preferred, with a video-thumbnail fallback if its
