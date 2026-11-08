@@ -43,23 +43,19 @@ Automatic sync then checks every 15 seconds while Vey is open. A conflicting
 revision pauses automatic sync and asks which copy to keep. Restore preserves
 local-only tracks and playlist entries, but replaces synchronized preferences.
 
-The shared Blueberry catalog receives track identity, title, artist,
-album, duration, cover and clip links, plus all valid cached lyric alternatives
-for public tracks and local files with known title and artist. Local tracks
-without a public video ID use a hash of normalized title, artist, album and
-duration; no filesystem path or local audio file is sent. Provider, format, timings, backing
-parts and translations remain in each structured version. These versions are
-published to the shared catalog, unlike the private account library. Only
-explicit recording labels such as `(Remix)` or `- Live` are classified;
-the rest stay unknown. YouTube audio uses a stable video identity and Blueberry's
-`/playback/audio?v=...` resolver instead of saving expiring signed media URLs.
+With account auto-sync on, Vey submits standard YouTube Music songs from actual
+listening history, likes, playlists and local library files with a confirmed
+YouTube Music match. Recommendations, search results and cached lyrics on their
+own cannot add a song. The Worker checks the submitted video ID against the
+account's saved library or history before writing to the catalog.
 
-This requires Blueberry catalog protocol v2, the local catalog capability and
-the `0026_vey_catalog_lyrics` / `0027_vey_local_catalog` migrations. Until the server supports them, Vey does not mark enhanced submissions
-as acknowledged and will retry. The client does not independently fetch every
-provider for every song; it shares the valid versions already available in its
-cache. Large sets of provider versions are split across bounded requests; a
-single oversized version is reported and remains pending.
+The client sends up to 20 changed songs per sync pass and at most one cached
+lyric document per available sync type (plain, line, word or syllable). Provider
+priority breaks ties, and timestamps are kept only when present. The Worker
+deduplicates repeated submissions and unchanged library saves. Track metadata
+and lyrics are shared; local audio, filesystem paths and raw listening history
+remain outside the shared catalog. Audio uses the stable video ID and
+`/playback/audio?v=...`.
 
 Premium is an administrator-issued developer/tester invitation. No checkout or
 purchase exists. Refresh account access after an invitation. Select a local song

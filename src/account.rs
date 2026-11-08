@@ -43,6 +43,8 @@ struct CloudLibrary {
     likes: BTreeSet<String>,
     playlists: Vec<Playlist>,
     history: Vec<History>,
+    #[serde(rename = "catalogLibraryKeys", skip_serializing_if = "BTreeSet::is_empty")]
+    catalog_library_keys: BTreeSet<String>,
     recommendations: RecommendationModel,
     #[serde(serialize_with = "serialize_cloud_settings")]
     settings: Settings,
@@ -235,6 +237,16 @@ fn catalog_lyrics_tracks(lyrics: &crate::lyrics::ParsedLyrics) -> Vec<CatalogLyr
     result
 }
 
+// Store.tracks is a metadata cache as well as a library index. Only the
+// library projection and actual playback events may contribute catalog songs.
+fn catalog_sources(store: &Store) -> Vec<Track> {
+    let mut tracks = store.library_tracks();
+    tracks.extend(store.history.iter().filter(|event| {
+        event.play_count > 0 || event.completion_count > 0 || event.played_at > 0
+    }).map(|event| event.track.clone()));
+    tracks
+}
+
 fn catalog_candidates(
     store: &Store,
     uploaded: &BTreeMap<String, String>,
@@ -242,11 +254,7 @@ fn catalog_candidates(
     use sha1::{Digest, Sha1};
 
     let identities = CloudIdentities::new(store);
-    let mut tracks = store.tracks.clone();
-    // Only explicit library entries and actual listening history are eligible.
-    // Orphaned lyric cache entries can come from search/recommendation previews;
-    // never promote those into shared catalog submissions.
-    tracks.extend(store.history.iter().map(|event| event.track.clone()));
+    let tracks = catalog_sources(store);
     // A local file and its public track may each have different providers.
     let mut local_by_identity = BTreeMap::<String, Vec<&str>>::new();
     for track in &tracks {
@@ -316,19 +324,32 @@ fn catalog_candidates(
                     #[cfg(target_arch = "wasm32")]
                     { None }
                 });
-            let mut alternatives = Vec::new();
-            let mut seen = HashSet::new();
+            let mut alternatives = Vec::<crate::lyrics::LyricsAlternative>::new();
             for path in std::iter::once(track.path.as_str()).chain(
                 local_by_identity.get(&id).into_iter().flatten().copied()
             ) {
-                for alternative in store.cached_lyrics(path).unwrap_or_default().into_iter()
-                    .filter(|alternative| alternative.lyrics.lines.iter().any(|line| {
-                        !line.text.trim().is_empty()
-                            || line.parts.iter().any(|part| !part.text.trim().is_empty())
-                    }))
-                {
-                    if let Ok(key) = serde_json::to_string(&alternative) {
-                        if seen.insert(key) { alternatives.push(alternative); }
+                for mut alternative in store.cached_lyrics(path).unwrap_or_default() {
+                    if !alternative.lyrics.lines.iter().any(|line| !line.text.trim().is_empty()) {
+                        continue;
+                    }
+                    use crate::lyrics::{has_any_timing, has_part_level_timing, has_syllable_level_timing, LyricsSyncType};
+                    alternative.sync_type = if has_syllable_level_timing(&alternative.lyrics) {
+                        LyricsSyncType::RichSync
+                    } else if has_part_level_timing(&alternative.lyrics) {
+                        LyricsSyncType::Word
+                    } else if has_any_timing(&alternative.lyrics) {
+                        LyricsSyncType::Synced
+                    } else {
+                        LyricsSyncType::Plain
+                    };
+                    if let Some(prior) = alternatives.iter_mut().find(|prior| prior.sync_type == alternative.sync_type) {
+                        if crate::braccato::providers::provider_rank(&alternative.provider)
+                            < crate::braccato::providers::provider_rank(&prior.provider)
+                        {
+                            *prior = alternative;
+                        }
+                    } else {
+                        alternatives.push(alternative);
                     }
                 }
             }
@@ -379,9 +400,13 @@ fn catalog_candidates(
                 lyrics_variants: alternatives,
             };
             let serialized = serde_json::to_vec(&item).ok()?;
-            let fingerprint = format!("{:x}", Sha1::digest(serialized));
+            let mut hash = Sha1::new();
+            hash.update(b"catalog-membership-v1\0");
+            hash.update(serialized);
+            let fingerprint = format!("{:x}", hash.finalize());
             (uploaded.get(&id) != Some(&fingerprint)).then_some((id, fingerprint, item))
         })
+        .take(20)
         .collect()
 }
 // Match the deployed Worker's settings allowlist. Local extensions must not
@@ -547,15 +572,26 @@ fn cloud_identity(store: &Store, key: &str) -> Option<String> {
 impl CloudLibrary {
     fn capture(store: &Store, auto_upload: bool) -> Self {
         let identities = CloudIdentities::new(store);
+        let eligible: HashSet<String> = catalog_sources(store).iter()
+            .filter_map(|track| identities.track(track).map(|track| track.path))
+            .collect();
         let mut seen = BTreeSet::new();
         let tracks: Vec<Track> = store
             .tracks
             .iter()
             .filter_map(|track| identities.track(track))
+            .filter(|track| !track.path.starts_with("yt://") || eligible.contains(&track.path))
             .filter(|track| seen.insert(track.path.clone()))
+            .collect();
+        let catalog_library_keys = store.library_tracks().into_iter()
+            .filter(|track| !crate::services::key_is_remote(&track.path))
+            .filter_map(|track| identities.track(&track).map(|track| track.path))
+            .filter(|key| key.starts_with("yt://"))
+            .take(20000)
             .collect();
         Self {
             tracks,
+            catalog_library_keys,
             likes: store
                 .likes
                 .iter()
@@ -648,6 +684,7 @@ impl CloudLibrary {
             likes,
             playlists,
             history,
+            catalog_library_keys: _,
             settings,
             offsets,
             lyrics_choices,
@@ -1121,7 +1158,7 @@ async fn work(s: Session, action: Action) -> Result<Output, String> {
                 } else { None };
                 if changed.is_some() { changed }
                 else if check_due {
-                    let pending = catalog_candidates(&store, &s.catalog_uploaded);
+                    let pending = if s.auto_sync { catalog_candidates(&store, &s.catalog_uploaded) } else { Vec::new() };
                     if !pending.is_empty() { Some(Action::CatalogImport(pending)) }
                     else {
                         let fallback = || if s.auto_upload && s.premium {
@@ -1131,12 +1168,12 @@ async fn work(s: Session, action: Action) -> Result<Output, String> {
                         {
                             let identities = CloudIdentities::new(&store);
                             let now = crate::services::now_ms();
-                            let local = (s.auto_sync && !match_busy).then(|| store.tracks.iter().filter_map(|track| {
+                            let local = (s.auto_sync && !match_busy).then(|| catalog_sources(&store).into_iter().filter_map(|track| {
                                 if crate::services::key_is_remote(&track.path)
                                     || identities.identity(&track.path).is_some()
                                     || !track.duration_secs.is_finite() || track.duration_secs <= 0.0
                                     || recording_type(&track.title) != "unknown" { return None; }
-                                let key = local_catalog_track(track)?;
+                                let key = local_catalog_track(&track)?;
                                 let retry_at = match_attempts.get(&key.path).copied().unwrap_or(0);
                                 (retry_at <= now).then_some((retry_at, track))
                             }).min_by_key(|(retry_at, _)| *retry_at).map(|(_, track)| track.clone())).flatten();
@@ -1219,7 +1256,10 @@ async fn work(s: Session, action: Action) -> Result<Output, String> {
             let v = match result {
                 Err(ref e) if e.contains("Unsupported library field") => {
                     let mut legacy = serde_json::to_value(&data).map_err(|_| "Помилка бібліотеки".to_string())?;
-                    if let Some(object) = legacy.as_object_mut() { object.remove("recommendations"); }
+                    if let Some(object) = legacy.as_object_mut() {
+                        object.remove("recommendations");
+                        object.remove("catalogLibraryKeys");
+                    }
                     request(&s, "library", "PUT", Some(json!({"revision":revision,"library":legacy}))).await?
                 }
                 Err(error) => {
@@ -1444,6 +1484,7 @@ pub(crate) fn snapshot(store: &Store) -> Store {
         recommendations: store.recommendations.clone(),
         offsets: store.offsets.clone(),
         downloads: store.downloads.clone(),
+        library_excluded: store.library_excluded.clone(),
         lyrics_choices: store.lyrics_choices.clone(),
         lyrics_cache: store.lyrics_cache.clone(),
         ..Store::default()
@@ -2347,8 +2388,16 @@ mod tests {
         let suggestion = Track { path: "yt://abcdefghijk".into(), video_id: Some("abcdefghijk".into()),
             title: "Suggested song".into(), artist: "Artist".into(), ..Default::default() };
         let mut store = Store::default();
-        store.recommendations.tracks.push(suggestion);
+        store.recommendations.tracks.push(suggestion.clone());
+        store.remember(suggestion.clone());
+        store.history.push(History { track: suggestion.clone(), ..Default::default() });
         assert!(catalog_candidates(&store, &BTreeMap::new()).is_empty());
+        assert!(CloudLibrary::capture(&store, false).tracks.is_empty());
+        store.history[0].play_count = 1;
+        assert_eq!(catalog_candidates(&store, &BTreeMap::new()).len(), 1);
+        store.history.clear();
+        store.likes.insert(suggestion.path);
+        assert_eq!(catalog_candidates(&store, &BTreeMap::new()).len(), 1);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2430,7 +2479,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_snapshot_includes_all_cached_providers_and_timing() {
+    fn catalog_snapshot_includes_best_provider_per_available_timing() {
         let remote = Track { path: "yt://abcdefghijk".into(), title: "Song".into(), artist: "Artist".into(), ..Default::default() };
         let local = Track { path: "C:/Music/song.mp3".into(), video_id: Some("abcdefghijk".into()), ..remote.clone() };
         let mut store = Store { tracks: vec![remote.clone(), local.clone()], ..Default::default() };
@@ -2440,12 +2489,14 @@ mod tests {
                 text: "Lyrics".into(), start_ms: start, translation: "Translation".into(), ..Default::default()
             }], ..Default::default() },
         };
-        store.cache_lyrics(remote.path, vec![make("provider-a", 1000)]);
-        store.cache_lyrics(local.path, vec![make("provider-b", 2000)]);
+        store.cache_lyrics(remote.path, vec![make("provider-a", 0), make("provider-b", 1000)]);
+        store.cache_lyrics(local.path, vec![make("Unison", 2000)]);
         let items = catalog_candidates(&snapshot(&store), &BTreeMap::new());
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].2.recording_type, "unknown");
         assert_eq!(items[0].2.lyrics_variants.len(), 2);
+        assert_eq!(items[0].2.lyrics_variants[0].sync_type, crate::lyrics::LyricsSyncType::Plain);
+        assert_eq!(items[0].2.lyrics_variants[1].provider, "Unison");
         assert_eq!(items[0].2.lyrics_variants[1].lyrics.lines[0].start_ms, 2000);
         assert_eq!(items[0].2.lyrics_variants[1].lyrics.lines[0].translation, "Translation");
         assert_eq!(items[0].2.source_url, "https://music.youtube.com/watch?v=abcdefghijk");
@@ -2497,7 +2548,11 @@ mod tests {
         let local = Track { path: "C:/Music/local.flac".into(), title: "Local".into(), artist: "Artist".into(), ..Default::default() };
         let remote = Track { path: "yt://abcdefghijk".into(), title: "Remote".into(), artist: "Artist".into(), ..Default::default() };
         let store = Store { tracks: vec![local.clone()], ..Default::default() };
-        let cloud = CloudLibrary::capture(&Store { tracks: vec![remote.clone()], ..Default::default() }, false);
+        let cloud = CloudLibrary::capture(&Store {
+            tracks: vec![remote.clone()],
+            likes: BTreeSet::from([remote.path.clone()]),
+            ..Default::default()
+        }, false);
         let baseline = serde_json::to_string(&CloudLibrary::capture(&store, false)).unwrap();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         for (force, snapshot, expected) in [(false, baseline.as_str(), true), (false, "stale", false), (true, "stale", true)] {

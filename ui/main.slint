@@ -2940,6 +2940,12 @@ export component MainWindow inherits Window {
             if !root.mobile: TonalSlider { label: I18n.tr("Гучність"); width: root.width < 1040px ? 64px : 84px; minimum: 0; maximum: 1; value <=> root.volume; changed(value) => { root.volume-changed(value); } }
             if !root.mobile && root.width >= 960px: Action { icon: @image-url("../assets/icons/Repeat.svg"); label: I18n.tr("Повтор"); selected: root.repeat-mode != "off"; clicked => { root.toggle-repeat(); } }
             if !root.mobile && root.width >= 960px: Action { icon: @image-url("../assets/icons/Shuffle.svg"); label: I18n.tr("Перемішати"); selected: root.shuffle; clicked => { root.toggle-shuffle(); } }
+            if root.current-video-id != "": Action {
+                icon: root.offline-download-icon;
+                label: root.offline-download-label;
+                selected: root.current-downloaded || root.current-downloading;
+                clicked => { if !root.current-downloaded { root.download(-1); } }
+            }
             if !root.mobile: Action {
                 icon: root.displayed-view == "lyrics" ? @image-url("../assets/icons/ChevronDown.svg") : @image-url("../assets/icons/ChevronUp.svg");
                 label: I18n.tr("Розгорнути програвач");

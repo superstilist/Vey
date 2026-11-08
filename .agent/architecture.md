@@ -153,28 +153,17 @@ static only; application backend uses port 4173. Do not confuse those hosts.
 
 ## YouTube Music catalog decoder
 
-The Blueberry Worker accepts only standard, version-free Vey recordings; the
-client and Worker both exclude remix, live, cover, karaoke and other alternate
-recording labels. Provider lyric documents stay staged until an unambiguous
-MusicBrainz artist/title/duration match passes. All provider lyric variants for
-an accepted standard recording remain available.
-With native account auto-sync enabled, Vey searches YouTube Music in the
-background for local files lacking an identity. It links only a single audio
-song with matching title, artist and duration within five seconds and a
-resolvable audio stream; ambiguous matches stay local. Failed lookups retry
-later, and local playback keeps the file path while account sync uses the
-discovered YouTube ID. Local tracks and cached lyrics enter the shared catalog
-only after they have a public YouTube identity. A confirmed match carries the
-parsed YouTube Music title, artist, album, duration and the preferred square,
-highest-resolution artwork URL when available, plus canonical Music URL and
-any paired clip ID. Its stable local catalog key lets Blueberry upgrade the
-existing Vey row and move staged lyric documents to the public video identity
-without creating a second song.
-Its administrator-only OpenAI-compatible gateway and review queue are configured
-in Blueberry's AI Router & Catalog panel. MusicBrainz matching requires matching
-identity and duration before release metadata is written. AI reviews
-require an administrator-configured OpenCode API key and an API-accessible model;
-the default `beam-free` may be restricted to the OpenCode client.
+The Worker admits standard YouTube Music songs only when the account's saved
+library or listening history contains their video ID. A private search or
+recommendation result cannot publish catalog data. The background native match
+for local files requires the same title, artist and duration within five seconds
+and a resolvable audio song; ambiguous files stay local. The automatic shared
+import uses the YouTube Music identity and does not query MusicBrainz.
+
+Client sync limits each pass to 20 changed songs and sends the best cached
+provider per real sync type. The Worker keeps higher-priority lyric documents,
+skips unchanged writes and processes only queue rows with checked membership.
+Video clips remain additional links on the main song.
 
 `third-party/yt-rust/` is a relative native-only Cargo dependency copied from
 the supplied local yt-rust project. `src/native.rs::parse_ytm_songs` merges its
@@ -224,8 +213,9 @@ geometry callbacks across these layouts.
 `Store.downloads` maps public track keys to permanent local paths. Native download
 completion registers a file source and local track; selections prefer that file
 before stream resolution. Streaming cache files do not count as downloads.
-The Now Playing download button uses the same native worker and file registration
-as the track tools. Android stores downloads in Vey's persistent app directory.
+The playback dock and Now Playing download buttons use the same native worker
+and file registration as the track tools. Android stores downloads in Vey's
+persistent app directory.
 Download marks and artwork update all mounted page models. Missing file mappings
 are pruned on startup/scan. `src/media_library.rs` stages audio/tag/cover writes
 before publication; cover replacement backs up removed front images. Native
@@ -613,15 +603,10 @@ The Cloudflare D1/R2 implementation lives in the separate `blueberry_melody` rep
 Playlist metadata (`author`, `updatedAt`, `isPublic`, `sourcePlaylistId`) travels
 inside the revisioned cloud library and preserves entry order/repeats. The
 recommendation profile and listening history stay private to the account.
-Authenticated catalog imports send track metadata and valid cached lyric
-alternatives, including provider and structured timing, to Blueberry's shared,
-catalog, using YouTube IDs or anonymous metadata-derived local keys. Direct temporary stream URLs are not persisted; its
-audio resolver uses the stable public video ID. Recording labels are inferred
-only from explicit version tags; unknown release types remain unknown. The
-server needs its 0026/0027 migrations and catalog protocol v2/local capability; the client does not
-acknowledge enhanced payloads against an older server. No local paths or
-listening history enter the shared catalog. Native periodic preparation, cloud
-restore merging, playlist-import merging and account/session writes run on
+Authenticated catalog imports send metadata and cached lyric timings only for
+eligible YouTube Music identities. The audio resolver uses the stable video ID.
+Local paths, expiring stream URLs and listening history stay outside the shared
+catalog. Native periodic preparation, cloud restore merging, playlist-import merging and account/session writes run on
 workers. A store revision guard rejects a stale cloud restore and rebases a
 stale playlist import. Web preparation still runs on the browser thread, and
 native restore still applies UI models there.

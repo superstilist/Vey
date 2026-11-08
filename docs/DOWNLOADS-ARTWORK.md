@@ -32,7 +32,8 @@ title. Active rows compare track keys rather than potentially duplicate titles.
 
 ## Windows and Android
 
-- Open Now Playing and tap the download icon to save the current online track.
+- Tap the download icon in the playback bar or on the Now Playing screen to
+  save the current online track in Library → Downloads.
   The same button cancels an active download and shows a check once the track
   is available locally. Android saves files in Vey's app storage.
 - Download completion registers both the public track and its local file,

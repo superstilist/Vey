@@ -51,7 +51,7 @@ improvements remain included. See [release notes](docs/RELEASE.md),
 [lyric controls](docs/LYRICS-PREFERENCES.md), [theme presets](docs/LYRIC-THEMES.md)
 and [account/import setup](docs/MUSIC-ACCOUNTS.md).
 
-Vey 0.1.48 provides a Windows x64 ZIP and Android ARM64/x86_64 APKs. See
+Vey 0.1.49 provides a Windows x64 ZIP and Android ARM64/x86_64 APKs. See
 [GitHub Releases](https://github.com/superstilist/Vey/releases) for downloads,
 including earlier Linux, macOS and Web builds. Linux targets Mint 22/Ubuntu 24.04+
 (glibc 2.39). See

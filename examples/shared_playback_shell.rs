@@ -48,6 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     w.set_position(50.);
     w.set_current_title("Shared playback fixture".into());
     w.set_current_artist("Vey".into());
+    w.set_current_video_id("abcdefghijk".into());
     let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(1, 1);
     pixels.make_mut_bytes().copy_from_slice(&[45, 115, 85, 255]);
     w.set_ambient_frame(slint::Image::from_rgba8(pixels));
@@ -60,6 +61,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     w.on_seek_to({
         let seeks = seeks.clone();
         move |value| seeks.borrow_mut().push(value)
+    });
+    let downloads = Rc::new(Cell::new(0));
+    w.on_download({
+        let downloads = downloads.clone();
+        move |index| {
+            assert_eq!(index, -1, "the dock downloads the current track");
+            downloads.set(downloads.get() + 1);
+        }
     });
     w.show()?;
     let step = Rc::new(Cell::new(0));
@@ -107,6 +116,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 image::ColorType::Rgba8,
             )
             .unwrap();
+            if n == 0 {
+                let (x, y) = if mobile { (350., 710.) } else { (1112., 765.) };
+                click(&w, x, y);
+                assert_eq!(downloads.get(), 1, "download action in the playback dock");
+                assert_eq!(w.get_active_view(), "home", "download keeps the current page");
+                w.set_current_downloaded(true);
+                click(&w, x, y);
+                assert_eq!(downloads.get(), 1, "already available tracks are not downloaded again");
+                w.set_current_downloaded(false);
+            }
             if !mobile {
                 click(&w, 99., 764.);
                 click(&w, 600., 729.);

@@ -79,6 +79,7 @@ struct WebApp {
     pending_search: Option<(web_time::Instant, String)>,
     lyric_generation: u64,
     playback_generation: u64,
+    playback_recorded: bool,
     ended: bool,
     save_due: Cell<Option<web_time::Instant>>,
     media_handler: Option<Closure<dyn FnMut(String, f64)>>,
@@ -684,6 +685,7 @@ fn request_lyrics_with_refresh(w: &MainWindow, a: &Rc<RefCell<WebApp>>, refresh:
 fn start(w: &MainWindow, a: &Rc<RefCell<WebApp>>, track: Track) {
     let mut state = a.borrow_mut();
     state.playback_generation = state.playback_generation.wrapping_add(1);
+    state.playback_recorded = false;
     let generation = state.playback_generation;
     let src = track
         .video_id
@@ -705,8 +707,6 @@ fn start(w: &MainWindow, a: &Rc<RefCell<WebApp>>, track: Track) {
     state.ended = false;
     state.current = Some(track.clone());
     state.alternatives.clear();
-    state.store.record(&track);
-    save(&state);
     w.set_status("".into());
     w.set_current_track_key(track.path.clone().into());
     refresh_queue_view(w, &state);
@@ -1010,6 +1010,7 @@ pub fn run() -> Result<(), JsValue> {
         pending_search: None,
         lyric_generation: 0,
         playback_generation: 0,
+        playback_recorded: false,
         ended: false,
         save_due: Cell::new(None),
         media_handler: None,
@@ -2354,6 +2355,15 @@ pub fn run() -> Result<(), JsValue> {
                 }
                 let pos = a.audio.current_time();
                 let duration = a.audio.duration();
+                if !a.playback_recorded && pos > 0.0 && a.audio.error().is_none()
+                    && (!a.audio.paused() || a.audio.ended())
+                {
+                    if let Some(track) = a.current.clone() {
+                        a.playback_recorded = true;
+                        a.store.record(&track);
+                        save(&a);
+                    }
+                }
                 w.set_position(pos as f32);
                 if duration.is_finite() {
                     w.set_duration(duration as f32);

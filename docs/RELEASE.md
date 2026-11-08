@@ -1,3 +1,11 @@
+# Vey 0.1.49
+
+- Download the current online song from the playback dock as well as Now Playing;
+  the dock shows download progress/availability and avoids downloading a local copy again.
+- Android APKs are built for ARM64 and x86_64.
+
+Packages: Windows x64 ZIP and Android ARM64 / x86_64 APKs (Android 8.0+). SHA-256 checksums are provided separately.
+
 # Vey 0.1.48
 
 - Download the current track directly from the player for offline listening. Vey shows when a track is available locally and lets you cancel an active download.
